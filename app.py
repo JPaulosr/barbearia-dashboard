@@ -15,24 +15,46 @@ def carregar_dados():
         st.stop()
 
     try:
-        # Lista as abas disponíveis no Excel
-        abas = pd.ExcelFile(caminho).sheet_names
-        st.write("📑 Abas encontradas na planilha:")
-        st.write(abas)
+        # Lê a aba correta explicitamente
+        df = pd.read_excel(caminho, sheet_name="Base de Dados")
+        df.columns = [str(col).strip() for col in df.columns]
 
-        # Pausa aqui para você ver no app qual é o nome correto da aba
-        return pd.DataFrame()
+        if 'DATA' not in df.columns:
+            st.error("❌ Erro: a coluna 'DATA' não foi encontrada na planilha.")
+            st.stop()
+
+        df['Ano'] = pd.to_datetime(df['DATA'], errors='coerce').dt.year
+        df['Mês'] = pd.to_datetime(df['DATA'], errors='coerce').dt.month
+
+        return df
 
     except Exception as e:
-        st.error(f"❌ Erro ao abrir o arquivo Excel: {e}")
+        st.error(f"❌ Erro inesperado ao carregar os dados: {e}")
         st.stop()
 
-# Carrega os dados (ainda vazio, só debug por enquanto)
+# Carregar dados
 df = carregar_dados()
 
-# Espera o nome correto da aba para continuar
-if df.empty:
-    st.warning("⏳ Aguardando definição do nome correto da aba para carregar os dados.")
-else:
-    # Aqui virá o restante da lógica após descobrir a aba correta
-    pass
+# Filtro lateral por ano
+anos = sorted(df['Ano'].dropna().unique())
+ano_selecionado = st.sidebar.selectbox("📅 Filtrar por Ano", options=["Todos"] + list(anos))
+
+if ano_selecionado != "Todos":
+    df = df[df["Ano"] == ano_selecionado]
+
+# Gráfico de Receita por Ano
+st.subheader("Receita por Ano")
+receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
+fig = px.bar(
+    receita_ano,
+    x="Ano",
+    y="Valor",
+    labels={"Valor": "Total Faturado"},
+    text_auto=True
+)
+fig.update_layout(
+    xaxis_title="Ano",
+    yaxis_title="Receita Total (R$)",
+    template="plotly_white"
+)
+st.plotly_chart(fig, use_container_width=True)
