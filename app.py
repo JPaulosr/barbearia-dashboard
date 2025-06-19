@@ -1,58 +1,44 @@
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 
-st.set_page_config(layout="wide", page_title="Dashboard da Barbearia")
+# --- CARREGAR DADOS ---
+@st.cache_data
+def carregar_dados():
+    df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx")
+    df['Ano'] = pd.to_datetime(df['Data']).dt.year
+    df['Mês'] = pd.to_datetime(df['Data']).dt.month
+    return df
 
-# Carregar dados
-df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Resumo Anual")
+df = carregar_dados()
 
-# Filtros
+# --- FILTROS ---
 st.title("Dashboard da Barbearia")
-col1, col2, col3 = st.columns(3)
+
+col1, col2, col3, col4 = st.columns(4)
 anos = ["Todos"] + sorted(df["Ano"].dropna().unique().astype(str).tolist())
-funcs = ["Todos"] + sorted(df["Funcionário"].dropna().unique().tolist())
+servicos = ["Todos"] + sorted(df["Serviço"].dropna().unique())
+contas = ["Todos"] + sorted(df["Conta"].dropna().unique())
+funcionarios = ["Todos"] + sorted(df["Funcionário"].dropna().unique())
 
-with col1:
-    ano = st.selectbox("Ano", anos)
+ano_selecionado = col1.selectbox("Ano", anos)
+funcionario_selecionado = col2.selectbox("Funcionário", funcionarios)
+servico_selecionado = col3.selectbox("Serviço", servicos)
+conta_selecionada = col4.selectbox("Forma de Pagamento", contas)
 
-with col2:
-    func = st.selectbox("Funcionário", funcs)
+df_filtrado = df.copy()
+if ano_selecionado != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Ano"] == int(ano_selecionado)]
+if funcionario_selecionado != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Funcionário"] == funcionario_selecionado]
+if servico_selecionado != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Serviço"] == servico_selecionado]
+if conta_selecionada != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Conta"] == conta_selecionada]
 
-# Filtrar
-if ano != "Todos":
-    df = df[df["Ano"].astype(str) == ano]
-if func != "Todos":
-    df = df[df["Funcionário"] == func]
-
-# Gráfico de Receita
-st.subheader("Receita por Ano")
-resumo = df.groupby("Ano").agg({"Total Faturado": "sum"}).reset_index()
-st.bar_chart(resumo.set_index("Ano"))
-
-# Top 20 Clientes (exemplo)
-st.subheader("Top 20 Clientes (exemplo)")
-top20 = [
-    {"Cliente": "boliviano", "Valor": 952.76},
-    {"Cliente": "fábio jr", "Valor": 182.91},
-    {"Cliente": "ronald", "Valor": 170.00},
-    {"Cliente": "menino", "Valor": 168.46},
-    {"Cliente": "brasileiro", "Valor": 149.78},
-    {"Cliente": "gabriel lutador", "Valor": 141.00},
-    {"Cliente": "raphael", "Valor": 139.00},
-    {"Cliente": "boliviano testura desbotada", "Valor": 125.00},
-    {"Cliente": "jardiel", "Valor": 125.00},
-    {"Cliente": "mussum", "Valor": 109.76},
-    {"Cliente": "josé severino", "Valor": 109.00},
-    {"Cliente": "andrade", "Valor": 105.00},
-    {"Cliente": "matheus", "Valor": 94.00},
-    {"Cliente": "jean", "Valor": 93.16},
-    {"Cliente": "gustavo chácara", "Valor": 87.00},
-    {"Cliente": "jequisson", "Valor": 80.00},
-    {"Cliente": "valteir negao", "Valor": 80.00},
-    {"Cliente": "ray guariba", "Valor": 78.21},
-    {"Cliente": "miguel", "Valor": 75.00},
-    {"Cliente": "gigante", "Valor": 72.00},
-]
-for cliente in top20:
-    st.markdown(f"- **{cliente['Cliente']}** - R$ {cliente['Valor']:.2f}")
+# --- GRÁFICO ANUAL ---
+st.subheader("📊 Receita por Ano")
+df_ano = df_filtrado.groupby("Ano")["Valor"].sum().reset_index()
+fig = px.bar(df_ano, x="Ano", y="Valor", labels={"Valor": "Receita"}, text_auto=True)
+st.plotly_chart(fig, use_container_width=True)
