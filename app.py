@@ -18,12 +18,12 @@ def carregar_dados():
         df = pd.read_excel(caminho)
         df.columns = [str(col).strip() for col in df.columns]
 
-        if 'Data' not in df.columns:
-            st.error("❌ Erro: a coluna 'Data' não foi encontrada na planilha.")
+        if 'DATA' not in df.columns:
+            st.error("❌ Erro: a coluna 'DATA' não foi encontrada na planilha.")
             st.stop()
 
-        df['Ano'] = pd.to_datetime(df['Data'], errors='coerce').dt.year
-        df['Mês'] = pd.to_datetime(df['Data'], errors='coerce').dt.month
+        df['Ano'] = pd.to_datetime(df['DATA'], errors='coerce').dt.year
+        df['Mês'] = pd.to_datetime(df['DATA'], errors='coerce').dt.month
 
         return df
 
