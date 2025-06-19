@@ -15,45 +15,24 @@ def carregar_dados():
         st.stop()
 
     try:
-        df = pd.read_excel(caminho)
-        df.columns = [str(col).strip() for col in df.columns]
+        # Lista as abas disponíveis no Excel
+        abas = pd.ExcelFile(caminho).sheet_names
+        st.write("📑 Abas encontradas na planilha:")
+        st.write(abas)
 
-        # Mostra os nomes reais das colunas para debug
-        st.write("🧾 Colunas encontradas na planilha:")
-        st.write(df.columns.tolist())
-
-        return df
+        # Pausa aqui para você ver no app qual é o nome correto da aba
+        return pd.DataFrame()
 
     except Exception as e:
-        st.error(f"❌ Erro inesperado ao carregar os dados: {e}")
+        st.error(f"❌ Erro ao abrir o arquivo Excel: {e}")
         st.stop()
 
-# Carregar dados
+# Carrega os dados (ainda vazio, só debug por enquanto)
 df = carregar_dados()
 
-# Filtro lateral por ano (só executa se coluna 'DATA' existir e já tiver sido convertida depois)
-if "Ano" in df.columns and "Valor" in df.columns:
-    anos = sorted(df['Ano'].dropna().unique())
-    ano_selecionado = st.sidebar.selectbox("📅 Filtrar por Ano", options=["Todos"] + list(anos))
-
-    if ano_selecionado != "Todos":
-        df = df[df["Ano"] == ano_selecionado]
-
-    # Gráfico de Receita por Ano
-    st.subheader("Receita por Ano")
-    receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
-    fig = px.bar(
-        receita_ano,
-        x="Ano",
-        y="Valor",
-        labels={"Valor": "Total Faturado"},
-        text_auto=True
-    )
-    fig.update_layout(
-        xaxis_title="Ano",
-        yaxis_title="Receita Total (R$)",
-        template="plotly_white"
-    )
-    st.plotly_chart(fig, use_container_width=True)
+# Espera o nome correto da aba para continuar
+if df.empty:
+    st.warning("⏳ Aguardando definição do nome correto da aba para carregar os dados.")
 else:
-    st.warning("⏳ Aguardando identificação correta da coluna de data para continuar...")
+    # Aqui virá o restante da lógica após descobrir a aba correta
+    pass
