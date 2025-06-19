@@ -18,12 +18,9 @@ def carregar_dados():
         df = pd.read_excel(caminho)
         df.columns = [str(col).strip() for col in df.columns]
 
-        if 'DATA' not in df.columns:
-            st.error("❌ Erro: a coluna 'DATA' não foi encontrada na planilha.")
-            st.stop()
-
-        df['Ano'] = pd.to_datetime(df['DATA'], errors='coerce').dt.year
-        df['Mês'] = pd.to_datetime(df['DATA'], errors='coerce').dt.month
+        # Mostra os nomes reais das colunas para debug
+        st.write("🧾 Colunas encontradas na planilha:")
+        st.write(df.columns.tolist())
 
         return df
 
@@ -34,26 +31,29 @@ def carregar_dados():
 # Carregar dados
 df = carregar_dados()
 
-# Filtro lateral por ano
-anos = sorted(df['Ano'].dropna().unique())
-ano_selecionado = st.sidebar.selectbox("📅 Filtrar por Ano", options=["Todos"] + list(anos))
+# Filtro lateral por ano (só executa se coluna 'DATA' existir e já tiver sido convertida depois)
+if "Ano" in df.columns and "Valor" in df.columns:
+    anos = sorted(df['Ano'].dropna().unique())
+    ano_selecionado = st.sidebar.selectbox("📅 Filtrar por Ano", options=["Todos"] + list(anos))
 
-if ano_selecionado != "Todos":
-    df = df[df["Ano"] == ano_selecionado]
+    if ano_selecionado != "Todos":
+        df = df[df["Ano"] == ano_selecionado]
 
-# Gráfico de Receita por Ano
-st.subheader("Receita por Ano")
-receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
-fig = px.bar(
-    receita_ano,
-    x="Ano",
-    y="Valor",
-    labels={"Valor": "Total Faturado"},
-    text_auto=True
-)
-fig.update_layout(
-    xaxis_title="Ano",
-    yaxis_title="Receita Total (R$)",
-    template="plotly_white"
-)
-st.plotly_chart(fig, use_container_width=True)
+    # Gráfico de Receita por Ano
+    st.subheader("Receita por Ano")
+    receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
+    fig = px.bar(
+        receita_ano,
+        x="Ano",
+        y="Valor",
+        labels={"Valor": "Total Faturado"},
+        text_auto=True
+    )
+    fig.update_layout(
+        xaxis_title="Ano",
+        yaxis_title="Receita Total (R$)",
+        template="plotly_white"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("⏳ Aguardando identificação correta da coluna de data para continuar...")
