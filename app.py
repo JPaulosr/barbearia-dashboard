@@ -8,15 +8,14 @@ st.title("📊 Dashboard da Barbearia")
 
 @st.cache_data
 def carregar_dados():
+    caminho = "dados_barbearia.xlsx"  # novo nome mais limpo
+
+    if not os.path.exists(caminho):
+        st.error(f"❌ Arquivo '{caminho}' não encontrado. Suba ele para o repositório.")
+        st.stop()
+
     try:
-        caminho = "Modelo_Barbearia_Automatizado (10).xlsx"
-        if not os.path.exists(caminho):
-            st.error(f"❌ Arquivo '{caminho}' não encontrado.")
-            st.stop()
-
         df = pd.read_excel(caminho)
-
-        # Corrige os nomes das colunas
         df.columns = [str(col).strip() for col in df.columns]
 
         if 'Data' not in df.columns:
@@ -32,9 +31,10 @@ def carregar_dados():
         st.error(f"❌ Erro inesperado ao carregar os dados: {e}")
         st.stop()
 
+# Carregar dados
 df = carregar_dados()
 
-# Filtros
+# Filtro lateral por ano
 anos = sorted(df['Ano'].dropna().unique())
 ano_selecionado = st.sidebar.selectbox("📅 Filtrar por Ano", options=["Todos"] + list(anos))
 
@@ -44,7 +44,13 @@ if ano_selecionado != "Todos":
 # Gráfico de Receita por Ano
 st.subheader("Receita por Ano")
 receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
-fig = px.bar(receita_ano, x="Ano", y="Valor", labels={"Valor": "Total Faturado"}, text_auto=True)
+fig = px.bar(
+    receita_ano,
+    x="Ano",
+    y="Valor",
+    labels={"Valor": "Total Faturado"},
+    text_auto=True
+)
 fig.update_layout(
     xaxis_title="Ano",
     yaxis_title="Receita Total (R$)",
