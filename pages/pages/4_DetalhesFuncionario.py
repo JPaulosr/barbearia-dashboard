@@ -45,11 +45,11 @@ servicos_disponiveis = sorted(df_filtrado["Serviço"].dropna().unique())
 servicos_selecionados = st.multiselect("💈 Filtrar por serviço", options=servicos_disponiveis, default=servicos_disponiveis)
 df_filtrado = df_filtrado[df_filtrado["Serviço"].isin(servicos_selecionados)]
 
-# === GRÁFICO AGRUPADO COM MELHORIA VISUAL ===
-st.subheader(f"📊 Receita mensal agrupada por tipo de serviço - {funcionario}")
+# === GRÁFICO DE BARRAS EMPILHADAS ===
+st.subheader(f"📊 Receita mensal empilhada por tipo de serviço - {funcionario}")
 
 servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
-servico_mes = servico_mes[servico_mes["Valor"] > 0]  # Remove serviços sem valor
+servico_mes = servico_mes[servico_mes["Valor"] > 0]
 servico_mes["MêsNome"] = servico_mes["Mês"].map(mes_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 servico_mes["Texto"] = servico_mes["Serviço"] + " - R$ " + servico_mes["Valor"].astype(int).astype(str)
@@ -60,7 +60,7 @@ fig = px.bar(
     y="Valor",
     color="Serviço",
     text="Texto",
-    barmode="group",
+    barmode="stack",  # ← AGORA EMPILHADO
     labels={"Valor": "Faturamento"},
     height=500
 )
@@ -72,7 +72,7 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# === ATENDIMENTOS INTELIGENTES ===
+# === ATENDIMENTOS AJUSTADOS ===
 st.subheader("🧑‍🤝‍🧑 Clientes atendidos (visitas únicas ajustadas)")
 
 limite = pd.to_datetime("2025-05-10")
