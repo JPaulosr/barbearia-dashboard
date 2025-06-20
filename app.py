@@ -39,12 +39,15 @@ df = carregar_dados()
 # Gráfico de Receita por Ano
 st.subheader("📊 Receita por Ano")
 receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
+receita_ano["Valor Formatado"] = receita_ano["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 fig_ano = px.bar(
     receita_ano,
     x="Ano",
     y="Valor",
+    text="Valor Formatado",
     labels={"Valor": "Total Faturado"},
-    text_auto=True
 )
 fig_ano.update_layout(
     xaxis_title="Ano",
