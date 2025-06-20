@@ -36,13 +36,11 @@ mes_nome = {
 }
 meses_opcoes = [mes_nome[m] for m in meses_disponiveis]
 meses_selecionados = st.multiselect("📆 Filtrar por mês (opcional)", options=meses_opcoes, default=meses_opcoes)
-
-# Traduz de volta os meses escolhidos
 meses_valores = [k for k,v in mes_nome.items() if v in meses_selecionados]
 df_filtrado = df_ano[df_ano["Mês"].isin(meses_valores)]
 
-# === GRÁFICO ===
-st.subheader(f"📊 Receita mensal separada por tipo de serviço - {funcionario}")
+# === GRÁFICO AGRUPADO ===
+st.subheader(f"📊 Receita mensal agrupada por tipo de serviço - {funcionario}")
 
 servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 servico_mes["MêsNome"] = servico_mes["Mês"].map(mes_nome)
@@ -53,26 +51,38 @@ fig = px.bar(
     x="Ano-Mês",
     y="Valor",
     color="Serviço",
-    facet_col="Serviço",
+    barmode="group",  # Lado a lado
     text_auto=".2s",
     labels={"Valor": "Faturamento"},
-    height=400
+    height=500
 )
 fig.update_layout(
     xaxis_title="Mês",
     yaxis_title="Receita (R$)",
-    template="plotly_white"
+    template="plotly_white",
+    xaxis_tickangle=-45
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# === TABELA DE CLIENTES (visitas únicas) ===
-st.subheader("🧑‍🤝‍🧑 Clientes atendidos (visitas únicas)")
+# === ATENDIMENTOS AJUSTADOS COM REGRA DE 11/05/2025 ===
+st.subheader("🧑‍🤝‍🧑 Clientes atendidos (visitas únicas ajustadas)")
 
-atendimentos_unicos = df_filtrado.drop_duplicates(subset=["Cliente", "Data"])
-clientes = atendimentos_unicos.groupby("Cliente").size().reset_index(name="Qtd Atendimentos")
+limite = pd.to_datetime("2025-05-10")
+antes = df_filtrado[df_filtrado["Data"] <= limite]
+depois = df_filtrado[df_filtrado["Data"] > limite]
+
+# Antes de 11/05: cada linha é 1 atendimento
+qtd_antes = len(antes)
+
+# Depois de 11/05: 1 por Cliente + Data
+depois_unicos = depois.drop_duplicates(subset=["Cliente", "Data"])
+qtd_depois = len(depois_unicos)
+
+total = qtd_antes + qtd_depois
+
+# Junta clientes únicos após corte
+clientes = depois_unicos.groupby("Cliente").size().reset_index(name="Qtd Atendimentos")
 clientes = clientes.sort_values(by="Qtd Atendimentos", ascending=False)
-
-total = len(atendimentos_unicos)
 
 st.markdown(f"✅ **Total de atendimentos únicos realizados por {funcionario}:** `{total}`")
 st.dataframe(clientes, use_container_width=True)
