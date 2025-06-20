@@ -26,7 +26,7 @@ df = carregar_dados()
 # Filtra só os dados do cliente
 df_cli = df[df["Cliente"] == cliente]
 
-st.subheader(f"📈 Receita mensal por tipo de serviço - {cliente}")
+st.subheader(f"📊 Receita mensal separada por tipo de serviço - {cliente}")
 servico_mes = df_cli.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 
 # Formata nome do mês
@@ -37,20 +37,21 @@ meses_nome = {
 servico_mes["MêsNome"] = servico_mes["Mês"].map(meses_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 
-# Gráfico de linha com marcadores
-fig = px.line(
+# Gráfico facetado: 1 gráfico por serviço
+fig = px.bar(
     servico_mes,
     x="Ano-Mês",
     y="Valor",
     color="Serviço",
-    markers=True,
-    labels={"Valor": "Faturamento"}
+    facet_col="Serviço",
+    text_auto=".2s",
+    labels={"Valor": "Faturamento"},
+    height=400
 )
 fig.update_layout(
     xaxis_title="Mês",
     yaxis_title="Receita (R$)",
-    template="plotly_white",
-    xaxis_tickangle=-45
+    template="plotly_white"
 )
 st.plotly_chart(fig, use_container_width=True)
 
