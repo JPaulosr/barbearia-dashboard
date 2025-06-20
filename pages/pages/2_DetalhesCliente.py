@@ -5,7 +5,7 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# Usando session_state para pegar o cliente selecionado
+# Recupera o nome do cliente via session_state
 cliente = st.session_state.get("cliente", "")
 
 if not cliente:
@@ -23,13 +23,13 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Filtra apenas os dados do cliente selecionado
+# Filtra só os dados do cliente
 df_cli = df[df["Cliente"] == cliente]
 
-st.subheader(f"📊 Receita mensal por tipo de serviço - {cliente}")
+st.subheader(f"📊 Receita mensal separada por tipo de serviço - {cliente}")
 servico_mes = df_cli.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 
-# Formata o eixo de mês
+# Nome dos meses e formato do eixo
 meses_nome = {
     1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
     7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
@@ -37,26 +37,29 @@ meses_nome = {
 servico_mes["MêsNome"] = servico_mes["Mês"].map(meses_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 
-# Gráfico de barras lado a lado (grouped)
+# Gráfico: facetado por serviço (pode trocar por outro estilo se quiser)
 fig = px.bar(
     servico_mes,
     x="Ano-Mês",
     y="Valor",
     color="Serviço",
-    barmode="group",  # Lado a lado
+    facet_col="Serviço",
     text_auto=".2s",
-    labels={"Valor": "Faturamento"}
+    labels={"Valor": "Faturamento"},
+    height=400
 )
 fig.update_layout(
     xaxis_title="Mês",
-    yaxis_title="R$",
-    template="plotly_white",
-    xaxis_tickangle=-45
+    yaxis_title="Receita (R$)",
+    template="plotly_white"
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# Tabela de atendimentos por funcionário
-st.subheader("🧑‍🔧 Quantas vezes foi atendido por cada funcionário")
+# Tabela de atendimentos únicos por Cliente + Data
+st.subheader("🧑‍🔧 Quantas vezes foi atendido (visitas únicas)")
 
-atendimentos = df_cli.groupby("Funcionário").size().reset_index(name="Quantidade")
-st.dataframe(atendimentos, use_container_width=True)
+# Contagem única por dia de atendimento
+atendimentos = df_cli.drop_duplicates(subset=["Cliente", "Data"])
+qtd = len(atendimentos)
+
+st.markdown(f"✅ **Total de atendimentos únicos:** `{qtd}`")
