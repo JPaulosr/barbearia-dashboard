@@ -5,8 +5,8 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# Recupera nome do cliente da URL
-cliente = st.query_params.get("cliente", [""])[0]
+# ✅ Recupera nome do cliente da URL (novo padrão)
+cliente = st.query_params.get("cliente", "")
 
 if not cliente:
     st.warning("⚠ Nenhum cliente selecionado.")
