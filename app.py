@@ -43,18 +43,39 @@ if ano_selecionado != "Todos":
     df = df[df["Ano"] == ano_selecionado]
 
 # Gráfico de Receita por Ano
-st.subheader("Receita por Ano")
+st.subheader("📊 Receita por Ano")
 receita_ano = df.groupby("Ano")["Valor"].sum().reset_index()
-fig = px.bar(
+fig_ano = px.bar(
     receita_ano,
     x="Ano",
     y="Valor",
     labels={"Valor": "Total Faturado"},
     text_auto=True
 )
-fig.update_layout(
+fig_ano.update_layout(
     xaxis_title="Ano",
     yaxis_title="Receita Total (R$)",
     template="plotly_white"
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig_ano, use_container_width=True)
+
+# Gráfico de Receita por Mês
+st.subheader("📅 Receita por Mês")
+
+df['Ano-Mês'] = pd.to_datetime(df['Data'], errors='coerce').dt.to_period('M').astype(str)
+receita_mes = df.groupby("Ano-Mês")["Valor"].sum().reset_index()
+
+fig_mes = px.bar(
+    receita_mes,
+    x="Ano-Mês",
+    y="Valor",
+    labels={"Valor": "Faturamento Mensal"},
+    text_auto=True
+)
+fig_mes.update_layout(
+    xaxis_title="Mês",
+    yaxis_title="Receita (R$)",
+    template="plotly_white",
+    xaxis_tickangle=-45
+)
+st.plotly_chart(fig_mes, use_container_width=True)
