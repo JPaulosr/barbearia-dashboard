@@ -5,7 +5,6 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
 
-# Pega o nome do funcionário via session_state
 funcionario = st.session_state.get("funcionario", "")
 
 if not funcionario:
@@ -22,22 +21,33 @@ def carregar_dados():
     return df
 
 df = carregar_dados()
-
-# Filtra os dados do funcionário selecionado
 df_func = df[df["Funcionário"] == funcionario]
 
-st.subheader(f"📊 Receita mensal separada por tipo de serviço - {funcionario}")
-servico_mes = df_func.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
+# === FILTROS ===
+anos = sorted(df_func["Ano"].dropna().unique())
+ano_selecionado = st.selectbox("📅 Selecione o ano", anos)
 
-# Formatação de meses
-meses_nome = {
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+df_ano = df_func[df_func["Ano"] == ano_selecionado]
+
+meses_disponiveis = sorted(df_ano["Mês"].dropna().unique())
+mes_nome = {
+    1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
+    7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"
 }
-servico_mes["MêsNome"] = servico_mes["Mês"].map(meses_nome)
+meses_opcoes = [mes_nome[m] for m in meses_disponiveis]
+meses_selecionados = st.multiselect("📆 Filtrar por mês (opcional)", options=meses_opcoes, default=meses_opcoes)
+
+# Traduz de volta os meses escolhidos
+meses_valores = [k for k,v in mes_nome.items() if v in meses_selecionados]
+df_filtrado = df_ano[df_ano["Mês"].isin(meses_valores)]
+
+# === GRÁFICO ===
+st.subheader(f"📊 Receita mensal separada por tipo de serviço - {funcionario}")
+
+servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
+servico_mes["MêsNome"] = servico_mes["Mês"].map(mes_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 
-# Gráfico facetado
 fig = px.bar(
     servico_mes,
     x="Ano-Mês",
@@ -55,11 +65,14 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# Tabela de clientes únicos atendidos (1 por dia)
+# === TABELA DE CLIENTES (visitas únicas) ===
 st.subheader("🧑‍🤝‍🧑 Clientes atendidos (visitas únicas)")
 
-atendimentos_unicos = df_func.drop_duplicates(subset=["Cliente", "Data"])
+atendimentos_unicos = df_filtrado.drop_duplicates(subset=["Cliente", "Data"])
 clientes = atendimentos_unicos.groupby("Cliente").size().reset_index(name="Qtd Atendimentos")
 clientes = clientes.sort_values(by="Qtd Atendimentos", ascending=False)
 
-total = len(atendamentos_unicos)
+total = len(atendimentos_unicos)
+
+st.markdown(f"✅ **Total de atendimentos únicos realizados por {funcionario}:** `{total}`")
+st.dataframe(clientes, use_container_width=True)
