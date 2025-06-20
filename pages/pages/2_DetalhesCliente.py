@@ -5,23 +5,27 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# Recupera o nome do cliente via session_state
-cliente = st.session_state.get("cliente", "")
-
-if not cliente:
-    st.warning("⚠ Nenhum cliente selecionado.")
-    st.stop()
-
-@st.cache_data(ttl=1)
+@st.cache_data
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
     return df
 
 df = carregar_dados()
+
+# Recupera nome do cliente via session_state ou selectbox
+cliente = st.session_state.get("cliente")
+
+if not cliente:
+    st.warning("⚠ Nenhum cliente selecionado via botão. Selecione manualmente:")
+    clientes_unicos = sorted(df["Cliente"].dropna().unique())
+    cliente = st.selectbox("🔎 Escolha um cliente", clientes_unicos)
+
+if not cliente:
+    st.stop()
 
 # Filtra só os dados do cliente
 df_cli = df[df["Cliente"] == cliente]
