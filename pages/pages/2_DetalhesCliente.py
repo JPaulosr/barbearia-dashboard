@@ -37,7 +37,7 @@ meses_nome = {
 servico_mes["MêsNome"] = servico_mes["Mês"].map(meses_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 
-# Gráfico: facetado por serviço (pode trocar por outro estilo se quiser)
+# Gráfico facetado por tipo de serviço
 fig = px.bar(
     servico_mes,
     x="Ano-Mês",
@@ -55,11 +55,18 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# Tabela de atendimentos únicos por Cliente + Data
-st.subheader("🧑‍🔧 Quantas vezes foi atendido (visitas únicas)")
+# === Atendimento por funcionário com base em visitas únicas ===
+st.subheader("🧑‍🔧 Quantas vezes foi atendido por cada funcionário (visitas únicas)")
 
-# Contagem única por dia de atendimento
-atendimentos = df_cli.drop_duplicates(subset=["Cliente", "Data"])
-qtd = len(atendimentos)
+# Remove registros duplicados por Cliente + Data
+atendimentos_unicos = df_cli.drop_duplicates(subset=["Cliente", "Data"])
 
-st.markdown(f"✅ **Total de atendimentos únicos:** `{qtd}`")
+# Agrupa por funcionário
+resumo = atendimentos_unicos.groupby("Funcionário").size().reset_index(name="Quantidade")
+
+# Total geral de visitas
+total = len(atendimentos_unicos)
+
+# Exibe resumo
+st.markdown(f"✅ **Total de atendimentos únicos:** `{total}`")
+st.dataframe(resumo, use_container_width=True)
