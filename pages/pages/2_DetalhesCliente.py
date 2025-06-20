@@ -5,7 +5,7 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# Agora pega do session_state
+# Usando session_state para pegar o cliente selecionado
 cliente = st.session_state.get("cliente", "")
 
 if not cliente:
@@ -23,11 +23,13 @@ def carregar_dados():
 
 df = carregar_dados()
 
+# Filtra apenas os dados do cliente selecionado
 df_cli = df[df["Cliente"] == cliente]
 
 st.subheader(f"📊 Receita mensal por tipo de serviço - {cliente}")
 servico_mes = df_cli.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 
+# Formata o eixo de mês
 meses_nome = {
     1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
     7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
@@ -35,12 +37,13 @@ meses_nome = {
 servico_mes["MêsNome"] = servico_mes["Mês"].map(meses_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 
+# Gráfico de barras lado a lado (grouped)
 fig = px.bar(
     servico_mes,
     x="Ano-Mês",
     y="Valor",
     color="Serviço",
-    barmode="stack",
+    barmode="group",  # Lado a lado
     text_auto=".2s",
     labels={"Valor": "Faturamento"}
 )
@@ -52,6 +55,8 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
+# Tabela de atendimentos por funcionário
 st.subheader("🧑‍🔧 Quantas vezes foi atendido por cada funcionário")
+
 atendimentos = df_cli.groupby("Funcionário").size().reset_index(name="Quantidade")
 st.dataframe(atendimentos, use_container_width=True)
