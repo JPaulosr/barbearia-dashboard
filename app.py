@@ -8,7 +8,6 @@ st.title("📊 Dashboard da Barbearia")
 
 @st.cache_data(ttl=1)
 def carregar_dados():
-
     caminho = "Modelo_Barbearia_Automatizado (10).xlsx"
 
     if not os.path.exists(caminho):
