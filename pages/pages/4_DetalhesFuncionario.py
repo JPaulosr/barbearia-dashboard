@@ -44,20 +44,21 @@ servicos_disponiveis = sorted(df_filtrado["Serviço"].dropna().unique())
 servicos_selecionados = st.multiselect("💈 Filtrar por serviço", options=servicos_disponiveis, default=servicos_disponiveis)
 df_filtrado = df_filtrado[df_filtrado["Serviço"].isin(servicos_selecionados)]
 
-# === GRÁFICO AGRUPADO ===
+# === GRÁFICO AGRUPADO COM TEXTO ===
 st.subheader(f"📊 Receita mensal agrupada por tipo de serviço - {funcionario}")
 
 servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 servico_mes["MêsNome"] = servico_mes["Mês"].map(mes_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
+servico_mes["Texto"] = servico_mes["Serviço"] + " - R$ " + servico_mes["Valor"].astype(int).astype(str)
 
 fig = px.bar(
     servico_mes,
     x="Ano-Mês",
     y="Valor",
     color="Serviço",
-    barmode="group",  # Lado a lado
-    text_auto=".2s",
+    text="Texto",
+    barmode="group",
     labels={"Valor": "Faturamento"},
     height=500
 )
