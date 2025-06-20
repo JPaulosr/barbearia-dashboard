@@ -11,7 +11,7 @@ if not funcionario:
     st.warning("⚠ Nenhum funcionário selecionado.")
     st.stop()
 
-@st.cache_data
+@st.cache_data(ttl=1)
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
@@ -45,8 +45,8 @@ servicos_disponiveis = sorted(df_filtrado["Serviço"].dropna().unique())
 servicos_selecionados = st.multiselect("💈 Filtrar por serviço", options=servicos_disponiveis, default=servicos_disponiveis)
 df_filtrado = df_filtrado[df_filtrado["Serviço"].isin(servicos_selecionados)]
 
-# === GRÁFICO DE BARRAS EMPILHADAS ===
-st.subheader(f"📊 Receita mensal empilhada por tipo de serviço - {funcionario}")
+# === GRÁFICO FACETADO POR SERVIÇO ===
+st.subheader(f"📊 Receita mensal por tipo de serviço - {funcionario}")
 
 servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 servico_mes = servico_mes[servico_mes["Valor"] > 0]
@@ -60,15 +60,15 @@ fig = px.bar(
     y="Valor",
     color="Serviço",
     text="Texto",
-    barmode="stack",  # ← AGORA EMPILHADO
+    facet_col="Serviço",
+    facet_col_wrap=4,
     labels={"Valor": "Faturamento"},
     height=500
 )
 fig.update_layout(
     xaxis_title="Mês",
     yaxis_title="Receita (R$)",
-    template="plotly_white",
-    xaxis_tickangle=-45
+    template="plotly_white"
 )
 st.plotly_chart(fig, use_container_width=True)
 
