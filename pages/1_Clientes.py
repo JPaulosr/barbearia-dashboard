@@ -16,17 +16,18 @@ df = carregar_dados()
 # Agrupamento por cliente
 ranking = df.groupby("Cliente")["Valor"].sum().reset_index()
 ranking = ranking.sort_values(by="Valor", ascending=False)
-ranking["Valor Formatado"] = ranking["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+ranking["Valor Formatado"] = ranking["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
-# Tabela
+# Tabela de clientes
 st.subheader("📋 Receita total por cliente")
 st.dataframe(ranking[["Cliente", "Valor Formatado"]], use_container_width=True)
 
-# Navegar para detalhes
+# Seleção de cliente
 clientes = ranking["Cliente"].tolist()
 cliente_escolhido = st.selectbox("🔎 Ver detalhamento de um cliente", clientes)
 
 if st.button("➡ Ver detalhes"):
-    st.experimental_set_query_params(cliente=cliente_escolhido)
+    st.query_params["cliente"] = cliente_escolhido
     st.switch_page("pages/2_DetalhesCliente.py")
-
