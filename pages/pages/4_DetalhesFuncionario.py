@@ -39,6 +39,11 @@ meses_selecionados = st.multiselect("📆 Filtrar por mês (opcional)", options=
 meses_valores = [k for k,v in mes_nome.items() if v in meses_selecionados]
 df_filtrado = df_ano[df_ano["Mês"].isin(meses_valores)]
 
+# Filtro de serviço
+servicos_disponiveis = sorted(df_filtrado["Serviço"].dropna().unique())
+servicos_selecionados = st.multiselect("💈 Filtrar por serviço", options=servicos_disponiveis, default=servicos_disponiveis)
+df_filtrado = df_filtrado[df_filtrado["Serviço"].isin(servicos_selecionados)]
+
 # === GRÁFICO AGRUPADO ===
 st.subheader(f"📊 Receita mensal agrupada por tipo de serviço - {funcionario}")
 
@@ -64,23 +69,19 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# === ATENDIMENTOS AJUSTADOS COM REGRA DE 11/05/2025 ===
+# === ATENDIMENTOS INTELIGENTES ===
 st.subheader("🧑‍🤝‍🧑 Clientes atendidos (visitas únicas ajustadas)")
 
 limite = pd.to_datetime("2025-05-10")
 antes = df_filtrado[df_filtrado["Data"] <= limite]
 depois = df_filtrado[df_filtrado["Data"] > limite]
 
-# Antes de 11/05: cada linha é 1 atendimento
 qtd_antes = len(antes)
-
-# Depois de 11/05: 1 por Cliente + Data
 depois_unicos = depois.drop_duplicates(subset=["Cliente", "Data"])
 qtd_depois = len(depois_unicos)
 
 total = qtd_antes + qtd_depois
 
-# Junta clientes únicos após corte
 clientes = depois_unicos.groupby("Cliente").size().reset_index(name="Qtd Atendimentos")
 clientes = clientes.sort_values(by="Qtd Atendimentos", ascending=False)
 
