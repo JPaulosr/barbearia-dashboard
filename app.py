@@ -25,6 +25,7 @@ def carregar_dados():
 
         df['Ano'] = pd.to_datetime(df['Data'], errors='coerce').dt.year
         df['Mês'] = pd.to_datetime(df['Data'], errors='coerce').dt.month
+        df['Ano-Mês'] = pd.to_datetime(df['Data'], errors='coerce').dt.to_period('M').astype(str)
 
         return df
 
@@ -34,13 +35,6 @@ def carregar_dados():
 
 # Carregar dados
 df = carregar_dados()
-
-# Filtro lateral por ano
-anos = sorted(df['Ano'].dropna().unique())
-ano_selecionado = st.sidebar.selectbox("📅 Filtrar por Ano", options=["Todos"] + list(anos))
-
-if ano_selecionado != "Todos":
-    df = df[df["Ano"] == ano_selecionado]
 
 # Gráfico de Receita por Ano
 st.subheader("📊 Receita por Ano")
@@ -59,23 +53,33 @@ fig_ano.update_layout(
 )
 st.plotly_chart(fig_ano, use_container_width=True)
 
-# Gráfico de Receita por Mês
+# Filtro para Receita por Mês
 st.subheader("📅 Receita por Mês")
 
-df['Ano-Mês'] = pd.to_datetime(df['Data'], errors='coerce').dt.to_period('M').astype(str)
-receita_mes = df.groupby("Ano-Mês")["Valor"].sum().reset_index()
+anos_disponiveis = sorted(df["Ano"].dropna().unique())
+ano_mes_filtro = st.selectbox("🔎 Selecione o Ano para ver a Receita Mensal", anos_disponiveis)
+
+df_filtrado = df[df["Ano"] == ano_mes_filtro]
+
+receita_mes = df_filtrado.groupby("Mês")["Valor"].sum().reset_index()
+
+# Nomes dos meses
+meses_nome = {
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+}
+receita_mes["Mês"] = receita_mes["Mês"].map(meses_nome)
 
 fig_mes = px.bar(
     receita_mes,
-    x="Ano-Mês",
+    x="Mês",
     y="Valor",
-    labels={"Valor": "Faturamento Mensal"},
+    labels={"Valor": "Faturamento"},
     text_auto=True
 )
 fig_mes.update_layout(
     xaxis_title="Mês",
     yaxis_title="Receita (R$)",
-    template="plotly_white",
-    xaxis_tickangle=-45
+    template="plotly_white"
 )
 st.plotly_chart(fig_mes, use_container_width=True)
