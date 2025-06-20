@@ -6,7 +6,7 @@ import os
 st.set_page_config(layout="wide")
 st.title("📊 Dashboard da Barbearia")
 
-@st.cache_data(ttl=1)
+@st.cache_data
 def carregar_dados():
     caminho = "Modelo_Barbearia_Automatizado (10).xlsx"
 
