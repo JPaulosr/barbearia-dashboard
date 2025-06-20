@@ -26,5 +26,5 @@ funcionarios = ranking["Funcionário"].tolist()
 filtro = st.selectbox("🔎 Ver detalhamento de um funcionário", funcionarios)
 
 if st.button("➡ Ver detalhes"):
-    st.experimental_set_query_params(funcionario=filtro)
+    st.session_state["funcionario"] = filtro
     st.switch_page("pages/4_DetalhesFuncionario.py")
