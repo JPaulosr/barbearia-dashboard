@@ -5,7 +5,7 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# Recupera o nome do cliente via session_state
+# Usando session_state para pegar o cliente selecionado
 cliente = st.session_state.get("cliente", "")
 
 if not cliente:
@@ -23,13 +23,13 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Filtra só os dados do cliente
+# Filtra apenas os dados do cliente selecionado
 df_cli = df[df["Cliente"] == cliente]
 
-st.subheader(f"📊 Receita mensal separada por tipo de serviço - {cliente}")
+st.subheader(f"📊 Receita mensal por tipo de serviço - {cliente}")
 servico_mes = df_cli.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
 
-# Formata nome do mês
+# Formata o eixo de mês
 meses_nome = {
     1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
     7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
@@ -37,21 +37,21 @@ meses_nome = {
 servico_mes["MêsNome"] = servico_mes["Mês"].map(meses_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
 
-# Gráfico facetado: 1 gráfico por serviço
+# Gráfico de barras lado a lado (grouped)
 fig = px.bar(
     servico_mes,
     x="Ano-Mês",
     y="Valor",
     color="Serviço",
-    facet_col="Serviço",
+    barmode="group",  # Lado a lado
     text_auto=".2s",
-    labels={"Valor": "Faturamento"},
-    height=400
+    labels={"Valor": "Faturamento"}
 )
 fig.update_layout(
     xaxis_title="Mês",
-    yaxis_title="Receita (R$)",
-    template="plotly_white"
+    yaxis_title="R$",
+    template="plotly_white",
+    xaxis_tickangle=-45
 )
 st.plotly_chart(fig, use_container_width=True)
 
