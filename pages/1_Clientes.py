@@ -29,5 +29,5 @@ clientes = ranking["Cliente"].tolist()
 cliente_escolhido = st.selectbox("🔎 Ver detalhamento de um cliente", clientes)
 
 if st.button("➡ Ver detalhes"):
-    st.query_params["cliente"] = cliente_escolhido
+    st.session_state["cliente"] = cliente_escolhido
     st.switch_page("pages/2_DetalhesCliente.py")
