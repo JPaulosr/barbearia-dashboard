@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(layout="wide")
-st.title("👨‍🔧 Funcionários - Receita Total")
+st.title("👨‍💼 Funcionários - Receita Total")
 
 @st.cache_data
 def carregar_dados():
@@ -51,10 +51,10 @@ except ValueError:
 
 filtro = st.selectbox("🔍 Ver detalhamento de um funcionário", opcoes, index=index_padrao)
 
-if st.button("➥ Ver detalhes"):
+if st.button("➞ Ver detalhes"):
     if filtro != "Selecione...":
         st.session_state["funcionario"] = filtro
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.warning("Por favor, selecione um funcionário válido.")
 
