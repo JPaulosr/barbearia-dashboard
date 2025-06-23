@@ -89,12 +89,12 @@ if not df_agrupado.empty:
         text="Valor Formatado",
         title="📈 Receita mensal total"
     )
-    fig.update_traces(textposition="outside")
+    fig.update_traces(textposition="outside", marker_color="skyblue")
     fig.update_layout(
         height=500,
         showlegend=False,
         yaxis_title="Valor (R$)",
-        yaxis_tickformat=".2f"
+        yaxis_tickformat="R$ ,.2f",
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
