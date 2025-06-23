@@ -4,6 +4,7 @@ import plotly.express as px
 import json
 import os
 from datetime import datetime
+from streamlit_extras.switch_page_button import switch_page
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
@@ -160,4 +161,4 @@ if st.button("⬅️ Voltar para Funcionários"):
         del st.session_state["funcionario"]
     if os.path.exists("temp_funcionario.json"):
         os.remove("temp_funcionario.json")
-    st.switch_page("3_Funcionarios")
+    switch_page("3_Funcionarios")
