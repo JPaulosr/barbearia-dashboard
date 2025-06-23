@@ -49,6 +49,10 @@ if cliente_busca:
     df_atendimentos = df_atendimentos[df_atendimentos["Cliente"].str.contains(cliente_busca, case=False, na=False)]
 
 def agrupar_top20(df):
+    # Atendimentos por mês baseado em df_atendimentos (registro único por cliente+data)
+    atendimentos_mes = df_atendimentos.groupby(["Cliente", "Mes"]).size().reset_index(name="Atendimentos")
+    atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Atendimentos").fillna(0)
+
     agrupado = df.groupby("Cliente").agg(
         Qtd_Servicos=("Serviço", "count"),
         Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum()),
@@ -61,11 +65,7 @@ def agrupar_top20(df):
     agrupado = agrupado.sort_values(by="Valor_Total", ascending=False).head(20)
     agrupado.insert(0, "Posição", range(1, len(agrupado)+1))
 
-    # Colunas por mês
-    receita_mes = df.groupby(["Cliente", "Mes"]).agg(Valor_Mensal=("Valor", "sum")).reset_index()
-    receita_mes_pivot = receita_mes.pivot(index="Cliente", columns="Mes", values="Valor_Mensal").fillna(0)
-
-    resultado = pd.merge(agrupado, receita_mes_pivot, on="Cliente", how="left")
+    resultado = pd.merge(agrupado, atendimentos_pivot, on="Cliente", how="left")
     resultado["Valor_Total_Formatado"] = resultado["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "v").replace(",", ".").replace("v", ","))
 
     return resultado
