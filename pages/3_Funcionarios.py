@@ -14,9 +14,15 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Filtro por mês
+# Filtro por mês sincronizado com session_state
 meses_disponiveis = df["Ano-Mês"].dropna().sort_values().astype(str).unique().tolist()
-mes_selecionado = st.multiselect("📅 Filtrar por mês (opcional)", meses_disponiveis)
+
+# Valor padrão vindo da sessão (se houver)
+meses_padrao = st.session_state.get("meses", [])
+mes_selecionado = st.multiselect("📅 Filtrar por mês (opcional)", meses_disponiveis, default=meses_padrao)
+
+# Atualiza a sessão com os meses selecionados
+st.session_state["meses"] = mes_selecionado
 
 if mes_selecionado:
     df = df[df["Ano-Mês"].astype(str).isin(mes_selecionado)]
@@ -47,4 +53,5 @@ filtro = st.selectbox("🔍 Ver detalhamento de um funcionário", opcoes, index=
 
 if st.button("➥ Ver detalhes"):
     st.session_state["funcionario"] = filtro
+    st.session_state["meses"] = mes_selecionado  # sincroniza meses também
     st.switch_page("pages/4_DetalhesFuncionario.py")
