@@ -5,70 +5,71 @@ import plotly.express as px
 st.set_page_config(page_title="Top 20 Clientes - Geral", layout="wide")
 st.title("🏆 Top 20 Clientes - Geral")
 
-uploaded_file = st.file_uploader("\n\n📁 Envie a planilha Modelo_Barbearia_Automatizado.xlsx", type="xlsx")
+@st.cache_data
 
-if uploaded_file:
-    try:
-        df = pd.read_excel(uploaded_file, sheet_name="Base de Dados")
-        df.columns = [str(col).strip() for col in df.columns]
+def carregar_dados():
+    df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
+    df.columns = [str(col).strip() for col in df.columns]
 
-        obrigatorias = {"Cliente", "Data", "Valor", "Funcionário"}
-        if not obrigatorias.issubset(df.columns):
-            st.error("A planilha precisa conter as colunas: Cliente, Data, Valor e Funcionário.")
-            st.stop()
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+    df = df.dropna(subset=["Data"])
 
-        # Limpa nomes genéricos
-        nomes_excluir = ["boliviano", "brasileiro", "menino"]
-        df = df[~df["Cliente"].str.lower().str.contains('|'.join(nomes_excluir))]
+    df["Ano"] = df["Data"].dt.year
+    df["Mes"] = df["Data"].dt.strftime("%Y-%m")
 
-        # Converte data e valores
-        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-        df = df.dropna(subset=["Data"])
-        df["Ano"] = df["Data"].dt.year
-        df["Mês"] = df["Data"].dt.strftime("%Y-%m")
+    # Limpa valores monetários e converte para float
+    df["Valor"] = df["Valor"].astype(str).str.replace("R$", "", regex=False).str.replace(",", ".").str.strip()
+    df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
 
-        # Trata valores
-        df["Valor"] = df["Valor"].astype(str).str.replace("R$", "").str.replace(",", ".").str.strip()
-        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        df = df.dropna(subset=["Valor"])
+    # Remove nomes genéricos
+    nomes_invalidos = ["boliviano", "brasileiro", "menino"]
+    def nome_valido(nome):
+        if not isinstance(nome, str): return False
+        nome_limpo = nome.strip().lower()
+        return not any(generico in nome_limpo for generico in nomes_invalidos)
 
-        # Filtros
-        ano_selecionado = st.selectbox("\U0001F4C5 Filtrar por ano", sorted(df["Ano"].unique(), reverse=True))
-        funcionarios = st.multiselect("\U0001F464 Filtrar por funcionário", df["Funcionário"].unique(), default=list(df["Funcionário"].unique()))
+    df = df[df["Cliente"].apply(nome_valido)]
 
-        df_filtrado = df[(df["Ano"] == ano_selecionado) & (df["Funcionário"].isin(funcionarios))]
+    return df
 
-        # Contagem de atendimento único (Cliente + Data)
-        atendimentos = df_filtrado.groupby(["Cliente", "Data"]).agg({"Valor": "sum"}).reset_index()
-        ranking = atendimentos.groupby("Cliente").agg({
-            "Valor": "sum",
-            "Data": "nunique"
-        }).rename(columns={"Valor": "Valor_Total", "Data": "Qtd_Atendimentos"}).reset_index()
+df = carregar_dados()
 
-        ranking = ranking.sort_values("Valor_Total", ascending=False).head(20)
-        ranking["Posição"] = range(1, len(ranking) + 1)
-        ranking["Valor_Formatado"] = ranking["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", ","))
+st.markdown("### Envie a planilha Modelo_Barbearia_Automatizado.xlsx")
 
-        # Cria coluna com valor por mês
-        colunas_meses = df_filtrado["Mês"].unique()
-        for mes in sorted(colunas_meses):
-            valores_mes = df_filtrado[df_filtrado["Mês"] == mes].groupby("Cliente")["Valor"].sum()
-            ranking[mes] = ranking["Cliente"].map(valores_mes).fillna(0).astype(float)
+if df.empty:
+    st.warning("Nenhum dado encontrado.")
+    st.stop()
 
-        # Organiza colunas
-        colunas_ordem = ["Posição", "Cliente", "Qtd_Atendimentos", "Valor_Total", "Valor_Formatado"] + sorted(colunas_meses)
-        ranking = ranking[colunas_ordem]
+# Agrupamento por Cliente + Data (para contar atendimentos únicos por dia)
+df_atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
-        # Exibe tabela
-        st.dataframe(ranking, use_container_width=True)
+def agrupar_top20(df):
+    agrupado = df.groupby("Cliente").agg(
+        Qtd_Servicos=("Serviço", "count"),
+        Qtd_Produtos=(lambda x: (df["Tipo"] == "Produto").sum()),
+        Qtd_Atendimentos=("Cliente", lambda x: df_atendimentos[df_atendimentos["Cliente"] == x.name].shape[0]),
+        Qtd_Combo=("Combo", lambda x: x.notna().sum()),
+        Qtd_Simples=("Combo", lambda x: x.isna().sum()),
+        Valor_Total=("Valor", "sum")
+    ).reset_index()
 
-        # Gráfico
-        st.markdown("\n### 📊 Top 10 Clientes por Receita")
-        fig = px.bar(ranking.head(10), x="Cliente", y="Valor_Total", text_auto=True)
-        st.plotly_chart(fig, use_container_width=True)
+    agrupado = agrupado.sort_values(by="Valor_Total", ascending=False).head(20)
+    agrupado.insert(0, "Posição", range(1, len(agrupado)+1))
 
-    except Exception as e:
-        st.error(f"Erro ao processar o arquivo: {e}")
+    # Colunas por mês
+    receita_mes = df.groupby(["Cliente", "Mes"]).agg(Valor_Mensal=("Valor", "sum")).reset_index()
+    receita_mes_pivot = receita_mes.pivot(index="Cliente", columns="Mes", values="Valor_Mensal").fillna(0)
 
-else:
-    st.info("\U0001F4C1 Envie o arquivo Excel para visualizar o ranking.")
+    resultado = pd.merge(agrupado, receita_mes_pivot, on="Cliente", how="left")
+    resultado["Valor_Total_Formatado"] = resultado["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "v").replace(",", ".").replace("v", ","))
+
+    return resultado
+
+top20 = agrupar_top20(df)
+
+# Mostra a tabela
+st.dataframe(top20.drop(columns=["Valor_Total"]), use_container_width=True)
+
+# Gráfico de barras
+fig = px.bar(top20, x="Cliente", y="Valor_Total", title="Top 20 Clientes por Receita", text_auto=True)
+st.plotly_chart(fig, use_container_width=True)
