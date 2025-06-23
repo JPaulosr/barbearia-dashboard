@@ -160,4 +160,4 @@ if st.button("⬅️ Voltar para Funcionários"):
         del st.session_state["funcionario"]
     if os.path.exists("temp_funcionario.json"):
         os.remove("temp_funcionario.json")
-    st.switch_page("/3_Funcionarios.py")
+    st.switch_page("3_Funcionarios")
