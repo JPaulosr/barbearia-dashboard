@@ -154,9 +154,9 @@ total_atendimentos = contagem["Qtd Atendimentos"].sum()
 st.success(f"✅ Total de atendimentos únicos realizados por {funcionario}: {total_atendimentos}")
 st.dataframe(contagem, use_container_width=True)
 
-# Botão de voltar (Markdown link, funciona 100%)
+# Link seguro de retorno para a página principal
 if "funcionario" in st.session_state:
     del st.session_state["funcionario"]
 if os.path.exists("temp_funcionario.json"):
     os.remove("temp_funcionario.json")
-st.markdown('[⬅️ Voltar para Funcionários](./3_Funcionarios)')
+st.markdown('[⬅️ Voltar para Funcionários](./Funcionarios)')
