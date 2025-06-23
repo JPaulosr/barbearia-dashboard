@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import json
 import os
+from datetime import datetime
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
@@ -13,6 +14,8 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
     df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
+    df["Ano"] = df["Data"].dt.year
+    df["Mês"] = df["Data"].dt.month
     return df
 
 df = carregar_dados()
@@ -43,6 +46,17 @@ if meses_filtrados:
 
 # Filtra os dados para o funcionário
 df_func = df[df["Funcionário"] == funcionario]
+
+# Filtros de ano e mês
+st.sidebar.header("🗓️ Filtros de Período")
+ano_atual = datetime.today().year
+anos = sorted(df_func["Ano"].dropna().unique())
+meses = sorted(df_func["Mês"].dropna().unique())
+
+ano_selec = st.sidebar.selectbox("Ano", options=anos, index=anos.index(ano_atual) if ano_atual in anos else 0)
+mês_selec = st.sidebar.multiselect("Mês", options=meses, default=meses)
+
+df_func = df_func[(df_func["Ano"] == ano_selec) & (df_func["Mês"].isin(mês_selec))]
 
 # Título e filtros
 st.markdown(f"### 📊 Receita mensal por tipo de serviço - {funcionario}")
@@ -146,4 +160,4 @@ if st.button("⬅️ Voltar para Funcionários"):
         del st.session_state["funcionario"]
     if os.path.exists("temp_funcionario.json"):
         os.remove("temp_funcionario.json")
-    st.switch_page("pages/3_Funcionarios.py")
+    st.switch_page("/3_Funcionarios.py")
