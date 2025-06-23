@@ -50,11 +50,11 @@ if cliente_busca:
 
 def agrupar_top20(df, df_atendimentos):
     # Atendimentos por mês baseado em Cliente + Data
-    atendimentos_mes = df_atendimentos.groupby(["Cliente", "Mes"]).size().reset_index(name="Atendimentos")
+    atendimentos_mes = df.drop_duplicates(subset=["Cliente", "Data"]).groupby(["Cliente", "Mes"]).size().reset_index(name="Atendimentos")
     atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Atendimentos").fillna(0).reset_index()
 
     # Conta atendimentos únicos por cliente (Cliente + Data)
-    atendimentos_totais = df_atendimentos.groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
+    atendimentos_totais = df.drop_duplicates(subset=["Cliente", "Data"]).groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
 
     # Define Combo ou Simples baseado em Cliente + Data
     tipo_atendimento = (
