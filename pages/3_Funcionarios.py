@@ -23,8 +23,11 @@ st.dataframe(ranking[["Funcionário", "Valor Formatado"]], use_container_width=T
 
 # Navegar para detalhes
 funcionarios = ranking["Funcionário"].tolist()
-filtro = st.selectbox("🔎 Ver detalhamento de um funcionário", funcionarios)
+filtro = st.selectbox("🔎 Ver detalhamento de um funcionário", ["Selecione..."] + funcionarios)
 
-if st.button("➡ Ver detalhes"):
-    st.session_state["funcionario"] = filtro
-    st.switch_page("pages/4_DetalhesFuncionario.py")
+if filtro != "Selecione...":
+    if st.button("➡ Ver detalhes"):
+        st.session_state["funcionario"] = filtro
+        st.switch_page("pages/4_DetalhesFuncionario.py")
+else:
+    st.warning("⚠️ Nenhum funcionário selecionado.")
