@@ -15,8 +15,10 @@ def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
-    df["Ano"] = df["Data"].dt.year
+    df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
+    df["Mês_Nome"] = df["Data"].dt.strftime('%b')
     return df
 
 df = carregar_dados()
@@ -68,8 +70,24 @@ resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro, case
 
 st.dataframe(resumo_filtrado[["Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", "Valor_Formatado"]], use_container_width=True)
 
-# Gráfico dos Top 5 - Barras
+# Gráfico dinâmico
 st.subheader("\U0001F4CA Top 5 por Receita")
-top5 = resumo_geral.head(5)
-fig = px.bar(top5, x="Cliente", y="Valor_Total", title="Top 5 Clientes por Receita", text_auto='.2s')
+if filtro and len(resumo_filtrado) == 1:
+    cliente = resumo_filtrado.iloc[0]["Cliente"]
+    df_cliente = df[df["Cliente"].str.lower() == cliente.lower()]
+    grafico_detalhado = df_cliente.groupby(["Serviço", "Mês_Nome"])["Valor"].sum().reset_index()
+    fig = px.bar(
+        grafico_detalhado,
+        x="Serviço",
+        y="Valor",
+        color="Mês_Nome",
+        barmode="group",
+        text_auto=True,
+        title=f"Receita por Serviço e Mês - {cliente}",
+        labels={"Valor": "Receita (R$)"}
+    )
+else:
+    top5 = resumo_geral.head(5)
+    fig = px.bar(top5, x="Cliente", y="Valor_Total", title="Top 5 Clientes por Receita", text_auto='.2s')
+
 st.plotly_chart(fig, use_container_width=True)
