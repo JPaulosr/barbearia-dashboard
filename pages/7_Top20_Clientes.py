@@ -3,90 +3,75 @@ import pandas as pd
 import plotly.express as px
 from unidecode import unidecode
 
-st.set_page_config(page_title="Top 20 Clientes", layout="wide")
+st.set_page_config(layout="wide")
 st.title("🏆 Top 20 Clientes")
 
 @st.cache_data
-
 def carregar_dados():
-    df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
+    df = pd.read_excel("Modelo_Barbearia_Automatizado.xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
+    df = df.dropna(subset=["Cliente", "Data", "Valor"])
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
+    df["Cliente_Normalizado"] = df["Cliente"].apply(lambda x: unidecode(str(x)).lower().strip())
     return df
 
 df = carregar_dados()
 
-df = df[df["Cliente"].notna()]
+# === Filtros ===
+ano = st.selectbox("📅 Filtrar por ano", sorted(df["Ano"].dropna().unique(), reverse=True), index=0)
+func_opcoes = df["Funcionário"].dropna().unique().tolist()
+funcionarios = st.multiselect("🧍‍♂️ Filtrar por funcionário", func_opcoes, default=func_opcoes)
 
-# Corrige nomes de funcionários para evitar erros de acentuação
-df["Funcionario_Normalizado"] = df["Funcionário"].apply(lambda x: unidecode(str(x)).strip())
-
-# Filtros
-anos = sorted(df["Ano"].dropna().unique(), reverse=True)
-anos = [int(a) for a in anos if not pd.isna(a)]
-ano = st.selectbox("📅 Filtrar por ano", anos)
-
-lista_funcionarios = sorted(df["Funcionario_Normalizado"].unique())
-funcionarios_selecionados = st.multiselect("🧑‍🔧 Filtrar por funcionário", lista_funcionarios, default=lista_funcionarios)
-
-# Aplica filtros
-df_filtrado = df[(df["Ano"] == ano) & (df["Funcionario_Normalizado"].isin(funcionarios_selecionados))]
+# Aplica os filtros básicos
+df_filtrado = df[(df["Ano"] == ano) & (df["Funcionário"].isin(funcionarios))]
 
 # Remove nomes genéricos
-def nome_valido(nome):
-    nome = str(nome).lower().strip()
-    return nome not in ["boliviano", "brasileiro", "menino"]
+genericos = ["boliviano", "brasileiro", "menino"]
+def is_generico(nome):
+    nome_n = unidecode(str(nome)).lower()
+    return any(g in nome_n for g in genericos)
 
-df_filtrado = df_filtrado[df_filtrado["Cliente"].apply(nome_valido)]
+df_filtrado = df_filtrado[~df_filtrado["Cliente"].apply(is_generico)]
 
-# Remove duplicidades por Cliente + Data para contagem única de atendimento
+# Agrupa por cliente (visitas únicas)
 df_visitas = df_filtrado.drop_duplicates(subset=["Cliente", "Data"])
 
-# Se não houver colunas necessárias, para tudo
-if df_visitas.empty or not all(col in df_visitas.columns for col in ["Cliente", "Serviço", "Valor"]):
-    st.warning("⚠ Dados insuficientes para gerar a análise.")
-    st.stop()
-
-# Função principal de cálculo
+# Função para gerar o top 20
 def top_20_por(df):
-    atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
-
-    resumo = atendimentos.groupby("Cliente").agg(
+    resumo = df.groupby("Cliente").agg(
         Qtd_Serviços=("Serviço", "count"),
-        Qtd_Produtos=("Produto", "sum"),
-        Qtd_Atendimento=("Cliente", "count"),
+        Qtd_Produtos=("Produto", "count"),
+        Qtd_Atendimento=("Data", "nunique"),
         Qtd_Combo=("Combo", "sum"),
         Qtd_Simples=("Simples", "sum"),
         Valor_Total=("Valor", "sum")
     ).reset_index()
-
-    resumo = resumo.sort_values(by="Valor_Total", ascending=False).head(20)
-    resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "X").replace(",", ".").replace("X", ","))
+    resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", ","))
+    resumo = resumo.sort_values("Valor_Total", ascending=False).reset_index(drop=True)
+    resumo.index += 1
+    resumo.insert(0, "Posição", resumo.index)
     return resumo
 
 resumo_geral = top_20_por(df_visitas)
 
-# Interface
-st.subheader("🏅 Top 20 Clientes - Geral")
-cliente_default = resumo_geral["Cliente"].iloc[0] if not resumo_geral.empty else ""
-st.selectbox("", resumo_geral["Cliente"], index=0 if not resumo_geral.empty else None)
+st.subheader("🥈 Top 20 Clientes - Geral")
+cliente_escolhido = st.selectbox("", resumo_geral["Cliente"].tolist())
 st.dataframe(resumo_geral, use_container_width=True)
 
-# Campo de pesquisa
+# === Filtro de busca dinâmica ===
 st.subheader("🔍 Pesquisar cliente")
-consulta = st.text_input("Digite um nome (ou parte dele)")
+texto_busca = st.text_input("Digite um nome (ou parte dele)")
 
-if consulta:
-    filtro = resumo_geral["Cliente"].str.lower().str.contains(consulta.lower())
-    st.dataframe(resumo_geral[filtro], use_container_width=True)
+if texto_busca:
+    termo = unidecode(texto_busca).lower()
+    filtrado = resumo_geral[resumo_geral["Cliente"].apply(lambda x: termo in unidecode(str(x)).lower())]
+    st.dataframe(filtrado, use_container_width=True)
 
-# Gráfico Top 5
+# === Top 5 em gráfico ===
 st.subheader("📊 Top 5 por Receita")
 top5 = resumo_geral.head(5)
-if not top5.empty:
-    fig = px.bar(top5, x="Cliente", y="Valor_Total", text="Valor_Formatado", title="Top 5 Clientes por Receita")
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Sem dados para exibir o gráfico.")
+fig = px.bar(top5, x="Cliente", y="Valor_Total", text="Valor_Formatado", labels={"Valor_Total": "Valor (R$)"})
+fig.update_layout(yaxis_title="Receita Total", xaxis_title="Cliente")
+st.plotly_chart(fig, use_container_width=True)
