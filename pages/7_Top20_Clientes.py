@@ -4,11 +4,11 @@ import plotly.express as px
 from unidecode import unidecode
 
 st.set_page_config(layout="wide")
-st.title("🏆 Top 20 Clientes")
+st.title("\U0001F3C6 Top 20 Clientes")
 
 # Filtros
-ano = st.selectbox("📅 Filtrar por ano", options=[2023, 2024, 2025], index=2)
-funcionarios = st.multiselect("👥 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
+ano = st.selectbox("\U0001F4C5 Filtrar por ano", options=[2023, 2024, 2025], index=2)
+funcionarios = st.multiselect("\U0001F465 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
 
 @st.cache_data
 def carregar_dados():
@@ -33,18 +33,16 @@ def limpar_nome(nome):
 
 df = df[df["Cliente"].apply(limpar_nome)]
 
-# Agrupa por Cliente + Data para contagem correta de combos/simples e atendimentos
-agrupado = df.groupby(["Cliente", "Data"]).agg({
-    "Serviço": "count",
-    "Tipo": lambda x: (x == "Produto").sum(),
-    "Combo": [
-        (lambda x: (x == True).sum()),
-        (lambda x: (x == False).sum())
-    ],
-    "Valor": "sum"
-}).reset_index()
+# Agrupa por Cliente + Data para contagem correta de atendimentos e tipo (combo/simples)
+agrupado = df.groupby(["Cliente", "Data"]).agg(
+    Qtd_Serviços=('Serviço', 'count'),
+    Qtd_Produtos=('Tipo', lambda x: (x == "Produto").sum()),
+    Valor_Total=('Valor', 'sum')
+).reset_index()
 
-agrupado.columns = ["Cliente", "Data", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Combo", "Qtd_Simples", "Valor_Total"]
+# Identifica combos e simples por cliente e data
+agrupado["Qtd_Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+agrupado["Qtd_Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
 @st.cache_data
 def top_20_por(df):
@@ -64,14 +62,14 @@ def top_20_por(df):
 resumo_geral = top_20_por(agrupado)
 
 # Pesquisa por nome
-st.subheader("🎯 Top 20 Clientes - Geral")
-filtro = st.text_input("🔍 Pesquisar cliente", "")
+st.subheader("\U0001F3AF Top 20 Clientes - Geral")
+filtro = st.text_input("\U0001F50D Pesquisar cliente", "")
 resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro, case=False)]
 
 st.dataframe(resumo_filtrado[["Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", "Valor_Formatado"]], use_container_width=True)
 
 # Gráfico dos Top 5 - Barras
-st.subheader("📊 Top 5 por Receita")
+st.subheader("\U0001F4CA Top 5 por Receita")
 top5 = resumo_geral.head(5)
 fig = px.bar(top5, x="Cliente", y="Valor_Total", title="Top 5 Clientes por Receita", text_auto='.2s')
 st.plotly_chart(fig, use_container_width=True)
