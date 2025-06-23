@@ -2,86 +2,73 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="Top 20 Clientes", layout="wide")
+st.set_page_config(page_title="Top 20 Clientes - Geral", layout="wide")
 st.title("🏆 Top 20 Clientes - Geral")
 
-# Upload
-arquivo = st.file_uploader("Envie a planilha Modelo_Barbearia_Automatizado.xlsx", type="xlsx")
+uploaded_file = st.file_uploader("\n\n📁 Envie a planilha Modelo_Barbearia_Automatizado.xlsx", type="xlsx")
 
-if arquivo:
-    df = pd.read_excel(arquivo, sheet_name=None)
-    abas = list(df.keys())
-
-    if "Base de Dados" in abas:
-        df = df["Base de Dados"].copy()
-
-        # Normaliza colunas
+if uploaded_file:
+    try:
+        df = pd.read_excel(uploaded_file, sheet_name="Base de Dados")
         df.columns = [str(col).strip() for col in df.columns]
 
-        # Remove nomes genéricos
-        nomes_ignorados = ["boliviano", "brasileiro", "menino"]
-        def limpar_nome(nome):
-            nome = str(nome).lower()
-            for termo in nomes_ignorados:
-                if termo in nome:
-                    return None
-            return nome.strip()
+        obrigatorias = {"Cliente", "Data", "Valor", "Funcionário"}
+        if not obrigatorias.issubset(df.columns):
+            st.error("A planilha precisa conter as colunas: Cliente, Data, Valor e Funcionário.")
+            st.stop()
 
-        df['Cliente'] = df['Cliente'].apply(limpar_nome)
-        df = df.dropna(subset=['Cliente'])
+        # Limpa nomes genéricos
+        nomes_excluir = ["boliviano", "brasileiro", "menino"]
+        df = df[~df["Cliente"].str.lower().str.contains('|'.join(nomes_excluir))]
 
-        # Conversões
-        df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
-        df = df.dropna(subset=['Data'])
-        df['Ano'] = df['Data'].dt.year
-        df['Mês'] = df['Data'].dt.to_period("M").astype(str)
+        # Converte data e valores
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+        df = df.dropna(subset=["Data"])
+        df["Ano"] = df["Data"].dt.year
+        df["Mês"] = df["Data"].dt.strftime("%Y-%m")
 
-        # Filtro por ano e funcionário
-        anos = sorted(df['Ano'].dropna().unique(), reverse=True)
-        ano_sel = st.selectbox("📅 Filtrar por ano", anos, index=0)
-        funcionarios = sorted(df['Funcionário'].dropna().unique())
-        func_sel = st.multiselect("👤 Filtrar por funcionário", funcionarios, default=funcionarios)
+        # Trata valores
+        df["Valor"] = df["Valor"].astype(str).str.replace("R$", "").str.replace(",", ".").str.strip()
+        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+        df = df.dropna(subset=["Valor"])
 
-        df_filtrado = df[(df['Ano'] == ano_sel) & (df['Funcionário'].isin(func_sel))]
+        # Filtros
+        ano_selecionado = st.selectbox("\U0001F4C5 Filtrar por ano", sorted(df["Ano"].unique(), reverse=True))
+        funcionarios = st.multiselect("\U0001F464 Filtrar por funcionário", df["Funcionário"].unique(), default=list(df["Funcionário"].unique()))
 
-        # Agrupamento por Cliente + Data para identificar atendimentos únicos
-        atendimentos = df_filtrado.groupby(['Cliente', 'Data']).agg({
-            'Valor': 'sum',
-            'Serviço': 'count',
-            'Combo': lambda x: x.notna().sum(),
-            'Tipo': list
-        }).reset_index()
+        df_filtrado = df[(df["Ano"] == ano_selecionado) & (df["Funcionário"].isin(funcionarios))]
 
-        # Agrupamento final por cliente
-        resumo = atendimentos.groupby('Cliente').agg(
-            Qtd_Atendimentos=('Data', 'count'),
-            Qtd_Servicos=('Serviço', 'sum'),
-            Qtd_Combo=('Combo', 'sum'),
-            Valor_Total=('Valor', 'sum')
-        ).reset_index()
+        # Contagem de atendimento único (Cliente + Data)
+        atendimentos = df_filtrado.groupby(["Cliente", "Data"]).agg({"Valor": "sum"}).reset_index()
+        ranking = atendimentos.groupby("Cliente").agg({
+            "Valor": "sum",
+            "Data": "nunique"
+        }).rename(columns={"Valor": "Valor_Total", "Data": "Qtd_Atendimentos"}).reset_index()
 
-        # Simples = total de atendimentos - combos
-        resumo['Qtd_Simples'] = resumo['Qtd_Atendimentos'] - resumo['Qtd_Combo']
-        resumo['Valor_Formatado'] = resumo['Valor_Total'].apply(lambda x: f"R$ {x:,.2f}".replace('.', ',').replace(',', '.', 1))
+        ranking = ranking.sort_values("Valor_Total", ascending=False).head(20)
+        ranking["Posição"] = range(1, len(ranking) + 1)
+        ranking["Valor_Formatado"] = ranking["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", ","))
 
-        # Colunas por mês
-        tabela_mensal = df_filtrado.groupby(['Cliente', 'Mês'])['Valor'].sum().unstack(fill_value=0)
-        tabela_mensal = tabela_mensal.applymap(lambda x: round(x, 2))
+        # Cria coluna com valor por mês
+        colunas_meses = df_filtrado["Mês"].unique()
+        for mes in sorted(colunas_meses):
+            valores_mes = df_filtrado[df_filtrado["Mês"] == mes].groupby("Cliente")["Valor"].sum()
+            ranking[mes] = ranking["Cliente"].map(valores_mes).fillna(0).astype(float)
 
-        # Merge final
-        tabela_final = resumo.merge(tabela_mensal, on='Cliente', how='left')
-        tabela_final = tabela_final.sort_values(by='Valor_Total', ascending=False).head(20).reset_index(drop=True)
-        tabela_final.index += 1
-        tabela_final.insert(0, 'Posição', tabela_final.index)
+        # Organiza colunas
+        colunas_ordem = ["Posição", "Cliente", "Qtd_Atendimentos", "Valor_Total", "Valor_Formatado"] + sorted(colunas_meses)
+        ranking = ranking[colunas_ordem]
 
-        # Exibe
-        st.dataframe(tabela_final, use_container_width=True)
+        # Exibe tabela
+        st.dataframe(ranking, use_container_width=True)
 
         # Gráfico
-        fig = px.bar(tabela_final, x='Cliente', y='Valor_Total', text='Valor_Formatado',
-                     title='Top 10 Clientes por Receita', template='plotly_dark')
+        st.markdown("\n### 📊 Top 10 Clientes por Receita")
+        fig = px.bar(ranking.head(10), x="Cliente", y="Valor_Total", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Aba 'Base de Dados' não encontrada na planilha.")
+
+    except Exception as e:
+        st.error(f"Erro ao processar o arquivo: {e}")
+
 else:
-    st.info("📁 Envie o arquivo Excel para visualizar o ranking.")
+    st.info("\U0001F4C1 Envie o arquivo Excel para visualizar o ranking.")
