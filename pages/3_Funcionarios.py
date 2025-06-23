@@ -52,6 +52,11 @@ except ValueError:
 filtro = st.selectbox("🔍 Ver detalhamento de um funcionário", opcoes, index=index_padrao)
 
 if st.button("➥ Ver detalhes"):
-    st.session_state["funcionario"] = filtro
-    st.session_state["meses"] = mes_selecionado  # sincroniza meses também
+    if filtro != "Selecione...":
+        st.session_state["funcionario"] = filtro
+        st.experimental_rerun()
+    else:
+        st.warning("Por favor, selecione um funcionário válido.")
+
+if "funcionario" in st.session_state and st.session_state["funcionario"] != "Selecione...":
     st.switch_page("pages/4_DetalhesFuncionario.py")
