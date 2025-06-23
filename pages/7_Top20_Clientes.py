@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from unidecode import unidecode
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Top 20 Clientes", layout="wide")
 st.title("🏆 Top 20 Clientes")
 
 @st.cache_data
@@ -10,92 +11,116 @@ st.title("🏆 Top 20 Clientes")
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df["Ano"] = df["Data"].dt.year
+    df = df[df["Cliente"].notna() & (df["Cliente"].str.len() > 1)]
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+    df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
     return df
 
 df = carregar_dados()
 
-# Filtros
-anos = sorted(df["Ano"].dropna().unique())
-funcionarios = sorted(df["Funcionário"].dropna().unique())
+# Remove nomes genéricos
+def limpar_nome(nome):
+    nome_norm = unidecode(str(nome)).lower().strip()
+    if nome_norm in ["boliviano", "brasileiro", "menino"]:
+        return None
+    return nome
 
-col1, col2 = st.columns(2)
-with col1:
-    ano_filtro = st.selectbox("📅 Filtrar por ano", anos, index=len(anos)-1)
-with col2:
-    funcionario_filtro = st.multiselect("🧑‍🔧 Filtrar por funcionário", funcionarios, default=funcionarios)
+df["Cliente"] = df["Cliente"].apply(limpar_nome)
+df = df[df["Cliente"].notna()]
 
-# Filtro
-df_filtrado = df[(df["Ano"] == ano_filtro) & (df["Funcionário"].isin(funcionario_filtro))]
+# Ajuste visitas únicas (até 10/05 conta por linha, depois por Cliente + Data)
+limite_data = pd.to_datetime("2025-05-10")
+df_pre = df[df["Data"] <= limite_data].copy()
+df_pos = df[df["Data"] > limite_data].copy()
+df_pre["Chave"] = df_pre.index  # cada linha conta
 
-# Função para gerar o top 20
+# após 11/05 conta uma vez por cliente + data
+df_pos["Chave"] = df_pos["Cliente"].astype(str) + "/" + df_pos["Data"].dt.strftime("%Y-%m-%d")
 
-def top_20_por(atendimentos):
-    # Ajuste das visitas únicas
-    df_antigo = atendimentos[atendimentos["Data"] < pd.to_datetime("2025-05-11")].copy()
-    df_antigo["Visita"] = 1
+df_visitas = pd.concat([df_pre, df_pos], ignore_index=True)
+df_visitas = df_visitas.drop_duplicates(subset=["Chave", "Funcionário"])
 
-    df_novo = atendimentos[atendimentos["Data"] >= pd.to_datetime("2025-05-11")].drop_duplicates(subset=["Cliente", "Data"]).copy()
-    df_novo["Visita"] = 1
+# Filtros de ano e funcionário
+anos_disponiveis = sorted(df["Ano"].dropna().astype(int).unique())
+ano = st.selectbox("📅 Filtrar por ano", anos_disponiveis)
 
-    df_visitas = pd.concat([df_antigo, df_novo])
+todos_func = sorted(df["Funcionário"].dropna().unique())
+func_selecionados = st.multiselect("🧍‍♂️ Filtrar por funcionário", todos_func, default=todos_func)
 
-    # Agrupamento
-    resumo = df_visitas.groupby("Cliente").agg({
+# Aplica filtro
+df_filtrado = df[df["Ano"] == ano & df["Funcionário"].isin(func_selecionados)]
+df_visitas = df_visitas[df_visitas["Ano"] == ano & df_visitas["Funcionário"].isin(func_selecionados)]
+
+# Função para gerar ranking por total
+
+def top_20_por(base):
+    atendimentos = base.copy()
+
+    resumo = atendimentos.groupby("Cliente").agg({
         "Serviço": "count",
-        "Produto": lambda x: x.notna().sum(),
-        "Visita": "sum",
-        "Combo": lambda x: x.notna().sum(),
-        "Simples": lambda x: x.notna().sum(),
         "Valor": "sum"
     }).rename(columns={
-        "Serviço": "Qtd Serviços",
-        "Produto": "Qtd Produtos",
-        "Visita": "Qtd Atendimento",
-        "Combo": "Qtd Combo",
-        "Simples": "Qtd Simples",
-        "Valor": "Valor Total"
-    }).reset_index()
+        "Serviço": "Qtd_Serviços",
+        "Valor": "Valor_Total"
+    })
 
-    # Remove nomes genéricos
-    nomes_invalidos = ["boliviano", "brasileiro", "menino", "menino boliviano"]
-    normalizar = lambda s: str(s).lower().strip()
-    resumo = resumo[~resumo["Cliente"].apply(normalizar).isin(nomes_invalidos)]
+    resumo_produtos = atendimentos[atendimentos["Tipo"] == "Produto"].groupby("Cliente").size()
+    resumo["Qtd_Produtos"] = resumo_produtos
 
-    resumo = resumo.sort_values(by="Valor Total", ascending=False).head(20)
-    resumo.insert(0, "Posição", range(1, len(resumo) + 1))
-    resumo["Valor Total"] = resumo["Valor Total"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    resumo["Qtd_Produtos"] = resumo["Qtd_Produtos"].fillna(0).astype(int)
+
+    visitas = df_visitas[df_visitas["Cliente"].isin(resumo.index)]
+    resumo["Qtd_Atendimento"] = visitas.groupby("Cliente").size()
+
+    resumo["Qtd_Combo"] = atendimentos[atendimentos["Combo"].notna()].groupby("Cliente").size()
+    resumo["Qtd_Simples"] = resumo["Qtd_Serviços"] - resumo["Qtd_Combo"]
+
+    resumo["Qtd_Combo"] = resumo["Qtd_Combo"].fillna(0).astype(int)
+    resumo["Qtd_Simples"] = resumo["Qtd_Simples"].fillna(0).astype(int)
+
+    resumo = resumo.fillna(0)
+    resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    resumo = resumo.reset_index().sort_values("Valor_Total", ascending=False).head(20)
+    resumo.insert(0, "Posição", range(1, len(resumo)+1))
     return resumo
 
-# Exibe os top 20
-st.subheader("🥇 Top 20 Clientes - Geral")
-resumo_geral = top_20_por(df_filtrado)
-st.dataframe(resumo_geral, use_container_width=True)
+# Tabs
+aba = st.selectbox("🥈 Top 20 Clientes - Geral", ["Geral", "JPaulo", "Vinicius"])
+
+if aba == "Geral":
+    resumo_geral = top_20_por(df_filtrado)
+    st.dataframe(resumo_geral, use_container_width=True)
+
+elif aba == "JPaulo":
+    resumo_jp = top_20_por(df_filtrado[df_filtrado["Funcionário"] == "JPaulo"])
+    st.dataframe(resumo_jp, use_container_width=True)
+
+elif aba == "Vinicius":
+    resumo_vin = top_20_por(df_filtrado[df_filtrado["Funcionário"] == "Vinicius"])
+    st.dataframe(resumo_vin, use_container_width=True)
 
 # Pesquisa dinâmica por nome
-st.subheader("🔎 Pesquisar cliente")
-consulta = st.text_input("Digite parte do nome:").lower()
-if consulta:
-    encontrados = resumo_geral[resumo_geral["Cliente"].str.lower().str.contains(consulta)]
-    st.dataframe(encontrados, use_container_width=True)
+st.markdown("### 🔍 Pesquisar cliente")
+texto_busca = st.text_input("Digite um nome (ou parte dele)")
 
-# Gráfico dos top 5
-st.subheader("📊 Top 5 Clientes - Receita")
+if texto_busca:
+    nome_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(texto_busca, case=False)]
+    st.dataframe(nome_filtrado, use_container_width=True)
+
+# Gráfico dos Top 5
+st.markdown("### 📊 Top 5 por Receita")
 top5 = resumo_geral.head(5)
-fig = px.bar(top5, x="Cliente", y="Valor Total", text="Valor Total", labels={"Valor Total": "Receita (R$)"})
+fig = px.bar(top5, x="Cliente", y="Valor_Total", text="Valor_Formatado", color="Cliente", title="Top 5 Clientes por Receita")
 st.plotly_chart(fig, use_container_width=True)
 
-# Comparativo entre dois clientes
-st.subheader("⚖ Comparativo entre dois clientes")
+# Comparativo
+st.markdown("### ⚖ Comparar dois clientes")
 opcoes = resumo_geral["Cliente"].tolist()
-col1, col2 = st.columns(2)
+cliente1 = st.selectbox("Cliente 1", opcoes, index=0)
+cliente2 = st.selectbox("Cliente 2", opcoes, index=1 if len(opcoes) > 1 else 0)
 
-with col1:
-    cliente1 = st.selectbox("Cliente 1", opcoes)
-with col2:
-    cliente2 = st.selectbox("Cliente 2", opcoes, index=1 if len(opcoes) > 1 else 0)
-
-comparativo = resumo_geral[resumo_geral["Cliente"].isin([cliente1, cliente2])].set_index("Cliente")
-st.dataframe(comparativo, use_container_width=True)
+if cliente1 and cliente2:
+    dados = resumo_geral[resumo_geral["Cliente"].isin([cliente1, cliente2])]
+    fig2 = px.bar(dados, x="Cliente", y="Valor_Total", text="Valor_Formatado", color="Cliente", barmode="group")
+    st.plotly_chart(fig2, use_container_width=True)
