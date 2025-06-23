@@ -17,6 +17,11 @@ def carregar_dados():
 
 df = carregar_dados()
 
+# Redirecionamento manual
+if st.session_state.get("pagina") == "funcionarios":
+    st.session_state.pop("pagina")
+    st.switch_page("pages/3_Funcionarios.py")
+
 # Recupera funcionário do session_state ou do arquivo temporário
 funcionario = st.session_state.get("funcionario")
 if not funcionario:
@@ -53,17 +58,32 @@ df_filt = df_func[
 ]
 
 # Gráfico de receita mensal por tipo de serviço
+# Agrupamento de receita mensal por tipo de serviço
 df_agrupado = df_filt.groupby(["Ano-Mês", "Serviço"])["Valor"].sum().reset_index()
 
-if not df_agrupado.empty:
+# Adiciona agrupamento opcional por ano
+df_agrupado["Ano"] = df_agrupado["Ano-Mês"].str[:4]
+agrupar_por_ano = st.checkbox("🔃 Agrupar por ano", value=False)
+
+if agrupar_por_ano:
+    df_plot = df_agrupado.groupby(["Ano", "Serviço"])["Valor"].sum().reset_index()
+    eixo_x = "Ano"
+else:
+    df_plot = df_agrupado
+    eixo_x = "Ano-Mês"
+
+if not df_plot.empty:
+    max_servicos = df_plot["Serviço"].nunique()
+    usar_facet = max_servicos <= 5  # se poucos serviços, mostra facetas
+
     fig = px.bar(
-        df_agrupado,
-        x="Ano-Mês",
+        df_plot,
+        x=eixo_x,
         y="Valor",
         color="Serviço",
         barmode="group",
         text_auto=".2s",
-        facet_col="Serviço",
+        facet_col="Serviço" if usar_facet else None
     )
     fig.update_layout(height=500, showlegend=True)
     st.plotly_chart(fig, use_container_width=True)
@@ -128,4 +148,5 @@ if st.button("⬅️ Voltar para Funcionários"):
         del st.session_state["funcionario"]
     if os.path.exists("temp_funcionario.json"):
         os.remove("temp_funcionario.json")
-    st.switch_page("pages/3_Funcionarios.py")
+    st.session_state["pagina"] = "funcionarios"
+    st.experimental_rerun()
