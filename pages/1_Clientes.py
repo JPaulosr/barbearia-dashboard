@@ -3,14 +3,15 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🣍‍♂️ Clientes - Receita Total")
+st.title("🧍‍♂️ Clientes - Receita Total")
 
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df["Ano"] = df["Data"].dt.year.astype(int)  # Ano como inteiro
+    df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
     return df
 
 df = carregar_dados()
@@ -27,7 +28,7 @@ ranking = ranking.sort_values(by="Valor", ascending=False)
 ranking["Valor Formatado"] = ranking["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 # === Busca dinâmica ===
-st.subheader("🗋e Receita total por cliente")
+st.subheader("🧾 Receita total por cliente")
 busca = st.text_input("🔎 Filtrar por nome").lower().strip()
 
 if busca:
