@@ -4,7 +4,6 @@ import plotly.express as px
 import json
 import os
 from datetime import datetime
-from streamlit_extras.switch_page_button import switch_page
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
@@ -155,10 +154,9 @@ total_atendimentos = contagem["Qtd Atendimentos"].sum()
 st.success(f"✅ Total de atendimentos únicos realizados por {funcionario}: {total_atendimentos}")
 st.dataframe(contagem, use_container_width=True)
 
-# Botão para voltar
-if st.button("⬅️ Voltar para Funcionários"):
-    if "funcionario" in st.session_state:
-        del st.session_state["funcionario"]
-    if os.path.exists("temp_funcionario.json"):
-        os.remove("temp_funcionario.json")
-    switch_page("3_Funcionarios")
+# Botão de voltar (Markdown link, funciona 100%)
+if "funcionario" in st.session_state:
+    del st.session_state["funcionario"]
+if os.path.exists("temp_funcionario.json"):
+    os.remove("temp_funcionario.json")
+st.markdown('[⬅️ Voltar para Funcionários](./3_Funcionarios)')
