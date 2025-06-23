@@ -17,11 +17,6 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Redirecionamento manual
-if st.session_state.get("pagina") == "funcionarios":
-    st.session_state.pop("pagina")
-    st.switch_page("pages/3_Funcionarios.py")
-
 # Recupera funcionário do session_state ou do arquivo temporário
 funcionario = st.session_state.get("funcionario")
 if not funcionario:
@@ -58,10 +53,7 @@ df_filt = df_func[
 ]
 
 # Gráfico de receita mensal por tipo de serviço
-# Agrupamento de receita mensal por tipo de serviço
 df_agrupado = df_filt.groupby(["Ano-Mês", "Serviço"])["Valor"].sum().reset_index()
-
-# Adiciona agrupamento opcional por ano
 df_agrupado["Ano"] = df_agrupado["Ano-Mês"].str[:4]
 agrupar_por_ano = st.checkbox("🔃 Agrupar por ano", value=False)
 
@@ -74,7 +66,7 @@ else:
 
 if not df_plot.empty:
     max_servicos = df_plot["Serviço"].nunique()
-    usar_facet = max_servicos <= 5  # se poucos serviços, mostra facetas
+    usar_facet = max_servicos <= 5
 
     fig = px.bar(
         df_plot,
@@ -90,14 +82,14 @@ if not df_plot.empty:
 else:
     st.info("Nenhum dado disponível para os filtros selecionados.")
 
-# Tabela de receita e atendimentos por mês
+# Receita e atendimentos por mês
 st.markdown("### 💰 Receita total e atendimentos por mês")
 
 # Receita por mês
 df_total_mes = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
 df_total_mes.columns = ["Ano-Mês", "Valor"]
 
-# Contagem de atendimentos por mês (ajustada)
+# Atendimentos únicos ajustados
 df_filt["Data"] = pd.to_datetime(df_filt["Data"])
 data_limite = pd.to_datetime("2025-05-11")
 antes = df_filt[df_filt["Data"] < data_limite]
@@ -107,26 +99,26 @@ df_visitas["Ano-Mês"] = df_visitas["Data"].dt.to_period("M").astype(str)
 df_atendimentos_mes = df_visitas.groupby("Ano-Mês")["Cliente"].count().reset_index()
 df_atendimentos_mes.columns = ["Ano-Mês", "Qtd Atendimentos"]
 
-# Junta receita + atendimentos
+# Junta tudo
 df_merged = pd.merge(df_total_mes, df_atendimentos_mes, on="Ano-Mês", how="left")
 df_merged["Valor Formatado"] = df_merged["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 st.dataframe(df_merged[["Ano-Mês", "Valor Formatado", "Qtd Atendimentos"]], use_container_width=True)
 
-# Gráfico de linha com evolução mensal
-if not df_total_mes.empty:
-    fig_line = px.line(df_total_mes, x="Ano-Mês", y="Valor", markers=True, title="📈 Evolução mensal de receita")
-    fig_line.update_traces(line_color='limegreen')
-    st.plotly_chart(fig_line, use_container_width=True)
+# Gráfico de linha
+df_total_mes["Ano-Mês"] = pd.to_datetime(df_total_mes["Ano-Mês"])
+fig_line = px.line(df_total_mes, x="Ano-Mês", y="Valor", markers=True, title="📈 Evolução mensal de receita")
+fig_line.update_traces(line_color='limegreen')
+st.plotly_chart(fig_line, use_container_width=True)
 
-# Tabela de receita por tipo de serviço
+# Receita por tipo de serviço
 st.markdown("### 📌 Receita por tipo de serviço")
 df_servico = df_filt.groupby("Serviço")["Valor"].sum().reset_index()
 df_servico["Valor Formatado"] = df_servico["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 st.dataframe(df_servico[["Serviço", "Valor Formatado"]], use_container_width=True)
 
-# Total de atendimentos únicos (ajustado)
+# Clientes atendidos únicos
 st.markdown("### 🧍‍♂️ Clientes atendidos (visitas únicas ajustadas)")
 
 df_ajustado = df_filt.copy()
@@ -148,5 +140,4 @@ if st.button("⬅️ Voltar para Funcionários"):
         del st.session_state["funcionario"]
     if os.path.exists("temp_funcionario.json"):
         os.remove("temp_funcionario.json")
-    st.session_state["pagina"] = "funcionarios"
-    st.experimental_rerun()
+    st.switch_page("pages/3_Funcionarios.py")
