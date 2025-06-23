@@ -33,40 +33,45 @@ def limpar_nome(nome):
 
 df = df[df["Cliente"].apply(limpar_nome)]
 
-# Remove duplicatas para contar atendimentos únicos (Cliente + Data)
-df_visitas = df.drop_duplicates(subset=["Cliente", "Data"])
+# Agrupa por Cliente + Data para contagem correta de combos/simples e atendimentos
+agrupado = df.groupby(["Cliente", "Data"]).agg({
+    "Serviço": "count",
+    "Tipo": lambda x: (x == "Produto").sum(),
+    "Combo": [
+        (lambda x: (x == True).sum()),
+        (lambda x: (x == False).sum())
+    ],
+    "Valor": "sum"
+}).reset_index()
 
-# Função de agrupamento e resumo
+agrupado.columns = ["Cliente", "Data", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Combo", "Qtd_Simples", "Valor_Total"]
+
 @st.cache_data
 def top_20_por(df):
-    atendimentos = df.copy()
-    resumo = atendimentos.groupby("Cliente").agg(
-        Qtd_Serviços=("Serviço", "count"),
-        Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum()),
+    resumo = df.groupby("Cliente").agg(
+        Qtd_Serviços=("Qtd_Serviços", "sum"),
+        Qtd_Produtos=("Qtd_Produtos", "sum"),
         Qtd_Atendimento=("Data", "count"),
-        Qtd_Combo=("Combo", lambda x: (x == True).sum()),
-        Qtd_Simples=("Combo", lambda x: (x == False).sum()),
-        Valor_Total=("Valor", "sum")
+        Qtd_Combo=("Qtd_Combo", "sum"),
+        Qtd_Simples=("Qtd_Simples", "sum"),
+        Valor_Total=("Valor_Total", "sum")
     ).reset_index()
     resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "x").replace(",", ".").replace("x", ","))
     resumo = resumo.sort_values(by="Valor_Total", ascending=False).reset_index(drop=True)
     resumo["Posição"] = resumo.index + 1
     return resumo
 
-resumo_geral = top_20_por(df_visitas)
+resumo_geral = top_20_por(agrupado)
 
 # Pesquisa por nome
 st.subheader("🎯 Top 20 Clientes - Geral")
-cliente_input = st.selectbox("", options=[""] + resumo_geral["Cliente"].tolist())
-
-# Tabela com filtro de nome
 filtro = st.text_input("🔍 Pesquisar cliente", "")
 resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro, case=False)]
 
 st.dataframe(resumo_filtrado[["Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", "Valor_Formatado"]], use_container_width=True)
 
-# Gráfico dos Top 5
+# Gráfico dos Top 5 - Barras
 st.subheader("📊 Top 5 por Receita")
 top5 = resumo_geral.head(5)
-fig = px.pie(top5, values="Valor_Total", names="Cliente", title="Top 5 Clientes")
+fig = px.bar(top5, x="Cliente", y="Valor_Total", title="Top 5 Clientes por Receita", text_auto='.2s')
 st.plotly_chart(fig, use_container_width=True)
