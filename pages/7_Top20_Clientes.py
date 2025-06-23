@@ -1,80 +1,87 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import plotly.express as px
 
 st.set_page_config(page_title="Top 20 Clientes", layout="wide")
+st.title("🏆 Top 20 Clientes - Geral")
 
-st.markdown("## 🏅 Top 20 Clientes - Geral")
+# Upload
+arquivo = st.file_uploader("Envie a planilha Modelo_Barbearia_Automatizado.xlsx", type="xlsx")
 
-@st.cache_data
-def carregar_dados():
-    df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
-    df.columns = [col.strip() for col in df.columns]
-    df = df[['Data', 'Valor', 'Cliente', 'Funcionário']].dropna()
+if arquivo:
+    df = pd.read_excel(arquivo, sheet_name=None)
+    abas = list(df.keys())
 
-    df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
-    df['Valor'] = df['Valor'].astype(str).str.replace("R$", "").str.replace(",", ".").str.strip()
-    df['Valor'] = pd.to_numeric(df['Valor'], errors='coerce')
+    if "Base de Dados" in abas:
+        df = df["Base de Dados"].copy()
 
-    # Remove nomes genéricos
-    nomes_excluir = ['boliviano', 'brasileiro', 'menino']
-    df = df[~df['Cliente'].str.lower().isin(nomes_excluir)]
+        # Normaliza colunas
+        df.columns = [str(col).strip() for col in df.columns]
 
-    return df
+        # Remove nomes genéricos
+        nomes_ignorados = ["boliviano", "brasileiro", "menino"]
+        def limpar_nome(nome):
+            nome = str(nome).lower()
+            for termo in nomes_ignorados:
+                if termo in nome:
+                    return None
+            return nome.strip()
 
-df = carregar_dados()
+        df['Cliente'] = df['Cliente'].apply(limpar_nome)
+        df = df.dropna(subset=['Cliente'])
 
-# Filtros
-ano = st.selectbox("📅 Filtrar por ano", options=sorted(df['Data'].dt.year.unique(), reverse=True))
-funcionarios = st.multiselect("👨‍🔧 Filtrar por funcionário", options=sorted(df['Funcionário'].dropna().unique()), default=sorted(df['Funcionário'].dropna().unique()))
+        # Conversões
+        df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+        df = df.dropna(subset=['Data'])
+        df['Ano'] = df['Data'].dt.year
+        df['Mês'] = df['Data'].dt.to_period("M").astype(str)
 
-df = df[(df['Data'].dt.year == ano) & (df['Funcionário'].isin(funcionarios))]
+        # Filtro por ano e funcionário
+        anos = sorted(df['Ano'].dropna().unique(), reverse=True)
+        ano_sel = st.selectbox("📅 Filtrar por ano", anos, index=0)
+        funcionarios = sorted(df['Funcionário'].dropna().unique())
+        func_sel = st.multiselect("👤 Filtrar por funcionário", funcionarios, default=funcionarios)
 
-if df.empty:
-    st.warning("Nenhum dado encontrado com os filtros aplicados.")
-    st.stop()
+        df_filtrado = df[(df['Ano'] == ano_sel) & (df['Funcionário'].isin(func_sel))]
 
-# Separar antes e depois de 11/05/2025
-data_corte = pd.to_datetime("2025-05-11")
-df_antes = df[df['Data'] < data_corte].copy()
-df_depois = df[df['Data'] >= data_corte].copy()
+        # Agrupamento por Cliente + Data para identificar atendimentos únicos
+        atendimentos = df_filtrado.groupby(['Cliente', 'Data']).agg({
+            'Valor': 'sum',
+            'Serviço': 'count',
+            'Combo': lambda x: x.notna().sum(),
+            'Tipo': list
+        }).reset_index()
 
-# Antes de 11/05: cada linha é 1 atendimento
-df_antes['Qtd_Atendimentos'] = 1
-agrupado_antes = df_antes.groupby('Cliente').agg(
-    Qtd_Atendimentos=('Qtd_Atendimentos', 'sum'),
-    Valor_Total=('Valor', 'sum')
-).reset_index()
+        # Agrupamento final por cliente
+        resumo = atendimentos.groupby('Cliente').agg(
+            Qtd_Atendimentos=('Data', 'count'),
+            Qtd_Servicos=('Serviço', 'sum'),
+            Qtd_Combo=('Combo', 'sum'),
+            Valor_Total=('Valor', 'sum')
+        ).reset_index()
 
-# Depois de 11/05: agrupa por Cliente + Data
-agrupado_depois = df_depois.groupby(['Cliente', 'Data']).agg(
-    Valor_Dia=('Valor', 'sum')
-).reset_index()
+        # Simples = total de atendimentos - combos
+        resumo['Qtd_Simples'] = resumo['Qtd_Atendimentos'] - resumo['Qtd_Combo']
+        resumo['Valor_Formatado'] = resumo['Valor_Total'].apply(lambda x: f"R$ {x:,.2f}".replace('.', ',').replace(',', '.', 1))
 
-agrupado_final = agrupado_depois.groupby('Cliente').agg(
-    Qtd_Atendimentos=('Data', 'nunique'),
-    Valor_Total=('Valor_Dia', 'sum')
-).reset_index()
+        # Colunas por mês
+        tabela_mensal = df_filtrado.groupby(['Cliente', 'Mês'])['Valor'].sum().unstack(fill_value=0)
+        tabela_mensal = tabela_mensal.applymap(lambda x: round(x, 2))
 
-# Junta os dois blocos
-df_top = pd.concat([agrupado_antes, agrupado_final], ignore_index=True)
-df_top = df_top.groupby('Cliente').agg(
-    Qtd_Atendimentos=('Qtd_Atendimentos', 'sum'),
-    Valor_Total=('Valor_Total', 'sum')
-).reset_index()
+        # Merge final
+        tabela_final = resumo.merge(tabela_mensal, on='Cliente', how='left')
+        tabela_final = tabela_final.sort_values(by='Valor_Total', ascending=False).head(20).reset_index(drop=True)
+        tabela_final.index += 1
+        tabela_final.insert(0, 'Posição', tabela_final.index)
 
-# Formatação final
-df_top['Valor_Formatado'] = df_top['Valor_Total'].apply(lambda x: f"R$ {x:,.2f}".replace('.', ','))
-df_top = df_top.sort_values(by='Valor_Total', ascending=False).reset_index(drop=True)
-df_top['Posição'] = np.arange(1, len(df_top) + 1)
-df_top = df_top[['Posição', 'Cliente', 'Qtd_Atendimentos', 'Valor_Total', 'Valor_Formatado']]
+        # Exibe
+        st.dataframe(tabela_final, use_container_width=True)
 
-# Exibe ranking
-st.dataframe(df_top.head(20), use_container_width=True)
-
-# Filtro por nome
-st.markdown("### 🔍 Pesquisar cliente")
-nome_busca = st.text_input("Digite um nome (ou parte dele)")
-if nome_busca:
-    resultado = df_top[df_top['Cliente'].str.lower().str.contains(nome_busca.lower())]
-    st.dataframe(resultado, use_container_width=True)
+        # Gráfico
+        fig = px.bar(tabela_final, x='Cliente', y='Valor_Total', text='Valor_Formatado',
+                     title='Top 10 Clientes por Receita', template='plotly_dark')
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Aba 'Base de Dados' não encontrada na planilha.")
+else:
+    st.info("📁 Envie o arquivo Excel para visualizar o ranking.")
