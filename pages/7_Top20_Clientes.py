@@ -7,7 +7,7 @@ st.set_page_config(layout="wide")
 st.title("🏆 Top 20 Clientes")
 
 # === Upload do arquivo ===
-uploaded_file = st.file_uploader("📂 Envie a planilha Modelo_Barbearia_Automatizado.xlsx", type=["xlsx"])
+uploaded_file = st.file_uploader("📂 Envie a planilha Modelo_Barbearia_Automatizado (10).xlsx", type=["xlsx"])
 
 @st.cache_data
 def carregar_dados(arquivo):
