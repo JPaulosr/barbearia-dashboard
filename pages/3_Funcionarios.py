@@ -76,7 +76,10 @@ df_filt = df_func[
 st.markdown("### 📊 Receita mensal total")
 
 df_agrupado = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
-df_agrupado["Valor Formatado"] = df_agrupado["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+df_agrupado["Valor"] = pd.to_numeric(df_agrupado["Valor"], errors="coerce")
+df_agrupado["Valor Formatado"] = df_agrupado["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
 if not df_agrupado.empty:
     fig = px.bar(
@@ -95,11 +98,9 @@ else:
 # Receita e atendimentos por mês
 st.markdown("### 💰 Receita total e atendimentos por mês")
 
-# Receita por mês
 df_total_mes = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
 df_total_mes.columns = ["Ano-Mês", "Valor"]
 
-# Atendimentos únicos ajustados
 df_filt["Data"] = pd.to_datetime(df_filt["Data"])
 data_limite = pd.to_datetime("2025-05-11")
 antes = df_filt[df_filt["Data"] < data_limite]
@@ -109,13 +110,13 @@ df_visitas["Ano-Mês"] = df_visitas["Data"].dt.to_period("M").astype(str)
 df_atendimentos_mes = df_visitas.groupby("Ano-Mês")["Cliente"].count().reset_index()
 df_atendimentos_mes.columns = ["Ano-Mês", "Qtd Atendimentos"]
 
-# Junta tudo
 df_merged = pd.merge(df_total_mes, df_atendimentos_mes, on="Ano-Mês", how="left")
-df_merged["Valor Formatado"] = df_merged["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+df_merged["Valor Formatado"] = df_merged["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
 st.dataframe(df_merged[["Ano-Mês", "Valor Formatado", "Qtd Atendimentos"]], use_container_width=True)
 
-# Gráfico de linha
 df_total_mes["Ano-Mês"] = pd.to_datetime(df_total_mes["Ano-Mês"])
 fig_line = px.line(df_total_mes, x="Ano-Mês", y="Valor", markers=True, title="📈 Evolução mensal de receita")
 fig_line.update_traces(line_color='limegreen')
@@ -124,7 +125,9 @@ st.plotly_chart(fig_line, use_container_width=True)
 # Receita por tipo de serviço
 st.markdown("### 📌 Receita por tipo de serviço")
 df_servico = df_filt.groupby("Serviço")["Valor"].sum().reset_index()
-df_servico["Valor Formatado"] = df_servico["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+df_servico["Valor Formatado"] = df_servico["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
 st.dataframe(df_servico[["Serviço", "Valor Formatado"]], use_container_width=True)
 
@@ -144,7 +147,7 @@ total_atendimentos = contagem["Qtd Atendimentos"].sum()
 st.success(f"✅ Total de atendimentos únicos realizados por {funcionario}: {total_atendimentos}")
 st.dataframe(contagem, use_container_width=True)
 
-# Link seguro de retorno para a página principal
+# Link seguro de retorno
 if "funcionario" in st.session_state:
     del st.session_state["funcionario"]
 if os.path.exists("temp_funcionario.json"):
