@@ -6,73 +6,67 @@ from unidecode import unidecode
 st.set_page_config(layout="wide")
 st.title("🏆 Top 20 Clientes")
 
-@st.cache_data
+# Filtros
+ano = st.selectbox("📅 Filtrar por ano", options=[2023, 2024, 2025], index=2)
+funcionarios = st.multiselect("👥 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
 
+@st.cache_data
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df = df[df["Cliente"].notna()]
     return df
 
 df = carregar_dados()
+df = df[df["Ano"] == ano]
 
-# === Filtros ===
-anos = sorted(df["Ano"].dropna().unique(), reverse=True)
-ano = st.selectbox("📅 Filtrar por ano", anos)
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-selec_func = st.multiselect("👤 Filtrar por funcionário", funcionarios, default=funcionarios)
-
-# Aplica filtros
-mascara = (df["Ano"] == ano) & (df["Funcionário"].isin(selec_func))
-df_filtrado = df[mascara]
+# Filtra funcionários
+df = df[df["Funcionário"].isin(funcionarios)]
 
 # Remove nomes genéricos
 nomes_excluir = ["boliviano", "brasileiro", "menino"]
-df_filtrado = df_filtrado[~df_filtrado["Cliente"].str.lower().isin(nomes_excluir)]
+def limpar_nome(nome):
+    nome_limpo = unidecode(str(nome).lower())
+    return not any(generico in nome_limpo for generico in nomes_excluir)
 
-# Função para gerar top 20 clientes
-def top_20_por(df_base):
-    atendimentos = df_base.copy()
-    atendimentos["Cliente"] = atendimentos["Cliente"].astype(str)
+df = df[df["Cliente"].apply(limpar_nome)]
 
-    resumo = atendimentos.groupby("Cliente").agg({
-        "Serviço": "count",
-        "Produto": lambda x: x.notna().sum(),
-        "Data": lambda x: len(set(zip(x.dt.date, atendimentos.loc[x.index, "Cliente"]))),
-        "Combo": lambda x: (x == True).sum(),
-        "Simples": lambda x: (x == True).sum(),
-        "Valor": "sum",
-    }).rename(columns={
-        "Serviço": "Qtd_Serviços",
-        "Produto": "Qtd_Produtos",
-        "Data": "Qtd_Atendimento",
-        "Combo": "Qtd_Combo",
-        "Simples": "Qtd_Simples",
-        "Valor": "Valor_Total"
-    }).reset_index()
+# Remove duplicatas para contar atendimentos únicos (Cliente + Data)
+df_visitas = df.drop_duplicates(subset=["Cliente", "Data"])
 
-    resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+# Função de agrupamento e resumo
+@st.cache_data
+def top_20_por(df):
+    atendimentos = df.copy()
+    resumo = atendimentos.groupby("Cliente").agg(
+        Qtd_Serviços=("Serviço", "count"),
+        Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum()),
+        Qtd_Atendimento=("Data", "count"),
+        Qtd_Combo=("Combo", lambda x: (x == True).sum()),
+        Qtd_Simples=("Combo", lambda x: (x == False).sum()),
+        Valor_Total=("Valor", "sum")
+    ).reset_index()
+    resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "x").replace(",", ".").replace("x", ","))
     resumo = resumo.sort_values(by="Valor_Total", ascending=False).reset_index(drop=True)
-    resumo.index += 1
-    resumo.insert(0, "Posição", resumo.index)
+    resumo["Posição"] = resumo.index + 1
     return resumo
 
-# === Tabela principal ===
-st.subheader("🥈 Top 20 Clientes - Geral")
-resumo_geral = top_20_por(df_filtrado)
-nome_busca = st.selectbox("🔎 Pesquisar cliente", [""] + resumo_geral["Cliente"].tolist())
+resumo_geral = top_20_por(df_visitas)
 
-if nome_busca:
-    st.dataframe(resumo_geral[resumo_geral["Cliente"] == nome_busca], use_container_width=True)
-else:
-    st.dataframe(resumo_geral.head(20), use_container_width=True)
+# Pesquisa por nome
+st.subheader("🎯 Top 20 Clientes - Geral")
+cliente_input = st.selectbox("", options=[""] + resumo_geral["Cliente"].tolist())
 
-# === Gráfico Top 5 ===
+# Tabela com filtro de nome
+filtro = st.text_input("🔍 Pesquisar cliente", "")
+resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro, case=False)]
+
+st.dataframe(resumo_filtrado[["Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", "Valor_Formatado"]], use_container_width=True)
+
+# Gráfico dos Top 5
 st.subheader("📊 Top 5 por Receita")
 top5 = resumo_geral.head(5)
-fig = px.bar(top5, x="Cliente", y="Valor_Total", text="Valor_Formatado", labels={"Valor_Total": "Receita (R$)"})
-fig.update_layout(height=400)
+fig = px.pie(top5, values="Valor_Total", names="Cliente", title="Top 5 Clientes")
 st.plotly_chart(fig, use_container_width=True)
