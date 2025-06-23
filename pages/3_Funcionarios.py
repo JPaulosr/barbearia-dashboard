@@ -26,6 +26,12 @@ if not funcionario:
             funcionario = data.get("funcionario")
         st.session_state["funcionario"] = funcionario
 
+# Alternativa: Selecionar funcionário manualmente
+if not funcionario:
+    funcionarios_disp = df["Funcionário"].dropna().unique().tolist()
+    funcionario = st.selectbox("🧑 Selecione um funcionário", funcionarios_disp)
+    st.session_state["funcionario"] = funcionario
+
 if not funcionario:
     st.warning("⚠️ Nenhum funcionário selecionado.")
     st.stop()
