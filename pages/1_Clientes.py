@@ -66,10 +66,12 @@ def resumo_cliente(df_cliente):
     total = df_cliente["Valor"].sum()
     servicos = df_cliente["Serviço"].nunique()
     media = df_cliente.groupby("Data")["Valor"].sum().mean()
+    servicos_detalhados = df_cliente["Serviço"].value_counts().to_dict()
     return pd.Series({
         "Total Receita": f"R$ {total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
         "Serviços Distintos": servicos,
-        "Tique Médio": f"R$ {media:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+        "Tique Médio": f"R$ {media:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
+        **servicos_detalhados
     })
 
 resumo = pd.concat([
