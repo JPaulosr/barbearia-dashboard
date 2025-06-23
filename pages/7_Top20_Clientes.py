@@ -6,7 +6,6 @@ st.set_page_config(page_title="Top 20 Clientes - Geral", layout="wide")
 st.title("🏆 Top 20 Clientes - Geral")
 
 @st.cache_data
-
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
@@ -40,23 +39,30 @@ if df.empty:
     st.warning("Nenhum dado encontrado.")
     st.stop()
 
-# Agrupamento por Cliente + Data (para contar atendimentos únicos por dia)
-df_atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
-
 def agrupar_top20(df):
+    df_atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
+
+    # Cria flags para Produto, Combo e Simples
+    df["is_produto"] = df["Tipo"].apply(lambda x: x == "Produto")
+    df["is_combo"] = df["Combo"].notna()
+    df["is_simples"] = df["Combo"].isna()
+
     agrupado = df.groupby("Cliente").agg(
         Qtd_Servicos=("Serviço", "count"),
-        Qtd_Produtos=(lambda x: (df["Tipo"] == "Produto").sum()),
-        Qtd_Atendimentos=("Cliente", lambda x: df_atendimentos[df_atendimentos["Cliente"] == x.name].shape[0]),
-        Qtd_Combo=("Combo", lambda x: x.notna().sum()),
-        Qtd_Simples=("Combo", lambda x: x.isna().sum()),
+        Qtd_Produtos=("is_produto", "sum"),
+        Qtd_Combo=("is_combo", "sum"),
+        Qtd_Simples=("is_simples", "sum"),
         Valor_Total=("Valor", "sum")
     ).reset_index()
+
+    # Atendimentos únicos (Cliente + Data)
+    atendimentos = df_atendimentos.groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
+    agrupado = pd.merge(agrupado, atendimentos, on="Cliente", how="left")
 
     agrupado = agrupado.sort_values(by="Valor_Total", ascending=False).head(20)
     agrupado.insert(0, "Posição", range(1, len(agrupado)+1))
 
-    # Colunas por mês
+    # Receita por mês
     receita_mes = df.groupby(["Cliente", "Mes"]).agg(Valor_Mensal=("Valor", "sum")).reset_index()
     receita_mes_pivot = receita_mes.pivot(index="Cliente", columns="Mes", values="Valor_Mensal").fillna(0)
 
