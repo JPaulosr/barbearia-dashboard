@@ -59,13 +59,13 @@ mês_selec = st.sidebar.multiselect("Mês", options=meses, default=meses)
 df_func = df_func[(df_func["Ano"] == ano_selec) & (df_func["Mês"].isin(mês_selec))]
 
 # Título e filtros
-st.markdown(f"### 📊 Receita mensal total - {funcionario}")
+st.markdown(f"### 📈 Receita mensal total - {funcionario}")
 
 # Filtros opcionais
 meses_disp = sorted(df_func["Ano-Mês"].unique())
 servicos_disp = sorted(df_func["Serviço"].dropna().unique())
 
-meses_selec = st.multiselect("📅 Filtrar por mês (opcional)", meses_disp, default=meses_disp)
+meses_selec = st.multiselect("🗕️ Filtrar por mês (opcional)", meses_disp, default=meses_disp)
 servicos_selec = st.multiselect("🧾 Filtrar por serviço", servicos_disp, default=servicos_disp)
 
 df_filt = df_func[
@@ -73,7 +73,7 @@ df_filt = df_func[
 ]
 
 # Gráfico de receita mensal total
-st.markdown("### 📊 Receita mensal total")
+st.markdown("### 📈 Receita mensal total")
 
 df_agrupado = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
 df_agrupado["Valor"] = pd.to_numeric(df_agrupado["Valor"], errors="coerce")
@@ -87,10 +87,14 @@ if not df_agrupado.empty:
         x="Ano-Mês",
         y="Valor",
         text="Valor Formatado",
-        title="📊 Receita mensal total"
+        title="📈 Receita mensal total"
     )
     fig.update_traces(textposition="outside")
-    fig.update_layout(height=500, showlegend=False)
+    fig.update_layout(
+        height=500,
+        showlegend=False,
+        yaxis=dict(title="Valor (R$)", range=[0, df_agrupado["Valor"].max() * 1.2])
+    )
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Nenhum dado disponível para os filtros selecionados.")
@@ -117,7 +121,7 @@ df_merged["Valor Formatado"] = df_merged["Valor"].apply(
 
 st.dataframe(df_merged[["Ano-Mês", "Valor Formatado", "Qtd Atendimentos"]], use_container_width=True)
 
-df_total_mes["Ano-Mês"] = pd.to_datetime(df_total_mes["Ano-Mês"])
+# Linha de receita
 fig_line = px.line(df_total_mes, x="Ano-Mês", y="Valor", markers=True, title="📈 Evolução mensal de receita")
 fig_line.update_traces(line_color='limegreen')
 st.plotly_chart(fig_line, use_container_width=True)
@@ -132,7 +136,7 @@ df_servico["Valor Formatado"] = df_servico["Valor"].apply(
 st.dataframe(df_servico[["Serviço", "Valor Formatado"]], use_container_width=True)
 
 # Clientes atendidos únicos
-st.markdown("### 🧍‍♂️ Clientes atendidos (visitas únicas ajustadas)")
+st.markdown("### 🧑‍⚖️ Clientes atendidos (visitas únicas ajustadas)")
 
 df_ajustado = df_filt.copy()
 df_ajustado["Data"] = pd.to_datetime(df_ajustado["Data"])
