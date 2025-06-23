@@ -62,13 +62,28 @@ if not df_agrupado.empty:
 else:
     st.info("Nenhum dado disponível para os filtros selecionados.")
 
-# Tabela de receita por mês (total consolidado)
-st.markdown("### 💰 Receita total por mês")
+# Tabela de receita e atendimentos por mês
+st.markdown("### 💰 Receita total e atendimentos por mês")
+
+# Receita por mês
 df_total_mes = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
-df_total_mes["Valor Formatado"] = df_total_mes["Valor"].apply(
-    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-)
-st.dataframe(df_total_mes[["Ano-Mês", "Valor Formatado"]], use_container_width=True)
+df_total_mes.columns = ["Ano-Mês", "Valor"]
+
+# Contagem de atendimentos por mês (ajustada)
+df_filt["Data"] = pd.to_datetime(df_filt["Data"])
+data_limite = pd.to_datetime("2025-05-11")
+antes = df_filt[df_filt["Data"] < data_limite]
+depois = df_filt[df_filt["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
+df_visitas = pd.concat([antes, depois])
+df_visitas["Ano-Mês"] = df_visitas["Data"].dt.to_period("M").astype(str)
+df_atendimentos_mes = df_visitas.groupby("Ano-Mês")["Cliente"].count().reset_index()
+df_atendimentos_mes.columns = ["Ano-Mês", "Qtd Atendimentos"]
+
+# Junta receita + atendimentos
+df_merged = pd.merge(df_total_mes, df_atendimentos_mes, on="Ano-Mês", how="left")
+df_merged["Valor Formatado"] = df_merged["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+st.dataframe(df_merged[["Ano-Mês", "Valor Formatado", "Qtd Atendimentos"]], use_container_width=True)
 
 # Gráfico de linha com evolução mensal
 if not df_total_mes.empty:
@@ -82,8 +97,6 @@ st.markdown("### 🧍‍♂️ Clientes atendidos (visitas únicas ajustadas)")
 df_ajustado = df_filt.copy()
 df_ajustado["Data"] = pd.to_datetime(df_ajustado["Data"])
 
-# Regra: antes de 11/05 = cada linha = atendimento; após = único por cliente + data
-data_limite = pd.to_datetime("2025-05-11")
 antes = df_ajustado[df_ajustado["Data"] < data_limite]
 depois = df_ajustado[df_ajustado["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
 df_visitas = pd.concat([antes, depois])
