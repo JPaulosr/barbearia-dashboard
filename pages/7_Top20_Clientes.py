@@ -14,7 +14,7 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
 
     df["Ano"] = df["Data"].dt.year
-    df["Mes"] = df["Data"].dt.strftime("%Y-%m")
+    df["Mes"] = df["Data"].dt.to_period("M").astype(str)
 
     # Limpa valores monetários e converte para float
     df["Valor"] = df["Valor"].astype(str).str.replace("R$", "", regex=False).str.replace(",", ".").str.strip()
@@ -39,30 +39,29 @@ if df.empty:
     st.warning("Nenhum dado encontrado.")
     st.stop()
 
+# Agrupamento por Cliente + Data (para contar atendimentos únicos por dia)
+df_atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
+
+# Filtro de pesquisa dinâmica
+cliente_busca = st.text_input("🔍 Filtrar por nome do cliente")
+if cliente_busca:
+    df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
+    df_atendimentos = df_atendimentos[df_atendimentos["Cliente"].str.contains(cliente_busca, case=False, na=False)]
+
 def agrupar_top20(df):
-    df_atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
-
-    # Cria flags para Produto, Combo e Simples
-    df["is_produto"] = df["Tipo"].apply(lambda x: x == "Produto")
-    df["is_combo"] = df["Combo"].notna()
-    df["is_simples"] = df["Combo"].isna()
-
     agrupado = df.groupby("Cliente").agg(
         Qtd_Servicos=("Serviço", "count"),
-        Qtd_Produtos=("is_produto", "sum"),
-        Qtd_Combo=("is_combo", "sum"),
-        Qtd_Simples=("is_simples", "sum"),
+        Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum()),
+        Qtd_Atendimentos=("Cliente", lambda x: df_atendimentos[df_atendimentos["Cliente"] == x.name].shape[0]),
+        Qtd_Combo=("Combo", lambda x: x.notna().sum()),
+        Qtd_Simples=("Combo", lambda x: x.isna().sum()),
         Valor_Total=("Valor", "sum")
     ).reset_index()
-
-    # Atendimentos únicos (Cliente + Data)
-    atendimentos = df_atendimentos.groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
-    agrupado = pd.merge(agrupado, atendimentos, on="Cliente", how="left")
 
     agrupado = agrupado.sort_values(by="Valor_Total", ascending=False).head(20)
     agrupado.insert(0, "Posição", range(1, len(agrupado)+1))
 
-    # Receita por mês
+    # Colunas por mês
     receita_mes = df.groupby(["Cliente", "Mes"]).agg(Valor_Mensal=("Valor", "sum")).reset_index()
     receita_mes_pivot = receita_mes.pivot(index="Cliente", columns="Mes", values="Valor_Mensal").fillna(0)
 
