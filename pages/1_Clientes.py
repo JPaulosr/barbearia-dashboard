@@ -10,6 +10,7 @@ def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df["Ano"] = df["Data"].dt.year.astype(int)  # Ano como inteiro
     return df
 
 df = carregar_dados()
