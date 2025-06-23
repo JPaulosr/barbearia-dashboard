@@ -5,6 +5,11 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
 
+# Proteção contra redirecionamento automático
+if "funcionario" not in st.session_state:
+    st.warning("⚠️ Nenhum funcionário selecionado.")
+    st.stop()
+
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
@@ -15,9 +20,8 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Recupera funcionário selecionado na outra página
+# Recupera funcionário selecionado
 funcionario = st.session_state.get("funcionario", None)
-
 if not funcionario:
     st.warning("⚠️ Nenhum funcionário selecionado.")
     st.stop()
@@ -30,7 +34,6 @@ if meses_filtrados:
 # Filtra os dados para o funcionário
 df_func = df[df["Funcionário"] == funcionario]
 
-# Título e filtros
 st.markdown(f"### 📊 Receita mensal por tipo de serviço - {funcionario}")
 
 # Filtros opcionais
@@ -96,7 +99,6 @@ st.markdown("### 🧍‍♂️ Clientes atendidos (visitas únicas ajustadas)")
 
 df_ajustado = df_filt.copy()
 df_ajustado["Data"] = pd.to_datetime(df_ajustado["Data"])
-
 antes = df_ajustado[df_ajustado["Data"] < data_limite]
 depois = df_ajustado[df_ajustado["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
 df_visitas = pd.concat([antes, depois])
@@ -110,6 +112,7 @@ st.dataframe(contagem, use_container_width=True)
 
 # Botão para voltar
 if st.button("⬅️ Voltar para Funcionários"):
-    if "funcionario" in st.session_state:
-        del st.session_state["funcionario"]
-    st.switch_page("pages/3_Funcionarios.py")
+    for key in ["funcionario", "meses"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
