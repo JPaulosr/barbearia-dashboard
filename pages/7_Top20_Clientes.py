@@ -49,27 +49,52 @@ if cliente_busca:
     df_atendimentos = df_atendimentos[df_atendimentos["Cliente"].str.contains(cliente_busca, case=False, na=False)]
 
 def agrupar_top20(df, df_atendimentos):
-    # Atendimentos por mês baseado em df_atendimentos (registro único por cliente+data)
+    # Atendimentos por mês baseado em Cliente + Data
     atendimentos_mes = df_atendimentos.groupby(["Cliente", "Mes"]).size().reset_index(name="Atendimentos")
     atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Atendimentos").fillna(0).reset_index()
+
+    # Conta atendimentos únicos por cliente (Cliente + Data)
+    atendimentos_totais = df_atendimentos.groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
+
+    # Define Combo ou Simples baseado em Cliente + Data
+    tipo_atendimento = (
+        df.groupby(["Cliente", "Data"])
+        .size()
+        .reset_index(name="Qtd_Servicos")
+        .assign(
+            Tipo=lambda x: x["Qtd_Servicos"].apply(lambda q: "Combo" if q > 1 else "Simples")
+        )
+    )
+
+    # Conta Combos e Simples por cliente
+    resumo_combo = tipo_atendimento.groupby(["Cliente", "Tipo"]).size().unstack(fill_value=0).reset_index()
+    resumo_combo.columns.name = None
+    if "Combo" not in resumo_combo.columns:
+        resumo_combo["Combo"] = 0
+    if "Simples" not in resumo_combo.columns:
+        resumo_combo["Simples"] = 0
 
     agrupado = df.groupby("Cliente").agg(
         Qtd_Servicos=("Serviço", "count"),
         Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum()),
-        Qtd_Combo=("Combo", lambda x: x.notna().sum()),
-        Qtd_Simples=("Combo", lambda x: x.isna().sum()),
         Valor_Total=("Valor", "sum")
     ).reset_index()
 
-    # Recalcular Qtd_Atendimentos usando df_atendimentos
-    atendimentos_totais = df_atendimentos.groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
-    agrupado = pd.merge(agrupado, atendimentos_totais, on="Cliente", how="left")
+    # Junta tudo
+    resultado = (
+        agrupado
+        .merge(atendimentos_totais, on="Cliente", how="left")
+        .merge(resumo_combo[["Cliente", "Combo", "Simples"]], on="Cliente", how="left")
+        .merge(atendimentos_pivot, on="Cliente", how="left")
+    )
 
-    agrupado = agrupado.sort_values(by="Valor_Total", ascending=False).head(20)
-    agrupado.insert(0, "Posição", range(1, len(agrupado)+1))
+    resultado.rename(columns={"Combo": "Qtd_Combo", "Simples": "Qtd_Simples"}, inplace=True)
 
-    resultado = pd.merge(agrupado, atendimentos_pivot, on="Cliente", how="left")
-    resultado["Valor_Total_Formatado"] = resultado["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "v").replace(",", ".").replace("v", ","))
+    resultado["Valor_Total_Formatado"] = resultado["Valor_Total"].apply(
+        lambda x: f"R$ {x:,.2f}".replace(".", "v").replace(",", ".").replace("v", ",")
+    )
+    resultado = resultado.sort_values(by="Valor_Total", ascending=False).head(20)
+    resultado.insert(0, "Posição", range(1, len(resultado) + 1))
 
     return resultado
 
