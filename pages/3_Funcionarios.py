@@ -23,7 +23,13 @@ st.dataframe(ranking[["Funcionário", "Valor Formatado"]], use_container_width=T
 
 # Navegar para detalhes
 funcionarios = ranking["Funcionário"].tolist()
-filtro = st.selectbox("🔎 Ver detalhamento de um funcionário", ["Selecione..."] + funcionarios)
+
+if "funcionario" in st.session_state:
+    valor_padrao = st.session_state["funcionario"]
+else:
+    valor_padrao = "Selecione..."
+
+filtro = st.selectbox("🔎 Ver detalhamento de um funcionário", ["Selecione..."] + funcionarios, index=["Selecione..."] + funcionarios.index(valor_padrao) if valor_padrao in funcionarios else 0)
 
 if filtro != "Selecione...":
     if st.button("➡ Ver detalhes"):
