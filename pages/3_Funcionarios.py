@@ -26,6 +26,11 @@ df = df[df["Funcionário"] == funcionario]
 
 st.subheader(f"📊 Resumo do Funcionário: {funcionario}")
 
+# ➕ Receita total
+valor_total = df["Valor"].sum()
+valor_formatado = f"R$ {valor_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+st.markdown(f"### 💰 Receita Total: **{valor_formatado}**")
+
 # Receita mensal
 receita_mensal = df.groupby(["Ano", "Mês"])["Valor"].sum().reset_index()
 receita_mensal["Ano-Mês"] = receita_mensal["Ano"].astype(str) + "-" + receita_mensal["Mês"].astype(str).str.zfill(2)
