@@ -93,7 +93,8 @@ if not df_agrupado.empty:
     fig.update_layout(
         height=500,
         showlegend=False,
-        yaxis_title="Valor (R$)"
+        yaxis_title="Valor (R$)",
+        yaxis_tickformat=".2f"
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
