@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(page_title="Top 20 Clientes - Geral", layout="wide")
-st.title("🏆 Top 20 Clientes - Geral")
+st.title("\U0001F3C6 Top 20 Clientes - Geral")
 
 @st.cache_data
 def carregar_dados():
@@ -16,11 +16,9 @@ def carregar_dados():
     df["Ano"] = df["Data"].dt.year
     df["Mes"] = df["Data"].dt.to_period("M").astype(str)
 
-    # Limpa valores monetários e converte para float
     df["Valor"] = df["Valor"].astype(str).str.replace("R$", "", regex=False).str.replace(",", ".").str.strip()
     df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
 
-    # Remove nomes genéricos
     nomes_invalidos = ["boliviano", "brasileiro", "menino"]
     def nome_valido(nome):
         if not isinstance(nome, str): return False
@@ -43,20 +41,17 @@ if df.empty:
 df_atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
 # Filtro de pesquisa dinâmica
-cliente_busca = st.text_input("🔍 Filtrar por nome do cliente")
+cliente_busca = st.text_input("\U0001F50D Filtrar por nome do cliente")
 if cliente_busca:
     df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
     df_atendimentos = df_atendimentos[df_atendimentos["Cliente"].str.contains(cliente_busca, case=False, na=False)]
 
 def agrupar_top20(df, df_atendimentos):
-    # Atendimentos por mês baseado em Cliente + Data
-    atendimentos_mes = df.drop_duplicates(subset=["Cliente", "Data"]).groupby(["Cliente", "Mes"]).size().reset_index(name="Atendimentos")
-    atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Atendimentos").fillna(0).reset_index()
+    atendimentos_mes = df.drop_duplicates(subset=["Cliente", "Data"]).groupby(["Cliente", "Mes"]).size().reset_index(name="Qtd_Atendimentos")
+    atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Qtd_Atendimentos").fillna(0).reset_index()
 
-    # Conta atendimentos únicos por cliente (Cliente + Data)
     atendimentos_totais = df.drop_duplicates(subset=["Cliente", "Data"]).groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
 
-    # Define Combo ou Simples baseado em Cliente + Data
     tipo_atendimento = (
         df.groupby(["Cliente", "Data"])
         .size()
@@ -66,7 +61,6 @@ def agrupar_top20(df, df_atendimentos):
         )
     )
 
-    # Conta Combos e Simples por cliente
     resumo_combo = tipo_atendimento.groupby(["Cliente", "Tipo"]).size().unstack(fill_value=0).reset_index()
     resumo_combo.columns.name = None
     if "Combo" not in resumo_combo.columns:
@@ -80,7 +74,6 @@ def agrupar_top20(df, df_atendimentos):
         Valor_Total=("Valor", "sum")
     ).reset_index()
 
-    # Junta tudo
     resultado = (
         agrupado
         .merge(atendimentos_totais, on="Cliente", how="left")
@@ -100,9 +93,7 @@ def agrupar_top20(df, df_atendimentos):
 
 top20 = agrupar_top20(df, df_atendimentos)
 
-# Mostra a tabela
 st.dataframe(top20.drop(columns=["Valor_Total"]), use_container_width=True)
 
-# Gráfico de barras
 fig = px.bar(top20, x="Cliente", y="Valor_Total", title="Top 20 Clientes por Receita", text_auto=True)
 st.plotly_chart(fig, use_container_width=True)
