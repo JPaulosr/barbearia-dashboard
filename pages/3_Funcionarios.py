@@ -38,5 +38,3 @@ if filtro != "Selecione...":
     if st.button("➡ Ver detalhes"):
         st.session_state["funcionario"] = filtro
         st.switch_page("pages/4_DetalhesFuncionario.py")
-else:
-    st.warning("⚠️ Nenhum funcionário selecionado.")
