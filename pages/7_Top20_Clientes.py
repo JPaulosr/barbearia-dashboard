@@ -48,19 +48,22 @@ if cliente_busca:
     df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
     df_atendimentos = df_atendimentos[df_atendimentos["Cliente"].str.contains(cliente_busca, case=False, na=False)]
 
-def agrupar_top20(df):
+def agrupar_top20(df, df_atendimentos):
     # Atendimentos por mês baseado em df_atendimentos (registro único por cliente+data)
     atendimentos_mes = df_atendimentos.groupby(["Cliente", "Mes"]).size().reset_index(name="Atendimentos")
-    atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Atendimentos").fillna(0)
+    atendimentos_pivot = atendimentos_mes.pivot(index="Cliente", columns="Mes", values="Atendimentos").fillna(0).reset_index()
 
     agrupado = df.groupby("Cliente").agg(
         Qtd_Servicos=("Serviço", "count"),
         Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum()),
-        Qtd_Atendimentos=("Cliente", lambda x: df_atendimentos[df_atendimentos["Cliente"] == x.name].shape[0]),
         Qtd_Combo=("Combo", lambda x: x.notna().sum()),
         Qtd_Simples=("Combo", lambda x: x.isna().sum()),
         Valor_Total=("Valor", "sum")
     ).reset_index()
+
+    # Recalcular Qtd_Atendimentos usando df_atendimentos
+    atendimentos_totais = df_atendimentos.groupby("Cliente").size().reset_index(name="Qtd_Atendimentos")
+    agrupado = pd.merge(agrupado, atendimentos_totais, on="Cliente", how="left")
 
     agrupado = agrupado.sort_values(by="Valor_Total", ascending=False).head(20)
     agrupado.insert(0, "Posição", range(1, len(agrupado)+1))
@@ -70,7 +73,7 @@ def agrupar_top20(df):
 
     return resultado
 
-top20 = agrupar_top20(df)
+top20 = agrupar_top20(df, df_atendimentos)
 
 # Mostra a tabela
 st.dataframe(top20.drop(columns=["Valor_Total"]), use_container_width=True)
