@@ -76,18 +76,17 @@ df_filt = df_func[
 st.markdown("### 📊 Receita mensal total")
 
 df_agrupado = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
+df_agrupado["Valor Formatado"] = df_agrupado["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 if not df_agrupado.empty:
-    df_agrupado["Valor Formatado"] = df_agrupado["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-fig = px.bar(
-    df_agrupado,
-    x="Ano-Mês",
-    y="Valor",
-    text="Valor Formatado",
-    title="📊 Receita mensal total"
-)
+    fig = px.bar(
+        df_agrupado,
+        x="Ano-Mês",
+        y="Valor",
+        text="Valor Formatado",
+        title="📊 Receita mensal total"
     )
+    fig.update_traces(textposition="outside")
     fig.update_layout(height=500, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
 else:
