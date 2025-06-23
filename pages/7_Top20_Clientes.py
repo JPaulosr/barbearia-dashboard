@@ -8,11 +8,15 @@ st.title("🏆 Top 20 Clientes")
 
 @st.cache_data
 def carregar_dados(caminho_arquivo):
-    df = pd.read_excel(caminho_arquivo)
-    df.columns = [str(col).strip() for col in df.columns]
-    st.write("🧪 Colunas encontradas:", df.columns.tolist())  # debug opcional
+    # Lê a aba correta da planilha
+    xls = pd.ExcelFile(caminho_arquivo)
+    st.write("🗂️ Abas disponíveis:", xls.sheet_names)  # debug
 
-    # Mapeamento flexível de colunas obrigatórias
+    df = pd.read_excel(xls, sheet_name="Base de Dados", header=0)
+    df.columns = [str(col).strip() for col in df.columns]
+    st.write("📋 Colunas encontradas:", df.columns.tolist())  # debug
+
+    # Mapeia colunas mesmo com variações de nome
     mapa_colunas = {}
     for col in df.columns:
         nome = unidecode(col.lower().strip())
@@ -24,9 +28,10 @@ def carregar_dados(caminho_arquivo):
             mapa_colunas["Valor"] = col
 
     if not {"Cliente", "Data", "Valor"}.issubset(mapa_colunas):
-        st.error("❌ A planilha precisa conter colunas com nomes (ou parecidos com): Cliente, Data e Valor.")
+        st.error("❌ A planilha precisa conter colunas parecidas com: Cliente, Data e Valor.")
         return None
 
+    # Renomeia colunas para padronizar
     df = df.rename(columns={
         mapa_colunas["Cliente"]: "Cliente",
         mapa_colunas["Data"]: "Data",
@@ -34,18 +39,26 @@ def carregar_dados(caminho_arquivo):
     })
 
     df = df.dropna(subset=["Cliente", "Data", "Valor"])
-    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+
+    # Corrige valores formatados como texto com R$
+    df["Valor"] = df["Valor"].apply(lambda x: str(x).replace("R$", "").replace(".", "").replace(",", ".").strip())
+    df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
     df["Cliente_Normalizado"] = df["Cliente"].apply(lambda x: unidecode(str(x)).lower().strip())
+
     return df
 
-# Lê direto da raiz do projeto
+# Lê da raiz do projeto (sem upload)
 df = carregar_dados("Modelo_Barbearia_Automatizado (10).xlsx")
 
 if df is not None:
-    # Filtros
+    # Filtro por ano
     ano = st.selectbox("📅 Filtrar por ano", sorted(df["Ano"].dropna().unique(), reverse=True), index=0)
+
+    # Filtro por funcionário (se existir)
     funcionarios = []
     if "Funcionário" in df.columns:
         func_opcoes = df["Funcionário"].dropna().unique().tolist()
@@ -56,15 +69,15 @@ if df is not None:
         df_filtrado = df_filtrado[df_filtrado["Funcionário"].isin(funcionarios)]
 
     # Remove nomes genéricos
-    genericos = ["boliviano", "brasileiro", "menino"]
+    nomes_ignorar = ["boliviano", "brasileiro", "menino"]
     df_filtrado = df_filtrado[~df_filtrado["Cliente"].apply(
-        lambda nome: any(g in unidecode(str(nome)).lower() for g in genericos)
+        lambda nome: any(g in unidecode(str(nome)).lower() for g in nomes_ignorar)
     )]
 
-    # Considera atendimentos únicos por cliente + data
+    # Agrupamento por cliente + data (atendimentos únicos)
     df_visitas = df_filtrado.drop_duplicates(subset=["Cliente", "Data"])
 
-    # Geração do ranking
+    # Gera resumo Top 20
     def top_20_por(df):
         resumo = df.groupby("Cliente").agg(
             Qtd_Atendimentos=("Data", "nunique"),
@@ -78,7 +91,7 @@ if df is not None:
 
     resumo_geral = top_20_por(df_visitas)
 
-    # Tabela Top 20
+    # Tabela principal
     st.subheader("🥇 Top 20 Clientes - Geral")
     st.dataframe(resumo_geral, use_container_width=True)
 
