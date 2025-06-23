@@ -110,5 +110,6 @@ st.dataframe(contagem, use_container_width=True)
 
 # Botão para voltar
 if st.button("⬅️ Voltar para Funcionários"):
-    st.session_state["funcionario"] = "Selecione..."
+    if "funcionario" in st.session_state:
+        del st.session_state["funcionario"]
     st.switch_page("pages/3_Funcionarios.py")
