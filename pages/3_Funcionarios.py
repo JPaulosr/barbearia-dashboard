@@ -65,7 +65,7 @@ st.markdown(f"### 📈 Receita mensal total - {funcionario}")
 meses_disp = sorted(df_func["Ano-Mês"].unique())
 servicos_disp = sorted(df_func["Serviço"].dropna().unique())
 
-meses_selec = st.multiselect("🗕️ Filtrar por mês (opcional)", meses_disp, default=meses_disp)
+meses_selec = st.multiselect("🕵️ Filtrar por mês (opcional)", meses_disp, default=meses_disp)
 servicos_selec = st.multiselect("🧾 Filtrar por serviço", servicos_disp, default=servicos_disp)
 
 df_filt = df_func[
@@ -73,7 +73,7 @@ df_filt = df_func[
 ]
 
 # Gráfico de receita mensal total
-st.markdown("### 📈 Receita mensal total")
+st.markdown("### 📊 Receita mensal total")
 
 df_agrupado = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
 df_agrupado["Valor"] = pd.to_numeric(df_agrupado["Valor"], errors="coerce")
@@ -93,7 +93,7 @@ if not df_agrupado.empty:
     fig.update_layout(
         height=500,
         showlegend=False,
-        yaxis=dict(title="Valor (R$)", range=[0, df_agrupado["Valor"].max() * 1.2])
+        yaxis_title="Valor (R$)"
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
