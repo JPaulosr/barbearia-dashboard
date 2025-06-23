@@ -46,14 +46,20 @@ def top_20_por(df_base, funcionario=None):
         df_base = df_base[df_base["Funcionário"] == funcionario]
 
     atendimentos = df_base.drop_duplicates(subset=["Cliente", "Data"])
-    resumo = atendimentos.groupby("Cliente").agg(
-        Qtd_Serviços=("Serviço", "count"),
-        Qtd_Produtos=(lambda d: (d["Tipo"] == "Produto").sum()),
-        Qtd_Atendimento=("Cliente", "count"),
-        Qtd_Combo=(lambda d: (d["Combo"].notna()).sum()),
-        Qtd_Simples=(lambda d: (d["Combo"].isna()).sum()),
-        Valor_Total=("Valor", "sum")
-    ).reset_index()
+   resumo = atendimentos.groupby("Cliente").agg({
+    "Serviço": "count",
+    "Produto?": lambda x: (x == "Sim").sum(),
+    "Valor": "sum",
+    "Combo": lambda x: x.notna().sum(),
+    "Simples?": lambda x: (x == "Sim").sum(),
+}).rename(columns={
+    "Serviço": "Qtd_Serviços",
+    "Produto?": "Qtd_Produtos",
+    "Valor": "Valor_Total",
+    "Combo": "Qtd_Combo",
+    "Simples?": "Qtd_Simples"
+}).reset_index()
+
 
     resumo = resumo.sort_values("Valor_Total", ascending=False).head(20)
     resumo["Valor Total"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
