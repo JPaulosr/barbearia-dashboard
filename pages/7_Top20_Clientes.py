@@ -6,9 +6,12 @@ from unidecode import unidecode
 st.set_page_config(layout="wide")
 st.title("🏆 Top 20 Clientes")
 
+# === Upload do arquivo ===
+uploaded_file = st.file_uploader("📂 Envie a planilha Modelo_Barbearia_Automatizado.xlsx", type=["xlsx"])
+
 @st.cache_data
-def carregar_dados():
-    df = pd.read_excel("Modelo_Barbearia_Automatizado.xlsx", sheet_name="Base de Dados")
+def carregar_dados(arquivo):
+    df = pd.read_excel(arquivo, sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df = df.dropna(subset=["Cliente", "Data", "Valor"])
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
@@ -17,61 +20,65 @@ def carregar_dados():
     df["Cliente_Normalizado"] = df["Cliente"].apply(lambda x: unidecode(str(x)).lower().strip())
     return df
 
-df = carregar_dados()
+if uploaded_file:
+    df = carregar_dados(uploaded_file)
 
-# === Filtros ===
-ano = st.selectbox("📅 Filtrar por ano", sorted(df["Ano"].dropna().unique(), reverse=True), index=0)
-func_opcoes = df["Funcionário"].dropna().unique().tolist()
-funcionarios = st.multiselect("🧍‍♂️ Filtrar por funcionário", func_opcoes, default=func_opcoes)
+    # === Filtros ===
+    ano = st.selectbox("📅 Filtrar por ano", sorted(df["Ano"].dropna().unique(), reverse=True), index=0)
+    func_opcoes = df["Funcionário"].dropna().unique().tolist()
+    funcionarios = st.multiselect("🧍‍♂️ Filtrar por funcionário", func_opcoes, default=func_opcoes)
 
-# Aplica os filtros básicos
-df_filtrado = df[(df["Ano"] == ano) & (df["Funcionário"].isin(funcionarios))]
+    # Aplica os filtros básicos
+    df_filtrado = df[(df["Ano"] == ano) & (df["Funcionário"].isin(funcionarios))]
 
-# Remove nomes genéricos
-genericos = ["boliviano", "brasileiro", "menino"]
-def is_generico(nome):
-    nome_n = unidecode(str(nome)).lower()
-    return any(g in nome_n for g in genericos)
+    # Remove nomes genéricos
+    genericos = ["boliviano", "brasileiro", "menino"]
+    def is_generico(nome):
+        nome_n = unidecode(str(nome)).lower()
+        return any(g in nome_n for g in genericos)
 
-df_filtrado = df_filtrado[~df_filtrado["Cliente"].apply(is_generico)]
+    df_filtrado = df_filtrado[~df_filtrado["Cliente"].apply(is_generico)]
 
-# Agrupa por cliente (visitas únicas)
-df_visitas = df_filtrado.drop_duplicates(subset=["Cliente", "Data"])
+    # Agrupa por cliente (visitas únicas)
+    df_visitas = df_filtrado.drop_duplicates(subset=["Cliente", "Data"])
 
-# Função para gerar o top 20
-def top_20_por(df):
-    resumo = df.groupby("Cliente").agg(
-        Qtd_Serviços=("Serviço", "count"),
-        Qtd_Produtos=("Produto", "count"),
-        Qtd_Atendimento=("Data", "nunique"),
-        Qtd_Combo=("Combo", "sum"),
-        Qtd_Simples=("Simples", "sum"),
-        Valor_Total=("Valor", "sum")
-    ).reset_index()
-    resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", ","))
-    resumo = resumo.sort_values("Valor_Total", ascending=False).reset_index(drop=True)
-    resumo.index += 1
-    resumo.insert(0, "Posição", resumo.index)
-    return resumo
+    # Função para gerar o top 20
+    def top_20_por(df):
+        resumo = df.groupby("Cliente").agg(
+            Qtd_Serviços=("Serviço", "count"),
+            Qtd_Produtos=("Produto", "count"),
+            Qtd_Atendimento=("Data", "nunique"),
+            Qtd_Combo=("Combo", "sum"),
+            Qtd_Simples=("Simples", "sum"),
+            Valor_Total=("Valor", "sum")
+        ).reset_index()
+        resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", ","))
+        resumo = resumo.sort_values("Valor_Total", ascending=False).reset_index(drop=True)
+        resumo.index += 1
+        resumo.insert(0, "Posição", resumo.index)
+        return resumo
 
-resumo_geral = top_20_por(df_visitas)
+    resumo_geral = top_20_por(df_visitas)
 
-st.subheader("🥈 Top 20 Clientes - Geral")
-cliente_escolhido = st.selectbox("", resumo_geral["Cliente"].tolist())
-st.dataframe(resumo_geral, use_container_width=True)
+    st.subheader("🥈 Top 20 Clientes - Geral")
+    cliente_escolhido = st.selectbox("", resumo_geral["Cliente"].tolist())
+    st.dataframe(resumo_geral, use_container_width=True)
 
-# === Filtro de busca dinâmica ===
-st.subheader("🔍 Pesquisar cliente")
-texto_busca = st.text_input("Digite um nome (ou parte dele)")
+    # === Filtro de busca dinâmica ===
+    st.subheader("🔍 Pesquisar cliente")
+    texto_busca = st.text_input("Digite um nome (ou parte dele)")
 
-if texto_busca:
-    termo = unidecode(texto_busca).lower()
-    filtrado = resumo_geral[resumo_geral["Cliente"].apply(lambda x: termo in unidecode(str(x)).lower())]
-    st.dataframe(filtrado, use_container_width=True)
+    if texto_busca:
+        termo = unidecode(texto_busca).lower()
+        filtrado = resumo_geral[resumo_geral["Cliente"].apply(lambda x: termo in unidecode(str(x)).lower())]
+        st.dataframe(filtrado, use_container_width=True)
 
-# === Top 5 em gráfico ===
-st.subheader("📊 Top 5 por Receita")
-top5 = resumo_geral.head(5)
-fig = px.bar(top5, x="Cliente", y="Valor_Total", text="Valor_Formatado", labels={"Valor_Total": "Valor (R$)"})
-fig.update_layout(yaxis_title="Receita Total", xaxis_title="Cliente")
-st.plotly_chart(fig, use_container_width=True)
+    # === Top 5 em gráfico ===
+    st.subheader("📊 Top 5 por Receita")
+    top5 = resumo_geral.head(5)
+    fig = px.bar(top5, x="Cliente", y="Valor_Total", text="Valor_Formatado", labels={"Valor_Total": "Valor (R$)"})
+    fig.update_layout(yaxis_title="Receita Total", xaxis_title="Cliente")
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.warning("⚠️ Envie o arquivo Excel para visualizar o ranking.")
