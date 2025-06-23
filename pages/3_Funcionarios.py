@@ -59,7 +59,7 @@ mês_selec = st.sidebar.multiselect("Mês", options=meses, default=meses)
 df_func = df_func[(df_func["Ano"] == ano_selec) & (df_func["Mês"].isin(mês_selec))]
 
 # Título e filtros
-st.markdown(f"### 📊 Receita mensal por tipo de serviço - {funcionario}")
+st.markdown(f"### 📊 Receita mensal total - {funcionario}")
 
 # Filtros opcionais
 meses_disp = sorted(df_func["Ano-Mês"].unique())
@@ -72,32 +72,20 @@ df_filt = df_func[
     df_func["Ano-Mês"].isin(meses_selec) & df_func["Serviço"].isin(servicos_selec)
 ]
 
-# Gráfico de receita mensal por tipo de serviço
-df_agrupado = df_filt.groupby(["Ano-Mês", "Serviço"])["Valor"].sum().reset_index()
-df_agrupado["Ano"] = df_agrupado["Ano-Mês"].str[:4]
-agrupar_por_ano = st.checkbox("🔃 Agrupar por ano", value=False)
+# Gráfico de receita mensal total
+st.markdown("### 📊 Receita mensal total")
 
-if agrupar_por_ano:
-    df_plot = df_agrupado.groupby(["Ano", "Serviço"])["Valor"].sum().reset_index()
-    eixo_x = "Ano"
-else:
-    df_plot = df_agrupado
-    eixo_x = "Ano-Mês"
+df_agrupado = df_filt.groupby("Ano-Mês")["Valor"].sum().reset_index()
 
-if not df_plot.empty:
-    max_servicos = df_plot["Serviço"].nunique()
-    usar_facet = max_servicos <= 5
-
+if not df_agrupado.empty:
     fig = px.bar(
-        df_plot,
-        x=eixo_x,
+        df_agrupado,
+        x="Ano-Mês",
         y="Valor",
-        color="Serviço",
-        barmode="group",
         text_auto=".2s",
-        facet_col="Serviço" if usar_facet else None
+        title="📊 Receita mensal total"
     )
-    fig.update_layout(height=500, showlegend=True)
+    fig.update_layout(height=500, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Nenhum dado disponível para os filtros selecionados.")
