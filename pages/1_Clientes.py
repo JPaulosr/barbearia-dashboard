@@ -1,15 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from unidecode import unidecode
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
-
-# Carregar nome do cliente vindo da outra página
-cliente = st.session_state.get("cliente", None)
-if not cliente:
-    st.error("Nenhum cliente selecionado.")
-    st.stop()
 
 @st.cache_data
 def carregar_dados():
@@ -17,38 +12,54 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year
+    df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
     df["Mês_Nome"] = df["Data"].dt.strftime('%b')
     return df
 
 df = carregar_dados()
+
+cliente = st.session_state.get("cliente", None)
+if not cliente:
+    st.error("Cliente não selecionado. Volte e selecione um cliente na tela anterior.")
+    st.stop()
+
+st.subheader(f"📊 Histórico de Atendimentos - {cliente}")
 df_cliente = df[df["Cliente"].str.lower() == cliente.lower()]
 
-st.header(f"📋 Dados do cliente: {cliente}")
+# Receita mensal
+receita_mensal = df_cliente.groupby(["Ano", "Mês_Nome"])['Valor'].sum().reset_index()
+fig1 = px.bar(receita_mensal, x="Mês_Nome", y="Valor", color="Ano", barmode="group", text_auto=True, title="Receita Mensal")
+st.plotly_chart(fig1, use_container_width=True)
 
-# Tabela detalhada dos atendimentos
-st.subheader("📆 Histórico de Atendimentos")
-st.dataframe(df_cliente.sort_values(by="Data", ascending=False), use_container_width=True)
+# Receita por tipo
+receita_tipo = df_cliente.groupby("Tipo")["Valor"].sum().reset_index()
+fig2 = px.pie(receita_tipo, names="Tipo", values="Valor", title="Receita por Tipo")
+st.plotly_chart(fig2, use_container_width=True)
 
-# Receita por mês
-st.subheader("📈 Receita Mensal")
-receita_mensal = df_cliente.groupby("Mês_Nome")["Valor"].sum().reindex(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-).dropna()
-fig_mensal = px.bar(receita_mensal, x=receita_mensal.index, y="Valor", text_auto=True, labels={"Valor": "Receita (R$)"})
-st.plotly_chart(fig_mensal, use_container_width=True)
+# Distribuição por funcionário
+st.subheader("🧑‍🔧 Atendimentos por Funcionário")
+atend_func = df_cliente.groupby("Funcionário")["Data"].count().reset_index().rename(columns={"Data": "Qtd Atendimentos"})
+fig3 = px.pie(atend_func, names="Funcionário", values="Qtd Atendimentos", title="Distribuição de Atendimentos")
+st.plotly_chart(fig3, use_container_width=True)
 
-# Receita por serviço
-st.subheader("💇 Receita por Tipo de Serviço")
-receita_servico = df_cliente.groupby("Serviço")["Valor"].sum().sort_values(ascending=False)
-fig_servico = px.bar(receita_servico, x=receita_servico.index, y="Valor", text_auto=True, labels={"Valor": "Receita (R$)"})
-st.plotly_chart(fig_servico, use_container_width=True)
+# Tabela com Combo e Simples
+agrupado = df_cliente.groupby(["Cliente", "Data"]).agg(
+    Qtd_Serviços=('Serviço', 'count')
+).reset_index()
+agrupado["Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+agrupado["Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
-# Atendimentos por funcionário
-st.subheader("👨‍🔧 Atendimentos por Funcionário")
-funcionarios = df_cliente["Funcionário"].value_counts()
-fig_func = px.pie(values=funcionarios.values, names=funcionarios.index, title="Distribuição de Atendimentos")
-st.plotly_chart(fig_func, use_container_width=True)
+tabela_combo_simples = agrupado.groupby("Cliente").agg(
+    Total_Atendimentos=("Data", "count"),
+    Qtd_Combo=("Combo", "sum"),
+    Qtd_Simples=("Simples", "sum")
+).reset_index()
 
-st.caption("🔙 Volte para a página anterior para selecionar outro cliente.")
+st.subheader("📋 Resumo de Atendimentos")
+st.dataframe(tabela_combo_simples, use_container_width=True)
+
+st.markdown("""
+---
+⬅️ Volte para a página anterior para selecionar outro cliente.
+""")
