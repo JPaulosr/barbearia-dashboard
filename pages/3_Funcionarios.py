@@ -46,8 +46,10 @@ st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
 df_func["AnoMes"] = df_func["Data"].dt.to_period("M")
 mensal = df_func.groupby("AnoMes")["Valor"].sum().reset_index()
 mensal["AnoMes"] = mensal["AnoMes"].astype(str)
-fig_mensal = px.bar(mensal, x="AnoMes", y="Valor", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
+mensal["Valor Formatado"] = mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+fig_mensal = px.bar(mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
 fig_mensal.update_layout(height=400, template="plotly_white")
+fig_mensal.update_traces(textposition="outside")
 st.plotly_chart(fig_mensal, use_container_width=True)
 
 # === Receita por tipo ===
@@ -93,8 +95,9 @@ df_func_unicos = pd.concat([
 atend_cliente = df_func_unicos["Cliente"].value_counts().reset_index()
 atend_cliente.columns = ["Cliente", "Atendimentos"]
 top_10_clientes = atend_cliente.head(10)
-fig_clientes = px.pie(top_10_clientes, names="Cliente", values="Atendimentos", hole=0.4)
-fig_clientes.update_traces(textinfo="label+percent")
+fig_clientes = px.bar(top_10_clientes, x="Cliente", y="Atendimentos", text="Atendimentos", labels={"Atendimentos": "Nº Atendimentos"})
+fig_clientes.update_traces(textposition="outside")
+fig_clientes.update_layout(height=400, template="plotly_white")
 st.plotly_chart(fig_clientes, use_container_width=True)
 
 # === Serviços mais executados ===
