@@ -12,7 +12,7 @@ funcionarios = st.multiselect("\U0001F465 Filtrar por funcionário", ["JPaulo", 
 
 @st.cache_data
 def carregar_dados():
-    df = pd.read_excel("Modelo_Barbearia_Automatizado (10).xlsx", sheet_name="Base de Dados")
+    df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
     df = df.dropna(subset=["Data"])
