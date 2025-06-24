@@ -60,7 +60,7 @@ st.plotly_chart(fig_tipo, use_container_width=True)
 # === Tabela resumo ===
 st.subheader("📋 Resumo de Atendimentos")
 # Combos são definidos como atendimentos com mais de 1 serviço no mesmo dia
-agrupado = df_func.groupby("Data").agg(Qtd_Serviços=("Serviço", "count"), Valor_Dia=("Valor", "sum")).reset_index()
+agrupado = df_func.groupby(["Data", "Cliente"]).agg(Qtd_Serviços=("Serviço", "count"), Valor_Dia=("Valor", "sum")).reset_index()
 qtd_combo = agrupado[agrupado["Qtd_Serviços"] > 1].shape[0]
 qtd_simples = agrupado[agrupado["Qtd_Serviços"] == 1].shape[0]
 tique_medio = agrupado["Valor_Dia"].mean()
@@ -73,12 +73,13 @@ resumo = pd.DataFrame({
 })
 st.dataframe(resumo, use_container_width=True)
 
-# === Gráfico de distribuição por cliente ===
+# === Gráfico de distribuição por cliente (top 10) ===
 st.subheader("👥 Distribuição de Atendimentos por Cliente")
 df_func_unicos = df_func.drop_duplicates(subset=["Data", "Cliente"])
 atend_cliente = df_func_unicos["Cliente"].value_counts().reset_index()
 atend_cliente.columns = ["Cliente", "Atendimentos"]
-fig_clientes = px.pie(atend_cliente, names="Cliente", values="Atendimentos", hole=0.4)
+top_10_clientes = atend_cliente.head(10)
+fig_clientes = px.pie(top_10_clientes, names="Cliente", values="Atendimentos", hole=0.4)
 fig_clientes.update_traces(textinfo="label+percent")
 st.plotly_chart(fig_clientes, use_container_width=True)
 
