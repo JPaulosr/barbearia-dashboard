@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import os
 from datetime import datetime
+from streamlit_extras.switch_page_button import switch_page
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
@@ -146,8 +147,9 @@ total_atendimentos = contagem["Qtd Atendimentos"].sum()
 st.success(f"✅ Total de atendimentos únicos realizados por {funcionario}: {total_atendimentos}")
 st.dataframe(contagem, use_container_width=True)
 
-# Link seguro de retorno
+# Limpa a sessão do funcionário e botão de retorno
 if "funcionario" in st.session_state:
     del st.session_state["funcionario"]
 
-st.markdown('[⬅️ Voltar para Funcionários](./Funcionarios)')
+if st.button("⬅️ Voltar para Funcionários"):
+    switch_page("1_Funcionarios")
