@@ -82,6 +82,7 @@ df_agrupado["Valor Formatado"] = df_agrupado["Valor"].apply(
 )
 
 if not df_agrupado.empty:
+    y_max = df_agrupado["Valor"].max() * 1.15
     fig = px.bar(
         df_agrupado,
         x="Ano-Mês",
@@ -95,6 +96,7 @@ if not df_agrupado.empty:
         showlegend=False,
         yaxis_title="Valor (R$)",
         yaxis_tickformat="R$ ,.2f",
+        yaxis=dict(range=[0, y_max])
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
