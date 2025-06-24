@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
 from datetime import datetime
 from streamlit_extras.switch_page_button import switch_page
 
@@ -52,7 +51,6 @@ mês_selec = st.sidebar.multiselect("Mês", options=meses, default=meses)
 
 df_func = df_func[(df_func["Ano"] == ano_selec) & (df_func["Mês"].isin(mês_selec))]
 
-# Título e filtros
 st.markdown(f"### 📈 Receita mensal total - {funcionario}")
 
 # Filtros opcionais
