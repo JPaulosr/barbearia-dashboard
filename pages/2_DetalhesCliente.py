@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🧍‍♂️ Clientes - Receita Total")
+st.title("📌 Detalhamento do Cliente")
 
 @st.cache_data
 def carregar_dados():
@@ -11,85 +11,77 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Ano"] = df["Data"].dt.year
+    df["Mês"] = df["Data"].dt.month
+    df["Mês_Ano"] = df["Data"].dt.strftime("%Y-%m")
     return df
 
 df = carregar_dados()
 
-# === Remove nomes genéricos ===
-nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
-normalizar = lambda s: str(s).lower().strip()
-df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
+# Verifica se o cliente foi passado via sessão
+cliente = st.session_state.get("cliente")
+if not cliente:
+    st.warning("Nenhum cliente selecionado. Volte e escolha um cliente na página anterior.")
+    st.stop()
 
-# === Agrupamento ===
-ranking = df.groupby("Cliente")["Valor"].sum().reset_index()
-ranking = ranking.sort_values(by="Valor", ascending=False)
-ranking["Valor Formatado"] = ranking["Valor"].apply(
-    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-)
+# Filtra dados do cliente
+df_cliente = df[df["Cliente"] == cliente]
 
-# === Busca dinâmica ===
-st.subheader("🧾 Receita total por cliente")
-busca = st.text_input("🔎 Filtrar por nome").lower().strip()
+# 📅 Histórico de atendimentos
+st.subheader(f"📅 Histórico de atendimentos - {cliente}")
+st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
-if busca:
-    ranking_exibido = ranking[ranking["Cliente"].str.lower().str.contains(busca)]
-else:
-    ranking_exibido = ranking.copy()
-
-st.dataframe(ranking_exibido[["Cliente", "Valor Formatado"]], use_container_width=True)
-
-# === Top 5 clientes ===
-st.subheader("🏆 Top 5 Clientes por Receita")
-top5 = ranking.head(5)
-fig_top = px.bar(
-    top5,
-    x="Cliente",
+# 📊 Receita mensal por mês e ano
+st.subheader("📊 Receita mensal")
+receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+fig_receita = px.bar(
+    receita_mensal,
+    x="Mês_Ano",
     y="Valor",
-    text=top5["Valor"].apply(lambda x: f"R$ {x:,.0f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+    text_auto=True,
     labels={"Valor": "Receita (R$)"},
-    color="Cliente"
 )
-fig_top.update_traces(textposition="outside")
-fig_top.update_layout(showlegend=False, height=400, template="plotly_white")
-st.plotly_chart(fig_top, use_container_width=True)
+fig_receita.update_layout(height=350)
+st.plotly_chart(fig_receita, use_container_width=True)
 
-# === Comparativo entre dois clientes ===
-st.subheader("⚖️ Comparar dois clientes")
+# 🥧 Receita por tipo (Serviço vs Produto)
+st.subheader("🥧 Receita por Tipo")
+por_tipo = df_cliente.groupby("Tipo")["Valor"].sum().reset_index()
+fig_tipo = px.pie(
+    por_tipo,
+    names="Tipo",
+    values="Valor",
+    hole=0.4
+)
+st.plotly_chart(fig_tipo, use_container_width=True)
 
-clientes_disponiveis = ranking["Cliente"].tolist()
-col1, col2 = st.columns(2)
-c1 = col1.selectbox("👤 Cliente 1", clientes_disponiveis)
-c2 = col2.selectbox("👤 Cliente 2", clientes_disponiveis, index=1 if len(clientes_disponiveis) > 1 else 0)
+# 🧑‍🔧 Distribuição por funcionário
+st.subheader("🧑‍🔧 Atendimentos por Funcionário")
+por_func = df_cliente["Funcionário"].value_counts().reset_index()
+por_func.columns = ["Funcionário", "Atendimentos"]
+fig_func = px.pie(
+    por_func,
+    names="Funcionário",
+    values="Atendimentos",
+    hole=0.4
+)
+st.plotly_chart(fig_func, use_container_width=True)
 
-df_c1 = df[df["Cliente"] == c1]
-df_c2 = df[df["Cliente"] == c2]
+# 📋 Tabela resumo
+st.subheader("📋 Resumo de Atendimentos")
+resumo = df_cliente.groupby("Data").agg(
+    Qtd_Serviços=("Serviço", "count"),
+    Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
+).reset_index()
 
-def resumo_cliente(df_cliente):
-    total = df_cliente["Valor"].sum()
-    servicos = df_cliente["Serviço"].nunique()
-    media = df_cliente.groupby("Data")["Valor"].sum().mean()
-    servicos_detalhados = df_cliente["Serviço"].value_counts().rename("Quantidade")
-    return pd.Series({
-        "Total Receita": f"R$ {total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
-        "Serviços Distintos": servicos,
-        "Tique Médio": f"R$ {media:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    }), servicos_detalhados
+# Determina se foi combo ou simples
+resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
-resumo1, servicos1 = resumo_cliente(df_c1)
-resumo2, servicos2 = resumo_cliente(df_c2)
-
-resumo_geral = pd.concat([resumo1.rename(c1), resumo2.rename(c2)], axis=1)
-servicos_comparativo = pd.concat([servicos1.rename(c1), servicos2.rename(c2)], axis=1).fillna(0).astype(int)
-
-st.dataframe(resumo_geral, use_container_width=True)
-st.markdown("**Serviços Realizados por Tipo**")
-st.dataframe(servicos_comparativo, use_container_width=True)
-
-# === Navegar para detalhamento ===
-st.subheader("🔍 Ver detalhamento de um cliente")
-cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis)
-
-if st.button("➡ Ver detalhes"):
-    st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("2_DetalhesCliente")  # Nome do arquivo sem .py
+# Resultado final
+resumo_final = pd.DataFrame({
+    "Total Atendimentos": [resumo.shape[0]],
+    "Qtd Combos": [resumo["Qtd_Combo"].sum()],
+    "Qtd Simples": [resumo["Qtd_Simples"].sum()]
+})
+st.dataframe(resumo_final, use_container_width=True)
