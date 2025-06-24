@@ -145,9 +145,8 @@ total_atendimentos = contagem["Qtd Atendimentos"].sum()
 st.success(f"✅ Total de atendimentos únicos realizados por {funcionario}: {total_atendimentos}")
 st.dataframe(contagem, use_container_width=True)
 
-# Limpa a sessão do funcionário e botão de retorno
-if "funcionario" in st.session_state:
-    del st.session_state["funcionario"]
-
+# Botão de retorno com limpeza de sessão segura
 if st.button("⬅️ Voltar para Funcionários"):
+    if "funcionario" in st.session_state:
+        del st.session_state["funcionario"]
     switch_page("1_Funcionarios")
