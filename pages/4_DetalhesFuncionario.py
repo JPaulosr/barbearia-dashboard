@@ -29,15 +29,16 @@ ano_selecionado = st.selectbox("📅 Selecione o ano", anos)
 
 df_ano = df_func[df_func["Ano"] == ano_selecionado]
 
-meses_disponiveis = sorted(df_ano["Mês"].dropna().unique())
 mes_nome = {
-    1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
-    7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
 }
+meses_disponiveis = sorted(df_ano["Mês"].dropna().unique())
 meses_opcoes = [mes_nome[m] for m in meses_disponiveis]
 default_meses = meses_opcoes[-3:] if len(meses_opcoes) >= 3 else meses_opcoes
 meses_selecionados = st.multiselect("📆 Filtrar por mês (opcional)", options=meses_opcoes, default=default_meses)
-meses_valores = [k for k,v in mes_nome.items() if v in meses_selecionados]
+meses_valores = [k for k, v in mes_nome.items() if v in meses_selecionados]
+
 df_filtrado = df_ano[df_ano["Mês"].isin(meses_valores)]
 
 # Filtro de serviço
@@ -52,7 +53,7 @@ servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().re
 servico_mes = servico_mes[servico_mes["Valor"] > 0]
 servico_mes["MêsNome"] = servico_mes["Mês"].map(mes_nome)
 servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
-servico_mes["Texto"] = servico_mes["Serviço"] + " - R$ " + servico_mes["Valor"].astype(int).astype(str)
+servico_mes["Texto"] = "R$ " + servico_mes["Valor"].round(2).astype(str).str.replace(".", ",")
 
 fig = px.bar(
     servico_mes,
@@ -82,11 +83,10 @@ depois = df_filtrado[df_filtrado["Data"] > limite]
 qtd_antes = len(antes)
 depois_unicos = depois.drop_duplicates(subset=["Cliente", "Data"])
 qtd_depois = len(depois_unicos)
-
 total = qtd_antes + qtd_depois
 
 clientes = depois_unicos.groupby("Cliente").size().reset_index(name="Qtd Atendimentos")
 clientes = clientes.sort_values(by="Qtd Atendimentos", ascending=False)
 
-st.markdown(f"✅ **Total de atendimentos únicos realizados por {funcionario}:** `{total}`")
+st.markdown(f"✅ **Total de atendimentos únicos realizados por `{funcionario}`:** `{total}`")
 st.dataframe(clientes, use_container_width=True)
