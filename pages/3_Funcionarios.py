@@ -19,14 +19,13 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Seleciona o funcionário via session_state ou selectbox
-funcionario = st.session_state.get("funcionario")
+# 🔍 Verifica se funcionário está definido na sessão ou via selectbox
+funcionario = st.session_state.get("funcionario", None)
 
 if not funcionario:
-    funcionarios_disp = df["Funcionário"].dropna().unique().tolist()
+    funcionarios_disp = sorted(df["Funcionário"].dropna().unique())
     funcionario = st.selectbox("🧑 Selecione um funcionário", funcionarios_disp)
-    if funcionario:
-        st.session_state["funcionario"] = funcionario
+    st.session_state["funcionario"] = funcionario
 
 if not funcionario:
     st.warning("⚠️ Nenhum funcionário selecionado.")
@@ -145,7 +144,7 @@ total_atendimentos = contagem["Qtd Atendimentos"].sum()
 st.success(f"✅ Total de atendimentos únicos realizados por {funcionario}: {total_atendimentos}")
 st.dataframe(contagem, use_container_width=True)
 
-# Botão de retorno com limpeza de sessão segura
+# Botão de retorno
 if st.button("⬅️ Voltar para Funcionários"):
     if "funcionario" in st.session_state:
         del st.session_state["funcionario"]
