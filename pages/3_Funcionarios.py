@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from unidecode import unidecode
 
 st.set_page_config(layout="wide")
 st.title("🧑‍💼 Detalhes do Funcionário")
@@ -28,6 +29,14 @@ ano_escolhido = st.selectbox("📅 Filtrar por ano", anos)
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
 df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
 
+# === Normalizar nomes para filtrar genéricos ===
+nomes_excluir = ["boliviano", "brasileiro", "menino"]
+def limpar_nome(nome):
+    nome_limpo = unidecode(str(nome).lower())
+    return not any(g in nome_limpo for g in nomes_excluir)
+
+df_func = df_func[df_func["Cliente"].apply(limpar_nome)]
+
 # === Histórico de atendimentos ===
 st.subheader("📅 Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
@@ -50,10 +59,12 @@ st.plotly_chart(fig_tipo, use_container_width=True)
 
 # === Tabela resumo ===
 st.subheader("📋 Resumo de Atendimentos")
-qtd_total = len(df_func)
-qtd_combo = df_func["Serviço"].str.lower().str.contains("combo").sum()
-qtd_simples = qtd_total - qtd_combo
-tique_medio = df_func.groupby("Data")["Valor"].sum().mean()
+# Combos são definidos como atendimentos com mais de 1 serviço no mesmo dia
+agrupado = df_func.groupby("Data").agg(Qtd_Serviços=("Serviço", "count"), Valor_Dia=("Valor", "sum")).reset_index()
+qtd_combo = agrupado[agrupado["Qtd_Serviços"] > 1].shape[0]
+qtd_simples = agrupado[agrupado["Qtd_Serviços"] == 1].shape[0]
+tique_medio = agrupado["Valor_Dia"].mean()
+qtd_total = qtd_combo + qtd_simples
 resumo = pd.DataFrame({
     "Total Atendimentos": [qtd_total],
     "Combos": [qtd_combo],
@@ -64,7 +75,8 @@ st.dataframe(resumo, use_container_width=True)
 
 # === Gráfico de distribuição por cliente ===
 st.subheader("👥 Distribuição de Atendimentos por Cliente")
-atend_cliente = df_func["Cliente"].value_counts().reset_index()
+df_func_unicos = df_func.drop_duplicates(subset=["Data", "Cliente"])
+atend_cliente = df_func_unicos["Cliente"].value_counts().reset_index()
 atend_cliente.columns = ["Cliente", "Atendimentos"]
 fig_clientes = px.pie(atend_cliente, names="Cliente", values="Atendimentos", hole=0.4)
 fig_clientes.update_traces(textinfo="label+percent")
