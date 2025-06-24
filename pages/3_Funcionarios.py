@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import json
 import os
 from datetime import datetime
 
@@ -20,20 +19,14 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Recupera funcionário do session_state ou do arquivo temporário
+# Seleciona o funcionário via session_state ou selectbox
 funcionario = st.session_state.get("funcionario")
-if not funcionario:
-    if os.path.exists("temp_funcionario.json"):
-        with open("temp_funcionario.json", "r", encoding="utf-8") as f:
-            data = json.load(f)
-            funcionario = data.get("funcionario")
-        st.session_state["funcionario"] = funcionario
 
-# Alternativa: Selecionar funcionário manualmente
 if not funcionario:
     funcionarios_disp = df["Funcionário"].dropna().unique().tolist()
     funcionario = st.selectbox("🧑 Selecione um funcionário", funcionarios_disp)
-    st.session_state["funcionario"] = funcionario
+    if funcionario:
+        st.session_state["funcionario"] = funcionario
 
 if not funcionario:
     st.warning("⚠️ Nenhum funcionário selecionado.")
@@ -95,8 +88,7 @@ if not df_agrupado.empty:
         height=500,
         showlegend=False,
         yaxis_title="Valor (R$)",
-        yaxis_tickformat="R$ ,.2f",
-        yaxis=dict(range=[0, y_max])
+        yaxis=dict(range=[0, y_max], tickformat=".2f")
     )
     st.plotly_chart(fig, use_container_width=True)
 else:
@@ -157,6 +149,5 @@ st.dataframe(contagem, use_container_width=True)
 # Link seguro de retorno
 if "funcionario" in st.session_state:
     del st.session_state["funcionario"]
-if os.path.exists("temp_funcionario.json"):
-    os.remove("temp_funcionario.json")
+
 st.markdown('[⬅️ Voltar para Funcionários](./Funcionarios)')
