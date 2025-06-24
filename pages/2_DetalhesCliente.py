@@ -18,11 +18,10 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Verifica se o cliente foi passado via sessão
-cliente = st.session_state.get("cliente")
-if not cliente:
-    st.warning("Nenhum cliente selecionado. Volte e escolha um cliente na página anterior.")
-    st.stop()
+# === Filtro de cliente (com fallback da sessão)
+clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
+cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
 # Filtra dados do cliente
 df_cliente = df[df["Cliente"] == cliente]
@@ -39,32 +38,39 @@ fig_receita = px.bar(
     x="Mês_Ano",
     y="Valor",
     text_auto=True,
-    labels={"Valor": "Receita (R$)"},
+    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
 )
 fig_receita.update_layout(height=350)
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 🥧 Receita por tipo (Serviço vs Produto)
-st.subheader("🥧 Receita por Tipo")
+# 📊 Receita por tipo (substitui gráfico de pizza por barras)
+st.subheader("📊 Receita por Tipo")
 por_tipo = df_cliente.groupby("Tipo")["Valor"].sum().reset_index()
-fig_tipo = px.pie(
+fig_tipo = px.bar(
     por_tipo,
-    names="Tipo",
-    values="Valor",
-    hole=0.4
+    x="Tipo",
+    y="Valor",
+    text="Valor",
+    labels={"Valor": "Receita (R$)", "Tipo": "Tipo"},
+    color="Tipo"
 )
+fig_tipo.update_traces(texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."), textposition="outside")
+fig_tipo.update_layout(showlegend=False, height=300)
 st.plotly_chart(fig_tipo, use_container_width=True)
 
-# 🧑‍🔧 Distribuição por funcionário
-st.subheader("🧑‍🔧 Atendimentos por Funcionário")
+# 📊 Atendimentos por funcionário (substitui gráfico de pizza por barras)
+st.subheader("📊 Atendimentos por Funcionário")
 por_func = df_cliente["Funcionário"].value_counts().reset_index()
 por_func.columns = ["Funcionário", "Atendimentos"]
-fig_func = px.pie(
+fig_func = px.bar(
     por_func,
-    names="Funcionário",
-    values="Atendimentos",
-    hole=0.4
+    x="Funcionário",
+    y="Atendimentos",
+    text="Atendimentos",
+    color="Funcionário"
 )
+fig_func.update_traces(textposition="outside")
+fig_func.update_layout(showlegend=False, height=300)
 st.plotly_chart(fig_func, use_container_width=True)
 
 # 📋 Tabela resumo
