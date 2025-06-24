@@ -13,58 +13,71 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%Y-%m")
+    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")  # Ex: Abr/2025
     return df
 
 df = carregar_dados()
 
-# Filtro de cliente na própria página
+# === Filtro de cliente (com fallback da sessão)
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
-cliente = st.selectbox("👤 Escolha um cliente para detalhar", clientes_disponiveis)
+cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
+cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-if not cliente:
-    st.warning("Selecione um cliente para continuar.")
-    st.stop()
-
+# Filtra dados do cliente
 df_cliente = df[df["Cliente"] == cliente]
 
-# 📅 Histórico
+# 📅 Histórico de atendimentos
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
 st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
-# 📊 Receita mensal por tipo (Serviço vs Produto)
-st.subheader("📊 Receita mensal por tipo de receita")
-
-receita_tipo = (
-    df_cliente.groupby(["Mês_Ano", "Tipo"])["Valor"]
-    .sum()
-    .reset_index()
-)
-receita_tipo["Mês_Ano"] = receita_tipo["Mês_Ano"].astype(str)  # força como texto no eixo
-
+# 📊 Receita mensal por mês e ano
+st.subheader("📊 Receita mensal")
+receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
 fig_receita = px.bar(
-    receita_tipo,
+    receita_mensal,
     x="Mês_Ano",
     y="Valor",
-    color="Tipo",
-    text_auto=".2s",
+    text_auto=True,
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
-    barmode="group"
 )
-fig_receita.update_layout(height=400)
+fig_receita.update_layout(height=350)
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 🧑‍🔧 Distribuição por funcionário
-st.subheader("🧑‍🔧 Atendimentos por Funcionário")
+# 📊 Receita por Serviço e Produto (único gráfico combinado)
+st.subheader("📊 Receita por Serviço e Produto")
+df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
+receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
+receita_geral = receita_geral.sort_values("Valor", ascending=False)
+
+fig_receita_tipos = px.bar(
+    receita_geral,
+    x="Serviço",
+    y="Valor",
+    color="Tipo",
+    text="Valor",
+    labels={"Valor": "Receita (R$)", "Serviço": "Item"},
+    barmode="group"
+)
+fig_receita_tipos.update_traces(
+    texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
+    textposition="outside"
+)
+fig_receita_tipos.update_layout(height=400)
+st.plotly_chart(fig_receita_tipos, use_container_width=True)
+
+# 📊 Atendimentos por funcionário (barras)
+st.subheader("📊 Atendimentos por Funcionário")
 por_func = df_cliente["Funcionário"].value_counts().reset_index()
 por_func.columns = ["Funcionário", "Atendimentos"]
 fig_func = px.bar(
     por_func,
     x="Funcionário",
     y="Atendimentos",
-    text_auto=True
+    text="Atendimentos",
+    color="Funcionário"
 )
-fig_func.update_layout(height=350)
+fig_func.update_traces(textposition="outside")
+fig_func.update_layout(showlegend=False, height=300)
 st.plotly_chart(fig_func, use_container_width=True)
 
 # 📋 Tabela resumo
@@ -73,14 +86,11 @@ resumo = df_cliente.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
     Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
 ).reset_index()
-
 resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
 resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
-
 resumo_final = pd.DataFrame({
     "Total Atendimentos": [resumo.shape[0]],
     "Qtd Combos": [resumo["Qtd_Combo"].sum()],
     "Qtd Simples": [resumo["Qtd_Simples"].sum()]
 })
-
 st.dataframe(resumo_final, use_container_width=True)
