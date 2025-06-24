@@ -65,20 +65,12 @@ fig_receita_tipos.update_traces(
 fig_receita_tipos.update_layout(height=400)
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-# 📊 Atendimentos por funcionário (barras)
+# 📊 Atendimentos por Funcionário (contando Cliente + Data)
 st.subheader("📊 Atendimentos por Funcionário")
-por_func = df_cliente["Funcionário"].value_counts().reset_index()
-por_func.columns = ["Funcionário", "Atendimentos"]
-fig_func = px.bar(
-    por_func,
-    x="Funcionário",
-    y="Atendimentos",
-    text="Atendimentos",
-    color="Funcionário"
-)
-fig_func.update_traces(textposition="outside")
-fig_func.update_layout(showlegend=False, height=300)
-st.plotly_chart(fig_func, use_container_width=True)
+atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
+atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
+st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 # 📋 Tabela resumo
 st.subheader("📋 Resumo de Atendimentos")
