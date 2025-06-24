@@ -93,7 +93,7 @@ else:
 st.plotly_chart(fig, use_container_width=True)
 
 # === Comparativo entre dois clientes ===
-st.subheader("\u2696\ufe0f Comparar dois clientes")
+st.subheader("⚖️ Comparar dois clientes")
 
 clientes_disponiveis = resumo_geral["Cliente"].tolist()
 col1, col2 = st.columns(2)
@@ -128,6 +128,6 @@ st.dataframe(servicos_comparativo, use_container_width=True)
 st.subheader("\U0001F50D Ver detalhamento de um cliente")
 cliente_escolhido = st.selectbox("\U0001F4CC Escolha um cliente", clientes_disponiveis)
 
-if st.button("\u27a1 Ver detalhes"):
+if st.button("➡ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("pages/2_DetalhesCliente.py")
+    st.switch_page("/2_DetalhesCliente")
