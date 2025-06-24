@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🧑‍� Detalhamento do Funcionário")
+st.title("🧑‍� Detalhes do Funcionário")
 
 @st.cache_data
 def carregar_dados():
@@ -12,54 +12,42 @@ def carregar_dados():
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
-    df["Mes"] = df["Data"].dt.strftime('%b')
+    df["Mes"] = df["Data"].dt.month
+    df["MesNome"] = df["Data"].dt.strftime('%b')
     return df
 
 df = carregar_dados()
 
-st.subheader("👨‍🔧 Escolha um funcionário")
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-funcionario = st.selectbox("Funcionário", funcionarios)
+funcionarios_disponiveis = sorted(df["Funcionário"].dropna().unique())
+funcionario = st.selectbox("💼 Escolha um funcionário", funcionarios_disponiveis)
 df_func = df[df["Funcionário"] == funcionario]
 
 # 📅 Histórico de atendimentos
-st.subheader("📅 Histórico de atendimentos")
-st.dataframe(df_func.sort_values("Data", ascending=False)[["Data", "Cliente", "Serviço", "Tipo", "Valor"]], use_container_width=True)
+st.subheader("\ud83d\udcc5 Histórico de Atendimentos")
+st.dataframe(df_func[["Data", "Cliente", "Serviço", "Tipo", "Valor"]].sort_values("Data"), use_container_width=True)
 
 # 📊 Receita mensal
-st.subheader("📊 Receita mensal")
-receita_mensal = df_func.groupby(["Ano", "Mes"])["Valor"].sum().reset_index()
-fig1 = px.bar(receita_mensal, x="Mes", y="Valor", color="Ano", barmode="group", text_auto=True)
-st.plotly_chart(fig1, use_container_width=True)
+st.subheader("\ud83d\udcca Receita Mensal")
+graf_mensal = df_func.groupby(["Ano", "MesNome"])["Valor"].sum().reset_index()
+fig_mensal = px.bar(graf_mensal, x="MesNome", y="Valor", color="Ano", barmode="group", text_auto=True, title="Receita por Mês")
+st.plotly_chart(fig_mensal, use_container_width=True)
 
 # 🥧 Receita por tipo
-st.subheader("🥧 Receita por tipo de atendimento")
-tipo = df_func.groupby("Tipo")["Valor"].sum().reset_index()
-fig2 = px.pie(tipo, names="Tipo", values="Valor", hole=0.4)
-st.plotly_chart(fig2, use_container_width=True)
+st.subheader("\ud83e\udd67 Receita por Tipo de Atendimento")
+por_tipo = df_func.groupby("Tipo")["Valor"].sum().reset_index()
+fig_tipo = px.pie(por_tipo, names="Tipo", values="Valor", title="Distribuição de Receita: Produto vs Serviço")
+st.plotly_chart(fig_tipo, use_container_width=True)
 
-# 💼 Resumo
-st.subheader("📋 Resumo geral")
-resumo = df_func.copy()
-resumo_diario = resumo.groupby("Data").agg(
-    Atendimentos=("Cliente", "count"),
-    Receita=("Valor", "sum")
-).reset_index()
+# 📋 Combos e simples
+st.subheader("\ud83d\udccb Quantitativo de Atendimentos")
+agrupar = df_func.groupby(["Cliente", "Data"]).agg(Qtd_Serviços=('Serviço', 'count')).reset_index()
+agrupar["Combo"] = agrupar["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+agrupar["Simples"] = agrupar["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
-resumo_total = pd.DataFrame({
-    "Total de Atendimentos": [resumo_diario["Atendimentos"].sum()],
-    "Receita Total": [f"R$ {resumo_diario['Receita'].sum():,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")]
-})
-st.dataframe(resumo_total, use_container_width=True)
+total_atendimentos = agrupar.shape[0]
+total_combos = agrupar["Combo"].sum()
+total_simples = agrupar["Simples"].sum()
 
-# ✔ Extras: combos e simples
-st.subheader("🔍 Quantidade de combos e simples")
-df_contagem = df_func.groupby(["Cliente", "Data"]).agg(Qtd_Servicos=('Serviço', 'count')).reset_index()
-df_contagem["Combo"] = df_contagem["Qtd_Servicos"].apply(lambda x: 1 if x > 1 else 0)
-df_contagem["Simples"] = df_contagem["Qtd_Servicos"].apply(lambda x: 1 if x == 1 else 0)
-
-resumo_combo_simples = pd.DataFrame({
-    "Total Combos": [df_contagem["Combo"].sum()],
-    "Total Simples": [df_contagem["Simples"].sum()]
-})
-st.dataframe(resumo_combo_simples, use_container_width=True)
+st.metric("Total de Atendimentos", total_atendimentos)
+st.metric("Combos Realizados", total_combos)
+st.metric("Atendimentos Simples", total_simples)
