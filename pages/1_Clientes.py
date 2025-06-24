@@ -91,4 +91,4 @@ cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis
 
 if st.button("➡ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("pages/2_DetalhesCliente.py")
+    st.switch_page("DetalhesCliente.py")
