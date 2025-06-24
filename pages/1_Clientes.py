@@ -92,4 +92,4 @@ cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis
 
 if st.button("➡ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("DetalhesCliente")  # ✅ nome correto sem o prefixo "2_"
+    st.switch_page("2_DetalhesCliente")  # ✅ nome do arquivo correto
