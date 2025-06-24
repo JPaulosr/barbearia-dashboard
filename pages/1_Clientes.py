@@ -19,13 +19,14 @@ df = carregar_dados()
 # === Remove nomes genéricos ===
 nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
 normalizar = lambda s: str(s).lower().strip()
-
 df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
 
 # === Agrupamento ===
 ranking = df.groupby("Cliente")["Valor"].sum().reset_index()
 ranking = ranking.sort_values(by="Valor", ascending=False)
-ranking["Valor Formatado"] = ranking["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+ranking["Valor Formatado"] = ranking["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
 # === Busca dinâmica ===
 st.subheader("🧾 Receita total por cliente")
@@ -91,4 +92,4 @@ cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis
 
 if st.button("➡ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("DetalhesCliente.py")
+    st.switch_page("2_DetalhesCliente")  # <<<<< CORRIGIDO AQUI
