@@ -43,22 +43,39 @@ fig_receita = px.bar(
 fig_receita.update_layout(height=350)
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 📊 Receita por tipo (substitui gráfico de pizza por barras)
-st.subheader("📊 Receita por Tipo")
-por_tipo = df_cliente.groupby("Tipo")["Valor"].sum().reset_index()
-fig_tipo = px.bar(
-    por_tipo,
-    x="Tipo",
+# 📊 Receita por Serviço (somente tipo = Serviço)
+st.subheader("📊 Receita por Serviço")
+df_servico = df_cliente[df_cliente["Tipo"] == "Serviço"]
+receita_servicos = df_servico.groupby("Serviço")["Valor"].sum().reset_index().sort_values("Valor", ascending=False)
+fig_servico = px.bar(
+    receita_servicos,
+    x="Serviço",
     y="Valor",
     text="Valor",
-    labels={"Valor": "Receita (R$)", "Tipo": "Tipo"},
-    color="Tipo"
+    labels={"Valor": "Receita (R$)", "Serviço": "Tipo de Serviço"},
+    color="Serviço"
 )
-fig_tipo.update_traces(texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."), textposition="outside")
-fig_tipo.update_layout(showlegend=False, height=300)
-st.plotly_chart(fig_tipo, use_container_width=True)
+fig_servico.update_traces(texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."), textposition="outside")
+fig_servico.update_layout(showlegend=False, height=350)
+st.plotly_chart(fig_servico, use_container_width=True)
 
-# 📊 Atendimentos por funcionário (substitui gráfico de pizza por barras)
+# 📦 Receita por Produto (somente tipo = Produto)
+st.subheader("📦 Receita por Produto")
+df_produto = df_cliente[df_cliente["Tipo"] == "Produto"]
+receita_produtos = df_produto.groupby("Serviço")["Valor"].sum().reset_index().sort_values("Valor", ascending=False)
+fig_produto = px.bar(
+    receita_produtos,
+    x="Serviço",
+    y="Valor",
+    text="Valor",
+    labels={"Valor": "Receita (R$)", "Serviço": "Produto"},
+    color="Serviço"
+)
+fig_produto.update_traces(texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."), textposition="outside")
+fig_produto.update_layout(showlegend=False, height=350)
+st.plotly_chart(fig_produto, use_container_width=True)
+
+# 📊 Atendimentos por funcionário (barras)
 st.subheader("📊 Atendimentos por Funcionário")
 por_func = df_cliente["Funcionário"].value_counts().reset_index()
 por_func.columns = ["Funcionário", "Atendimentos"]
@@ -79,12 +96,8 @@ resumo = df_cliente.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
     Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
 ).reset_index()
-
-# Determina se foi combo ou simples
 resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
 resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
-
-# Resultado final
 resumo_final = pd.DataFrame({
     "Total Atendimentos": [resumo.shape[0]],
     "Qtd Combos": [resumo["Qtd_Combo"].sum()],
