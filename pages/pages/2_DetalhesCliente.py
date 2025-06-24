@@ -3,67 +3,68 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🔎 Detalhamento do Cliente")
+st.title("🔍 Detalhamento do Cliente")
 
 @st.cache_data
-
 def carregar_dados():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year
-    df["Mes"] = df["Data"].dt.month
-    df["MesNome"] = df["Data"].dt.strftime('%b')
+    df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Mês"] = df["Data"].dt.month
+    df["Mês_Ano"] = df["Data"].dt.strftime("%Y-%m")
     return df
 
 df = carregar_dados()
+cliente = st.session_state.get("cliente", None)
 
-if "cliente" not in st.session_state:
-    st.error("Nenhum cliente selecionado. Volte para a página anterior e selecione um cliente.")
+if not cliente:
+    st.warning("Nenhum cliente selecionado.")
     st.stop()
 
-cliente = st.session_state["cliente"]
-st.header(f"📋 Detalhes do cliente: {cliente}")
+st.header(f"👤 Cliente: {cliente}")
 df_cliente = df[df["Cliente"] == cliente]
 
 # 📅 Histórico de atendimentos
 st.subheader("📅 Histórico de atendimentos")
-st.dataframe(df_cliente.sort_values("Data", ascending=False)[["Data", "Serviço", "Tipo", "Valor", "Funcionário"]], use_container_width=True)
+st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
 # 📊 Receita mensal por mês e ano
 st.subheader("📊 Receita mensal por mês e ano")
-df_mensal = df_cliente.groupby(["Ano", "MesNome"])['Valor'].sum().reset_index()
-fig_mensal = px.bar(df_mensal, x="MesNome", y="Valor", color="Ano", barmode="group", text_auto=True)
-st.plotly_chart(fig_mensal, use_container_width=True)
+receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+fig_receita = px.bar(receita_mensal, x="Mês_Ano", y="Valor", labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês/Ano"})
+st.plotly_chart(fig_receita, use_container_width=True)
 
 # 🥧 Receita por tipo (Produto ou Serviço)
 st.subheader("🥧 Receita por tipo (Produto ou Serviço)")
-df_tipo = df_cliente.groupby("Tipo")["Valor"].sum().reset_index()
-fig_tipo = px.pie(df_tipo, names="Tipo", values="Valor", hole=0.4)
+por_tipo = df_cliente.groupby("Tipo")["Valor"].sum().reset_index()
+fig_tipo = px.pie(por_tipo, names="Tipo", values="Valor", hole=0.4)
 st.plotly_chart(fig_tipo, use_container_width=True)
 
-# 🧑‍🔧 Distribuição de atendimentos por funcionário (gráfico de pizza)
+# 🧑‍🔧 Distribuição de atendimentos por funcionário
 st.subheader("🧑‍🔧 Distribuição de atendimentos por funcionário")
-df_func = df_cliente.groupby("Funcionário")["Data"].nunique().reset_index(name="Atendimentos")
-fig_func = px.pie(df_func, names="Funcionário", values="Atendimentos", hole=0.4)
+atend_func = df_cliente.groupby("Funcionário")["Data"].nunique().reset_index()
+atend_func.columns = ["Funcionário", "Atendimentos"]
+fig_func = px.pie(atend_func, names="Funcionário", values="Atendimentos")
 st.plotly_chart(fig_func, use_container_width=True)
 
-# 📋 Tabela com total de atendimentos, combos e simples
-st.subheader("📋 Resumo do cliente")
-df_agrupado = df_cliente.groupby("Data").agg(
-    qtd_servicos=('Serviço', 'count')
+# 📋 Total de atendimentos, combos e simples
+st.subheader("📋 Totais")
+agrupar = df_cliente.groupby(["Cliente", "Data"]).agg(
+    Qtd_Serviços=('Serviço', 'count')
 ).reset_index()
-df_agrupado['Combo'] = df_agrupado['qtd_servicos'].apply(lambda x: 1 if x > 1 else 0)
-df_agrupado['Simples'] = df_agrupado['qtd_servicos'].apply(lambda x: 1 if x == 1 else 0)
+agrupar["Combo"] = agrupar["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+agrupar["Simples"] = agrupar["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
-resumo = {
-    "Total Atendimentos": len(df_agrupado),
-    "Qtd Combos": df_agrupado['Combo'].sum(),
-    "Qtd Simples": df_agrupado['Simples'].sum(),
-    "Receita Total": f"R$ {df_cliente['Valor'].sum():,.2f}".replace(',', 'v').replace('.', ',').replace('v', '.')
-}
-st.dataframe(pd.DataFrame([resumo]), use_container_width=True)
+total_atend = len(agrupar)
+total_combo = agrupar["Combo"].sum()
+total_simples = agrupar["Simples"].sum()
 
-if st.button("⬅ Voltar"):
-    st.switch_page("pages/1_Clientes.py")
+st.dataframe(pd.DataFrame({
+    "Total Atendimentos": [total_atend],
+    "Qtd Combos": [total_combo],
+    "Qtd Simples": [total_simples]
+}), use_container_width=True)
+
+st.success("✅ Detalhamento concluído com sucesso!")
