@@ -17,7 +17,7 @@ def carregar_dados():
 df = carregar_dados()
 
 # === Lista de funcionários ===
-funcionarios = df["Funcionario"].dropna().unique().tolist()
+funcionarios = df["Funcionário"].dropna().unique().tolist()
 funcionarios.sort()
 
 # === Filtro por ano ===
@@ -26,7 +26,7 @@ ano_escolhido = st.selectbox("📅 Filtrar por ano", anos)
 
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
-df_func = df[(df["Funcionario"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
+df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
 
 # === Histórico de atendimentos ===
 st.subheader("📅 Histórico de Atendimentos")
