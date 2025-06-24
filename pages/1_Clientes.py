@@ -1,10 +1,22 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from streamlit_extras.switch_page_button import switch_page
+from streamlit.source_util import get_pages
 
 st.set_page_config(layout="wide")
 st.title("🧍‍♂️ Clientes - Receita Total")
 
+# === Função segura para mudar de página ===
+def safe_switch_page(page_name: str):
+    pages = get_pages("app.py")  # Substitua se o seu app principal tiver outro nome
+    page_names = [page["page_name"] for page in pages.values()]
+    if page_name in page_names:
+        switch_page(page_name)
+    else:
+        st.error(f"❌ A página '{page_name}' não foi encontrada no menu lateral.")
+
+# === Carregamento de dados ===
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
@@ -92,4 +104,4 @@ cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis
 
 if st.button("➡ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("2_DetalhesCliente")  # ✅ Nome exato do arquivo .py (sem extensão)
+    safe_switch_page("DetalhesCliente")  # Nome exato da aba no menu lateral
