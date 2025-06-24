@@ -5,12 +5,6 @@ import plotly.express as px
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Funcionário")
 
-funcionario = st.session_state.get("funcionario", "")
-
-if not funcionario:
-    st.warning("⚠ Nenhum funcionário selecionado.")
-    st.stop()
-
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
@@ -21,6 +15,12 @@ def carregar_dados():
     return df
 
 df = carregar_dados()
+
+# === Seleção do funcionário diretamente na página ===
+funcionarios_disponiveis = sorted(df["Funcionário"].dropna().unique())
+funcionario_default = st.session_state.get("funcionario", funcionarios_disponiveis[0] if funcionarios_disponiveis else "")
+funcionario = st.selectbox("👤 Selecione o funcionário", funcionarios_disponiveis, index=funcionarios_disponiveis.index(funcionario_default) if funcionario_default in funcionarios_disponiveis else 0)
+
 df_func = df[df["Funcionário"] == funcionario]
 
 # === FILTROS ===
@@ -31,13 +31,13 @@ df_ano = df_func[df_func["Ano"] == ano_selecionado]
 
 meses_disponiveis = sorted(df_ano["Mês"].dropna().unique())
 mes_nome = {
-    1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
-    7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"
+    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
 }
 meses_opcoes = [mes_nome[m] for m in meses_disponiveis]
 default_meses = meses_opcoes[-3:] if len(meses_opcoes) >= 3 else meses_opcoes
 meses_selecionados = st.multiselect("📆 Filtrar por mês (opcional)", options=meses_opcoes, default=default_meses)
-meses_valores = [k for k,v in mes_nome.items() if v in meses_selecionados]
+meses_valores = [k for k, v in mes_nome.items() if v in meses_selecionados]
 df_filtrado = df_ano[df_ano["Mês"].isin(meses_valores)]
 
 # Filtro de serviço
