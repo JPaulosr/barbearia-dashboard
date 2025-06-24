@@ -7,13 +7,17 @@ st.title("📊 Dashboard da Barbearia")
 
 @st.cache_data
 def carregar_dados():
-    df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
-    df.columns = [str(col).strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
-    df["Ano"] = df["Data"].dt.year
-    df["Mês"] = df["Data"].dt.month
-    df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
-    return df
+    try:
+        df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
+        df.columns = [str(col).strip() for col in df.columns]
+        df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+        df["Ano"] = df["Data"].dt.year
+        df["Mês"] = df["Data"].dt.month
+        df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
+        return df
+    except Exception as e:
+        st.error(f"Erro ao carregar dados: {e}")
+        st.stop()
 
 df = carregar_dados()
 
