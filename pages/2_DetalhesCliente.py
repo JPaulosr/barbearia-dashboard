@@ -43,37 +43,28 @@ fig_receita = px.bar(
 fig_receita.update_layout(height=350)
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 📊 Receita por Serviço (somente tipo = Serviço)
-st.subheader("📊 Receita por Serviço")
-df_servico = df_cliente[df_cliente["Tipo"] == "Serviço"]
-receita_servicos = df_servico.groupby("Serviço")["Valor"].sum().reset_index().sort_values("Valor", ascending=False)
-fig_servico = px.bar(
-    receita_servicos,
-    x="Serviço",
-    y="Valor",
-    text="Valor",
-    labels={"Valor": "Receita (R$)", "Serviço": "Tipo de Serviço"},
-    color="Serviço"
-)
-fig_servico.update_traces(texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."), textposition="outside")
-fig_servico.update_layout(showlegend=False, height=350)
-st.plotly_chart(fig_servico, use_container_width=True)
+# 📊 Receita por Serviço e Produto (único gráfico combinado)
+st.subheader("📊 Receita por Serviço e Produto")
 
-# 📦 Receita por Produto (somente tipo = Produto)
-st.subheader("📦 Receita por Produto")
-df_produto = df_cliente[df_cliente["Tipo"] == "Produto"]
-receita_produtos = df_produto.groupby("Serviço")["Valor"].sum().reset_index().sort_values("Valor", ascending=False)
-fig_produto = px.bar(
-    receita_produtos,
+df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
+receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
+receita_geral = receita_geral.sort_values("Valor", ascending=False)
+
+fig_receita_tipos = px.bar(
+    receita_geral,
     x="Serviço",
     y="Valor",
+    color="Tipo",
     text="Valor",
-    labels={"Valor": "Receita (R$)", "Serviço": "Produto"},
-    color="Serviço"
+    labels={"Valor": "Receita (R$)", "Serviço": "Item"},
+    barmode="group"
 )
-fig_produto.update_traces(texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."), textposition="outside")
-fig_produto.update_layout(showlegend=False, height=350)
-st.plotly_chart(fig_produto, use_container_width=True)
+fig_receita_tipos.update_traces(
+    texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
+    textposition="outside"
+)
+fig_receita_tipos.update_layout(height=400)
+st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
 # 📊 Atendimentos por funcionário (barras)
 st.subheader("📊 Atendimentos por Funcionário")
