@@ -3,90 +3,54 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("📌 Detalhamento do Funcionário")
+st.title("🧑‍💼 Detalhamento do Funcionário")
 
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
-    df["Ano"] = df["Data"].dt.year
+    df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
+    df["Mês_Nome"] = df["Data"].dt.strftime('%b')
     return df
 
 df = carregar_dados()
 
-# === Seleção do funcionário diretamente na página ===
-funcionarios_disponiveis = sorted(df["Funcionário"].dropna().unique())
-funcionario_default = st.session_state.get("funcionario", funcionarios_disponiveis[0] if funcionarios_disponiveis else "")
-funcionario = st.selectbox("👤 Selecione o funcionário", funcionarios_disponiveis, index=funcionarios_disponiveis.index(funcionario_default) if funcionario_default in funcionarios_disponiveis else 0)
+# Filtro por ano
+anos = sorted(df["Ano"].unique(), reverse=True)
+ano = st.selectbox("Selecione o Ano", anos, index=0)
+df = df[df["Ano"] == ano]
 
-df_func = df[df["Funcionário"] == funcionario]
-
-# === FILTROS ===
-anos = sorted(df_func["Ano"].dropna().unique())
-ano_selecionado = st.selectbox("📅 Selecione o ano", anos)
-
-df_ano = df_func[df_func["Ano"] == ano_selecionado]
-
-meses_disponiveis = sorted(df_ano["Mês"].dropna().unique())
-mes_nome = {
-    1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
-    7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
-}
-meses_opcoes = [mes_nome[m] for m in meses_disponiveis]
-default_meses = meses_opcoes[-3:] if len(meses_opcoes) >= 3 else meses_opcoes
-meses_selecionados = st.multiselect("📆 Filtrar por mês (opcional)", options=meses_opcoes, default=default_meses)
-meses_valores = [k for k, v in mes_nome.items() if v in meses_selecionados]
-df_filtrado = df_ano[df_ano["Mês"].isin(meses_valores)]
-
-# Filtro de serviço
-servicos_disponiveis = sorted(df_filtrado["Serviço"].dropna().unique())
-servicos_selecionados = st.multiselect("💈 Filtrar por serviço", options=servicos_disponiveis, default=servicos_disponiveis)
-df_filtrado = df_filtrado[df_filtrado["Serviço"].isin(servicos_selecionados)]
-
-# === GRÁFICO FACETADO POR SERVIÇO ===
-st.subheader(f"📊 Receita mensal por tipo de serviço - {funcionario}")
-
-servico_mes = df_filtrado.groupby(["Ano", "Mês", "Serviço"])["Valor"].sum().reset_index()
-servico_mes = servico_mes[servico_mes["Valor"] > 0]
-servico_mes["MêsNome"] = servico_mes["Mês"].map(mes_nome)
-servico_mes["Ano-Mês"] = servico_mes["Ano"].astype(str) + "-" + servico_mes["MêsNome"]
-servico_mes["Texto"] = servico_mes["Serviço"] + " - R$ " + servico_mes["Valor"].astype(int).astype(str)
-
-fig = px.bar(
-    servico_mes,
-    x="Ano-Mês",
-    y="Valor",
-    color="Serviço",
-    text="Texto",
-    facet_col="Serviço",
-    facet_col_wrap=4,
-    labels={"Valor": "Faturamento"},
-    height=500
-)
-fig.update_layout(
-    xaxis_title="Mês",
-    yaxis_title="Receita (R$)",
-    template="plotly_white"
-)
+# Receita mensal por funcionário
+st.subheader("📈 Receita Mensal por Funcionário")
+receita_mensal = df.groupby(["Funcionário", "Mês_Nome"])["Valor"].sum().reset_index()
+fig = px.bar(receita_mensal, x="Mês_Nome", y="Valor", color="Funcionário", barmode="group", text_auto=True)
 st.plotly_chart(fig, use_container_width=True)
 
-# === ATENDIMENTOS AJUSTADOS ===
-st.subheader("🧑‍🤝‍🧑 Clientes atendidos (visitas únicas ajustadas)")
+# Total de atendimentos por funcionário
+st.subheader("📋 Total de Atendimentos por Funcionário")
+atendimentos = df.groupby("Funcionário")["Data"].count().reset_index().rename(columns={"Data": "Qtd Atendimentos"})
+st.dataframe(atendimentos, use_container_width=True)
 
-limite = pd.to_datetime("2025-05-10")
-antes = df_filtrado[df_filtrado["Data"] <= limite]
-depois = df_filtrado[df_filtrado["Data"] > limite]
+# Distribuição entre combo e simples
+st.subheader("🔀 Distribuição de Atendimentos: Combo vs Simples")
+agrupado = df.groupby(["Cliente", "Data", "Funcionário"]).agg(
+    Qtd_Serviços=("Serviço", "count")
+).reset_index()
+agrupado["Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+agrupado["Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
-qtd_antes = len(antes)
-depois_unicos = depois.drop_duplicates(subset=["Cliente", "Data"])
-qtd_depois = len(depois_unicos)
+combo_simples = agrupado.groupby("Funcionário").agg(
+    Total_Atendimentos=("Data", "count"),
+    Qtd_Combo=("Combo", "sum"),
+    Qtd_Simples=("Simples", "sum")
+).reset_index()
 
-total = qtd_antes + qtd_depois
+st.dataframe(combo_simples, use_container_width=True)
 
-clientes = depois_unicos.groupby("Cliente").size().reset_index(name="Qtd Atendimentos")
-clientes = clientes.sort_values(by="Qtd Atendimentos", ascending=False)
-
-st.markdown(f"✅ **Total de atendimentos únicos realizados por {funcionario}:** `{total}`")
-st.dataframe(clientes, use_container_width=True)
+st.markdown("""
+---
+⬅️ Volte para o menu lateral para acessar outras páginas.
+""")
