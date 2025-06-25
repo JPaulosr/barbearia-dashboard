@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🧑‍🧑‍👩 Comparativo entre Funcionários")
+st.title("🧑‍🤝‍🧑 Comparativo entre Funcionários")
 
 @st.cache_data
 def carregar_dados():
@@ -28,7 +28,7 @@ df = carregar_dados()
 
 # === Filtro por ano ===
 anos = sorted(df["Ano"].unique(), reverse=True)
-ano = st.selectbox("🗕️ Selecione o Ano", anos, index=0)
+ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
 df_filtrado = df[df["Ano"] == ano]
 
 # === Receita mensal por funcionário ===
@@ -102,7 +102,7 @@ if "JPaulo" in valores and "Vinicius" in valores:
     st.metric(label=label, value=f"R$ {abs(dif):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 # === Receita total por funcionário em cada ano ===
-st.subheader("🕕 Receita Total por Funcionário em Cada Ano")
+st.subheader("📅 Receita Total por Funcionário em Cada Ano")
 receita_ano_func = df.groupby(["Ano", "Funcionário"])["Valor"].sum().reset_index()
 receita_ano_func = receita_ano_func.pivot(index="Ano", columns="Funcionário", values="Valor").fillna(0)
 receita_ano_func = receita_ano_func.sort_index(ascending=False)
@@ -110,24 +110,45 @@ for col in receita_ano_func.columns:
     receita_ano_func[col] = receita_ano_func[col].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 st.dataframe(receita_ano_func, use_container_width=True)
 
+# === Top 10 clientes por funcionário (Tabela + Gráfico) ===
+st.subheader("🏅 Top 10 Clientes Atendidos por Funcionário")
+df_clientes = df.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+clientes_freq = df_clientes.groupby(["Funcionário", "Cliente"]).size().reset_index(name="Qtd Atendimentos")
+clientes_freq = clientes_freq.sort_values(["Funcionário", "Qtd Atendimentos"], ascending=[True, False])
+
+col1, col2 = st.columns(2)
+for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
+    top = clientes_freq[clientes_freq["Funcionário"] == func].head(10)
+    col.markdown(f"#### 👤 {func}")
+    col.dataframe(top[["Cliente", "Qtd Atendimentos"]], use_container_width=True)
+    fig = px.bar(
+        top,
+        x="Qtd Atendimentos",
+        y="Cliente",
+        orientation="h",
+        text="Qtd Atendimentos",
+        labels={"Qtd Atendimentos": "Atendimentos", "Cliente": "Cliente"},
+        template="plotly_white"
+    )
+    fig.update_layout(height=400, showlegend=False, yaxis=dict(autorange="reversed"), margin=dict(t=10, b=10))
+    col.plotly_chart(fig, use_container_width=True)
+
 # === Clientes em comum ===
 st.subheader("🔄 Clientes Atendidos por Ambos")
-df_atendimentos_corrigido = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(
+df_unico = df_filtrado.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+clientes_por_func = df_unico.groupby(["Funcionário", "Cliente"]).agg(
+    Qtd_Atendimentos=("Data", "count"),
     Receita=("Valor", "sum")
 ).reset_index()
-df_comuns = df_atendimentos_corrigido.groupby(["Cliente", "Funcionário"]).agg(
-    Qtd_Atendimentos=("Data", "count"),
-    Receita_Total=("Receita", "sum")
-).reset_index()
-df_pivot = df_comuns.pivot(index="Cliente", columns="Funcionário", values=["Qtd_Atendimentos", "Receita_Total"])
-df_pivot = df_pivot.dropna()
-df_pivot.columns = [f"{a}_{b}" for a, b in df_pivot.columns]
-df_pivot["Total_Receita"] = df_pivot[["Receita_Total_JPaulo", "Receita_Total_Vinicius"]].sum(axis=1)
-df_pivot["Total_Receita_Formatado"] = df_pivot["Total_Receita"].apply(
+clientes_pivot = clientes_por_func.pivot(index="Cliente", columns="Funcionário", values=["Qtd_Atendimentos", "Receita"])
+clientes_comuns = clientes_pivot.dropna()
+clientes_comuns.columns = [f"{a}_{b}" for a, b in clientes_comuns.columns]
+clientes_comuns["Total_Receita"] = clientes_comuns[["Receita_JPaulo", "Receita_Vinicius"]].sum(axis=1)
+clientes_comuns["Total_Receita_Formatado"] = clientes_comuns["Total_Receita"].apply(
     lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 )
-df_pivot = df_pivot.sort_values("Total_Receita", ascending=False)
-st.dataframe(df_pivot[[
+clientes_comuns = clientes_comuns.sort_values("Total_Receita", ascending=False)
+st.dataframe(clientes_comuns[[
     "Qtd_Atendimentos_JPaulo", "Qtd_Atendimentos_Vinicius",
-    "Receita_Total_JPaulo", "Receita_Total_Vinicius", "Total_Receita_Formatado"
+    "Receita_JPaulo", "Receita_Vinicius", "Total_Receita_Formatado"
 ]], use_container_width=True)
