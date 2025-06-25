@@ -46,7 +46,18 @@ df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
 receita_mensal = df_func.groupby("AnoMes")["Valor"].sum().reset_index()
 receita_mensal["Valor Formatado"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
+if funcionario_escolhido.lower() == "jpaulo":
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)].copy()
+    df_vini["AnoMes"] = df_vini["Data"].dt.to_period("M").astype(str)
+    df_vini["Valor_50"] = df_vini["Valor"] * 0.5
+    receita_vini_50 = df_vini.groupby("AnoMes")["Valor_50"].sum().reset_index(name="Valor_Vinicius_50")
+    receita_mensal = receita_mensal.merge(receita_vini_50, on="AnoMes", how="left")
+    receita_mensal["Total + Comissão"] = receita_mensal["Valor"] + receita_mensal["Valor_Vinicius_50"].fillna(0)
+    receita_mensal["Total Formatado"] = receita_mensal["Total + Comissão"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Total + Comissão", text="Total Formatado", labels={"Total + Comissão": "Receita Total (com comissão)", "AnoMes": "Ano-Mês"})
+else:
+    fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
+
 fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
 fig_mensal.update_traces(textposition="outside", cliponaxis=False)
 st.plotly_chart(fig_mensal, use_container_width=True)
@@ -68,8 +79,8 @@ elif funcionario_escolhido.lower() == "jpaulo":
     df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)]
     valor_vini_50 = df_vini["Valor"].sum() * 0.5
     receita_total = pd.DataFrame({
-        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)"],
-        "Valor": [valor_jp, valor_vini_50]
+        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)", "Total"],
+        "Valor": [valor_jp, valor_vini_50, valor_jp + valor_vini_50]
     })
     receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     st.subheader("\U0001F4B0 Receita JPaulo: Própria + Comissão do Vinicius")
