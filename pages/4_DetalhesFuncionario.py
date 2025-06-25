@@ -101,15 +101,6 @@ if "JPaulo" in valores and "Vinicius" in valores:
     label = "JPaulo ganhou mais" if dif > 0 else "Vinicius ganhou mais"
     st.metric(label=label, value=f"R$ {abs(dif):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-# === Receita total por funcionário em cada ano ===
-st.subheader("🕕 Receita Total por Funcionário em Cada Ano")
-receita_ano_func = df.groupby(["Ano", "Funcionário"])["Valor"].sum().reset_index()
-receita_ano_func = receita_ano_func.pivot(index="Ano", columns="Funcionário", values="Valor").fillna(0)
-receita_ano_func = receita_ano_func.sort_index(ascending=False)
-for col in receita_ano_func.columns:
-    receita_ano_func[col] = receita_ano_func[col].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.dataframe(receita_ano_func, use_container_width=True)
-
 # === Top 10 clientes por funcionário ===
 st.subheader("🏅 Top 10 Clientes Atendidos por Funcionário")
 df_top = df_filtrado.groupby(["Funcionário", "Cliente"]).agg(
