@@ -23,10 +23,21 @@ anos = sorted(df["Ano"].unique(), reverse=True)
 ano = st.selectbox("Selecione o Ano", anos, index=0)
 df = df[df["Ano"] == ano]
 
-# Receita mensal por funcionário
+# Receita mensal por funcionário (ordenado de Jan a Jun)
 st.subheader("📈 Receita Mensal por Funcionário")
-receita_mensal = df.groupby(["Funcionário", "Mês_Nome"])["Valor"].sum().reset_index()
-fig = px.bar(receita_mensal, x="Mês_Nome", y="Valor", color="Funcionário", barmode="group", text_auto=True)
+
+receita_mensal = df.groupby(["Funcionário", "Mês", "Mês_Nome"])["Valor"].sum().reset_index()
+receita_mensal = receita_mensal.sort_values("Mês")
+
+fig = px.bar(
+    receita_mensal,
+    x="Mês_Nome",
+    y="Valor",
+    color="Funcionário",
+    barmode="group",
+    text_auto=True,
+    category_orders={"Mês_Nome": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"]}
+)
 st.plotly_chart(fig, use_container_width=True)
 
 # Total de atendimentos por funcionário
