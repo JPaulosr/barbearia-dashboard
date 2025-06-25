@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from unidecode import unidecode
 
 st.set_page_config(layout="wide")
-st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
+st.title("📌 Detalhamento do Cliente")
 
 @st.cache_data
 def carregar_dados():
@@ -12,95 +11,78 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Ano"] = df["Data"].dt.year
+    df["Mês"] = df["Data"].dt.month
+    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")  # Ex: Abr/2025
     return df
 
 df = carregar_dados()
 
-# === Lista de funcionários ===
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-funcionarios.sort()
+# === Filtro de cliente (com fallback da sessão)
+clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
+cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-# === Filtro por ano ===
-anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
-ano_escolhido = st.selectbox("\U0001F4C5 Filtrar por ano", anos)
+# Filtra dados do cliente
+df_cliente = df[df["Cliente"] == cliente]
 
-# === Seleção de funcionário ===
-funcionario_escolhido = st.selectbox("\U0001F4CB Escolha um funcionário", funcionarios)
-df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
+# 📅 Histórico de atendimentos
+st.subheader(f"📅 Histórico de atendimentos - {cliente}")
+st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
-# === Normalizar nomes para filtrar genéricos ===
-nomes_excluir = ["boliviano", "brasileiro", "menino"]
-def limpar_nome(nome):
-    nome_limpo = unidecode(str(nome).lower())
-    return not any(g in nome_limpo for g in nomes_excluir)
+# 📊 Receita mensal por mês e ano
+st.subheader("📊 Receita mensal")
+receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+fig_receita = px.bar(
+    receita_mensal,
+    x="Mês_Ano",
+    y="Valor",
+    text_auto=True,
+    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
+)
+fig_receita.update_layout(height=350)
+st.plotly_chart(fig_receita, use_container_width=True)
 
-df_func = df_func[df_func["Cliente"].apply(limpar_nome)]
+# 📊 Receita por Serviço e Produto (único gráfico combinado)
+st.subheader("📊 Receita por Serviço e Produto")
+df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
+receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
+receita_geral = receita_geral.sort_values("Valor", ascending=False)
 
-# === Histórico de atendimentos ===
-st.subheader("\U0001F4C5 Histórico de Atendimentos")
-st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
+fig_receita_tipos = px.bar(
+    receita_geral,
+    x="Serviço",
+    y="Valor",
+    color="Tipo",
+    text="Valor",
+    labels={"Valor": "Receita (R$)", "Serviço": "Item"},
+    barmode="group"
+)
+fig_receita_tipos.update_traces(
+    texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
+    textposition="outside"
+)
+fig_receita_tipos.update_layout(height=400)
+st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-# === Receita mensal com lógica de datas ===
-st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
-data_referencia = pd.to_datetime("2025-05-11")
-df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
+# 📊 Atendimentos por Funcionário (contando Cliente + Data)
+st.subheader("📊 Atendimentos por Funcionário")
+atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
+atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
+st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
-# Lógica corrigida para agrupamento correto
-antes_ref = df_func[df_func["Data"] < data_referencia].copy()
-apos_ref = df_func[df_func["Data"] >= data_referencia].copy()
-
-antes_ref["Grupo"] = antes_ref["Data"].astype(str) + "_" + antes_ref["Cliente"]
-apos_ref["Grupo"] = apos_ref["Data"].dt.strftime("%Y-%m-%d") + "_" + apos_ref["Cliente"]
-apos_ref = apos_ref.drop_duplicates(subset=["Grupo"])
-
-df_mensal = pd.concat([antes_ref, apos_ref])
-receita_mensal = df_mensal.groupby("AnoMes")["Valor"].sum().reset_index()
-receita_mensal["Valor Formatado"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
-fig_mensal.update_layout(height=400, template="plotly_white")
-fig_mensal.update_traces(textposition="outside")
-st.plotly_chart(fig_mensal, use_container_width=True)
-
-# === Receita por tipo ===
-if df_func["Tipo"].nunique() > 1:
-    st.subheader("\U0001F967 Receita por Tipo (Produto ou Serviço)")
-    por_tipo = df_func.groupby("Tipo")["Valor"].sum().reset_index()
-    fig_tipo = px.pie(por_tipo, names="Tipo", values="Valor", hole=0.3)
-    fig_tipo.update_traces(textinfo="percent+label")
-    st.plotly_chart(fig_tipo, use_container_width=True)
-
-# === Tabela resumo com lógica de datas ===
-st.subheader("\U0001F4CB Resumo de Atendimentos")
-df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
-df_unicos = df_func.drop_duplicates(subset=["Grupo"])
-
-qtd_combo = df_unicos.groupby("Grupo")["Serviço"].count().gt(1).sum()
-qtd_total = len(df_unicos)
-qtd_simples = qtd_total - qtd_combo
-tique_medio = df_unicos.groupby("Grupo")["Valor"].sum().mean()
-
-resumo = pd.DataFrame({
-    "Total Atendimentos": [qtd_total],
-    "Combos": [qtd_combo],
-    "Simples": [qtd_simples],
-    "Tique Médio": [f"R$ {tique_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")]
+# 📋 Tabela resumo
+st.subheader("📋 Resumo de Atendimentos")
+resumo = df_cliente.groupby("Data").agg(
+    Qtd_Serviços=("Serviço", "count"),
+    Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
+).reset_index()
+resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
+resumo_final = pd.DataFrame({
+    "Total Atendimentos": [resumo.shape[0]],
+    "Qtd Combos": [resumo["Qtd_Combo"].sum()],
+    "Qtd Simples": [resumo["Qtd_Simples"].sum()]
 })
-st.dataframe(resumo, use_container_width=True)
-
-# === Gráfico de distribuição por cliente (top 10 em barras) ===
-st.subheader("\U0001F465 Distribuição de Atendimentos por Cliente")
-atend_cliente = df_unicos["Cliente"].value_counts().reset_index()
-atend_cliente.columns = ["Cliente", "Atendimentos"]
-top_10_clientes = atend_cliente.head(10)
-fig_clientes = px.bar(top_10_clientes, x="Cliente", y="Atendimentos", text="Atendimentos", labels={"Atendimentos": "Nº Atendimentos"})
-fig_clientes.update_traces(textposition="outside")
-fig_clientes.update_layout(height=400, template="plotly_white")
-st.plotly_chart(fig_clientes, use_container_width=True)
-
-# === Serviços mais executados ===
-st.subheader("\U0001F488 Serviços mais executados")
-servicos = df_func["Serviço"].value_counts().reset_index()
-servicos.columns = ["Serviço", "Quantidade"]
-st.dataframe(servicos, use_container_width=True)
+st.dataframe(resumo_final, use_container_width=True)
