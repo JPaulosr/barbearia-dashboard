@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -64,3 +63,49 @@ if funcionario_escolhido.lower() == "jpaulo":
     tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]]
     tabela.columns = ["Mês", "Receita JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]
     st.dataframe(tabela, use_container_width=True)
+# === Receita Bruta e Receita com comissão de Vinicius ===
+if funcionario_escolhido.lower() == "vinicius":
+    bruto = df_func["Valor"].sum()
+    liquido = bruto * 0.5
+    comparativo_vinicius = pd.DataFrame({
+        "Tipo de Receita": ["Bruta (100%)", "Líquida (50%)"],
+        "Valor": [bruto, liquido]
+    })
+    comparativo_vinicius["Valor Formatado"] = comparativo_vinicius["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    st.subheader("💸 Receita Bruta vs Líquida (Vinicius)")
+    st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
+
+elif funcionario_escolhido.lower() == "jpaulo":
+    valor_jp = df_func["Valor"].sum()
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)]
+    valor_vini_50 = df_vini["Valor"].sum() * 0.5
+    receita_total = pd.DataFrame({
+        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)", "Total"],
+        "Valor": [valor_jp, valor_vini_50, valor_jp + valor_vini_50]
+    })
+    receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
+    st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
+
+# === Ticket Médio por Mês (registros antes da data, agrupado após) ===
+st.subheader("📉 Ticket Médio por Mês")
+data_referencia = pd.to_datetime("2025-05-11")
+df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
+antes_ticket = df_func[df_func["Data"] < data_referencia].copy()
+antes_ticket["AnoMes"] = antes_ticket["Data"].dt.to_period("M").astype(str)
+antes_ticket = antes_ticket.groupby(["AnoMes"])["Valor"].mean().reset_index(name="Ticket Médio")
+
+depois_ticket = df_func[df_func["Data"] >= data_referencia].copy()
+depois_ticket = depois_ticket.groupby(["Grupo", "Data"])["Valor"].sum().reset_index()
+depois_ticket["AnoMes"] = depois_ticket["Data"].dt.to_period("M").astype(str)
+depois_ticket = depois_ticket.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
+
+ticket_mensal = pd.concat([antes_ticket, depois_ticket]).groupby("AnoMes")["Ticket Médio"].mean().reset_index()
+ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.dataframe(ticket_mensal, use_container_width=True)
+
+# === Exportar dados ===
+st.subheader("📥 Exportar dados filtrados")
+buffer = BytesIO()
+df_func.to_excel(buffer, index=False, sheet_name="Filtrado", engine="openpyxl")
+st.download_button("Baixar Excel com dados filtrados", data=buffer.getvalue(), file_name="dados_filtrados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
