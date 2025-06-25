@@ -17,21 +17,25 @@ def carregar_dados():
         1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
         7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
     })
+
+    # Remove nomes genéricos
     nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
-    df = df[~df["Cliente"].str.lower().isin(nomes_ignorar)]
+    normalizar = lambda s: str(s).lower().strip()
+    df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
     return df
 
 df = carregar_dados()
 
-# Filtro por ano
+# === Filtro por ano ===
 anos = sorted(df["Ano"].unique(), reverse=True)
 ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
 df_filtrado = df[df["Ano"] == ano]
 
-# Receita por funcionário por mês
+# === Receita mensal por funcionário ===
 st.subheader("📈 Receita Mensal por Funcionário")
 receita_mensal = df_filtrado.groupby(["Funcionário", "Mês", "Mês_Nome"])["Valor"].sum().reset_index()
 receita_mensal = receita_mensal.sort_values("Mês")
+
 fig = px.bar(
     receita_mensal,
     x="Mês_Nome",
@@ -39,34 +43,57 @@ fig = px.bar(
     color="Funcionário",
     barmode="group",
     text_auto=True,
-    category_orders={"Mês_Nome": ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]}
+    category_orders={"Mês_Nome": ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]},
+    template="plotly_white"
 )
+fig.update_layout(margin=dict(t=10, b=10))
 st.plotly_chart(fig, use_container_width=True)
 
-# Total de atendimentos
+# === Atendimentos ===
 st.subheader("📋 Total de Atendimentos por Funcionário")
 atendimentos = df_filtrado.groupby("Funcionário")["Data"].count().reset_index().rename(columns={"Data": "Qtd Atendimentos"})
+
+col1, col2 = st.columns(2)
+for _, row in atendimentos.iterrows():
+    if row["Funcionário"] == "JPaulo":
+        col1.metric("Atendimentos - JPaulo", row["Qtd Atendimentos"])
+    elif row["Funcionário"] == "Vinicius":
+        col2.metric("Atendimentos - Vinicius", row["Qtd Atendimentos"])
 st.dataframe(atendimentos, use_container_width=True)
 
-# Combo vs Simples
+# === Combo vs Simples ===
 st.subheader("🔀 Distribuição: Combo vs Simples")
-agrupado = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(Qtd_Serviços=("Serviço", "count")).reset_index()
+agrupado = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(
+    Qtd_Serviços=("Serviço", "count")
+).reset_index()
 agrupado["Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
 agrupado["Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
+
 combo_simples = agrupado.groupby("Funcionário").agg(
     Total_Atendimentos=("Data", "count"),
     Qtd_Combo=("Combo", "sum"),
     Qtd_Simples=("Simples", "sum")
 ).reset_index()
+
+col1, col2 = st.columns(2)
+for _, row in combo_simples.iterrows():
+    if row["Funcionário"] == "JPaulo":
+        col1.metric("Combos - JPaulo", row["Qtd_Combo"])
+        col1.metric("Simples - JPaulo", row["Qtd_Simples"])
+    elif row["Funcionário"] == "Vinicius":
+        col2.metric("Combos - Vinicius", row["Qtd_Combo"])
+        col2.metric("Simples - Vinicius", row["Qtd_Simples"])
 st.dataframe(combo_simples, use_container_width=True)
 
-# Receita total no ano
+# === Receita total no ano ===
 st.subheader("💰 Receita Total no Ano por Funcionário")
 receita_total = df_filtrado.groupby("Funcionário")["Valor"].sum().reset_index()
-receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+receita_total["Valor Formatado"] = receita_total["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 st.dataframe(receita_total[["Funcionário", "Valor Formatado"]], use_container_width=True)
 
-# Diferença de receita
+# === Diferença entre eles ===
 st.subheader("📊 Diferença de Receita (R$)")
 valores = receita_total.set_index("Funcionário")["Valor"].to_dict()
 if "JPaulo" in valores and "Vinicius" in valores:
@@ -74,44 +101,39 @@ if "JPaulo" in valores and "Vinicius" in valores:
     label = "JPaulo ganhou mais" if dif > 0 else "Vinicius ganhou mais"
     st.metric(label=label, value=f"R$ {abs(dif):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-# Receita total por ano
+# === Receita total por funcionário em cada ano ===
 st.subheader("📅 Receita Total por Funcionário em Cada Ano")
-por_ano = df.groupby(["Ano", "Funcionário"])["Valor"].sum().unstack().fillna(0).astype(int)
-por_ano = por_ano.sort_index(ascending=False)
-por_ano_formatado = por_ano.applymap(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.dataframe(por_ano_formatado, use_container_width=True)
+receita_ano_func = df.groupby(["Ano", "Funcionário"])["Valor"].sum().reset_index()
+receita_ano_func = receita_ano_func.pivot(index="Ano", columns="Funcionário", values="Valor").fillna(0)
+receita_ano_func = receita_ano_func.sort_index(ascending=False)
+for col in receita_ano_func.columns:
+    receita_ano_func[col] = receita_ano_func[col].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.dataframe(receita_ano_func, use_container_width=True)
 
-# Top 10 clientes por receita
-st.subheader("🏅 Top 10 Clientes por Receita (por Funcionário)")
-clientes_por_func = df_filtrado.groupby(["Funcionário", "Cliente"])["Valor"].sum().reset_index()
-clientes_por_func = clientes_por_func.sort_values(["Funcionário", "Valor"], ascending=[True, False])
+# === Top 10 clientes por funcionário (Tabela + Gráfico) ===
+st.subheader("🏅 Top 10 Clientes Atendidos por Funcionário")
+df_clientes = df.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+clientes_freq = df_clientes.groupby(["Funcionário", "Cliente"]).size().reset_index(name="Qtd Atendimentos")
+clientes_freq = clientes_freq.sort_values(["Funcionário", "Qtd Atendimentos"], ascending=[True, False])
+
 col1, col2 = st.columns(2)
 for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
-    top_clientes = clientes_por_func[clientes_por_func["Funcionário"] == func].head(10).copy()
-    top_clientes["Valor Formatado"] = top_clientes["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    col.dataframe(top_clientes[["Cliente", "Valor Formatado"]], use_container_width=True)
-
-# Top 10 clientes por frequência
-st.subheader("📈 Top 10 Clientes Atendidos por Funcionário")
-df_freq = df_filtrado.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
-clientes_freq = df_freq.groupby(["Funcionário", "Cliente"]).size().reset_index(name="Qtd Atendimentos")
-col1, col2 = st.columns(2)
-for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
-    top_freq = clientes_freq[clientes_freq["Funcionário"] == func].sort_values("Qtd Atendimentos", ascending=False).head(10)
-    col.dataframe(top_freq, use_container_width=True)
+    top = clientes_freq[clientes_freq["Funcionário"] == func].head(10)
+    col.markdown(f"#### 👤 {func}")
+    col.dataframe(top[["Cliente", "Qtd Atendimentos"]], use_container_width=True)
     fig = px.bar(
-        top_freq,
+        top,
         x="Qtd Atendimentos",
         y="Cliente",
         orientation="h",
-        title=f"Top 10 - {func}",
+        text="Qtd Atendimentos",
         labels={"Qtd Atendimentos": "Atendimentos", "Cliente": "Cliente"},
-        text="Qtd Atendimentos"
+        template="plotly_white"
     )
-    fig.update_layout(height=400, yaxis=dict(autorange="reversed"))
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(height=400, showlegend=False, yaxis=dict(autorange="reversed"), margin=dict(t=10, b=10))
+    col.plotly_chart(fig, use_container_width=True)
 
-# Comparativo de clientes em comum
+# === Clientes em comum ===
 st.subheader("🔄 Clientes Atendidos por Ambos")
 df_unico = df_filtrado.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
 clientes_por_func = df_unico.groupby(["Funcionário", "Cliente"]).agg(
