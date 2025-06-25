@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -18,10 +17,27 @@ def carregar_dados():
 
 df = carregar_dados()
 
+# === Filtros por Ano e Mês ===
+st.sidebar.header("🎛️ Filtros")
+anos_disponiveis = sorted(df["Ano"].dropna().unique(), reverse=True)
+ano_escolhido = st.sidebar.selectbox("🗓️ Escolha o Ano", anos_disponiveis)
+
+meses_pt = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+}
+meses_disponiveis = sorted(df[df["Ano"] == ano_escolhido]["Mês"].dropna().unique())
+mes_nome_escolhido = st.sidebar.selectbox("📆 Escolha o Mês", [meses_pt[m] for m in meses_disponiveis])
+mes_num = [k for k, v in meses_pt.items() if v == mes_nome_escolhido][0]
+
+# === Aplicar filtros ===
+df = df[(df["Ano"] == ano_escolhido) & (df["Mês"] == mes_num)]
+
 # === Indicadores principais ===
 receita_total = df["Valor"].sum()
 total_atendimentos = len(df)
-df["Data"] = pd.to_datetime(df["Data"])
+
 data_limite = pd.to_datetime("2025-05-11")
 antes = df[df["Data"] < data_limite]
 depois = df[df["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
