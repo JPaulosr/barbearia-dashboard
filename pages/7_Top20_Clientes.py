@@ -55,8 +55,7 @@ def top_20_por(df):
     ).reset_index()
 
     resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "x").replace(",", ".").replace("x", ","))
-    
-    # Categorias personalizadas
+
     def categoria_cliente(valor):
         if valor > 200:
             return "🥇 VIP"
@@ -73,17 +72,16 @@ def top_20_por(df):
 
 resumo_geral = top_20_por(agrupado)
 
-# Filtro por nome
+# Filtros dinâmicos
 st.subheader("🎯 Top 20 Clientes - Geral")
 filtro_nome = st.text_input("🔍 Pesquisar cliente", "")
 resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro_nome, case=False)]
 
-# Filtro por categoria
 categorias_disponiveis = resumo_geral["Categoria"].unique().tolist()
 filtro_categoria = st.multiselect("🏅 Filtrar por categoria", categorias_disponiveis, default=categorias_disponiveis)
 resumo_filtrado = resumo_filtrado[resumo_filtrado["Categoria"].isin(filtro_categoria)]
 
-# Exibir tabela
+# Exibição da tabela
 st.dataframe(resumo_filtrado[[
     "Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", 
     "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", 
@@ -141,17 +139,20 @@ def resumo_cliente(df_cliente):
         "Tique Médio": f"R$ {media:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
     }), servicos_detalhados
 
-resumo1, servicos1 = resumo_cliente(df_c1)
-resumo2, servicos2 = resumo_cliente(df_c2)
+if c1 == c2:
+    st.warning("Selecione dois clientes diferentes para comparar.")
+else:
+    resumo1, servicos1 = resumo_cliente(df_c1)
+    resumo2, servicos2 = resumo_cliente(df_c2)
 
-resumo_geral_comp = pd.concat([resumo1.rename(c1), resumo2.rename(c2)], axis=1)
-servicos_comparativo = pd.concat([servicos1.rename(c1), servicos2.rename(c2)], axis=1).fillna(0).astype(int)
+    resumo_geral_comp = pd.concat([resumo1.rename(c1), resumo2.rename(c2)], axis=1)
+    servicos_comparativo = pd.concat([servicos1.rename(c1), servicos2.rename(c2)], axis=1).fillna(0).astype(int)
 
-st.dataframe(resumo_geral_comp, use_container_width=True)
-st.markdown("**Serviços Realizados por Tipo**")
-st.dataframe(servicos_comparativo, use_container_width=True)
+    st.dataframe(resumo_geral_comp, use_container_width=True)
+    st.markdown("**Serviços Realizados por Tipo**")
+    st.dataframe(servicos_comparativo, use_container_width=True)
 
-# Navegar para detalhamento
+# Detalhamento individual
 st.subheader("🔍 Ver detalhamento de um cliente")
 cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis)
 
