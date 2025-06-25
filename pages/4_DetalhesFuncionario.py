@@ -64,7 +64,8 @@ st.dataframe(atendimentos, use_container_width=True)
 # === Combo vs Simples ===
 st.subheader("🔀 Distribuição: Combo vs Simples")
 agrupado = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(
-    Qtd_Serviços=("Serviço", "count")
+    Qtd_Serviços=("Serviço", "count"),
+    Receita=("Valor", "sum")
 ).reset_index()
 agrupado["Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
 agrupado["Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
@@ -72,7 +73,8 @@ agrupado["Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else
 combo_simples = agrupado.groupby("Funcionário").agg(
     Total_Atendimentos=("Data", "count"),
     Qtd_Combo=("Combo", "sum"),
-    Qtd_Simples=("Simples", "sum")
+    Qtd_Simples=("Simples", "sum"),
+    Receita_Total=("Receita", "sum")
 ).reset_index()
 
 col1, col2 = st.columns(2)
@@ -83,19 +85,18 @@ for _, row in combo_simples.iterrows():
     elif row["Funcionário"] == "Vinicius":
         col2.metric("Combos - Vinicius", row["Qtd_Combo"])
         col2.metric("Simples - Vinicius", row["Qtd_Simples"])
-st.dataframe(combo_simples, use_container_width=True)
+st.dataframe(combo_simples.drop(columns="Receita_Total"), use_container_width=True)
 
 # === Receita total no ano ===
 st.subheader("💰 Receita Total no Ano por Funcionário")
-receita_total = df_filtrado.groupby("Funcionário")["Valor"].sum().reset_index()
-receita_total["Valor Formatado"] = receita_total["Valor"].apply(
+combo_simples["Valor Formatado"] = combo_simples["Receita_Total"].apply(
     lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 )
-st.dataframe(receita_total[["Funcionário", "Valor Formatado"]], use_container_width=True)
+st.dataframe(combo_simples[["Funcionário", "Valor Formatado"]], use_container_width=True)
 
 # === Diferença entre eles ===
 st.subheader("📊 Diferença de Receita (R$)")
-valores = receita_total.set_index("Funcionário")["Valor"].to_dict()
+valores = combo_simples.set_index("Funcionário")["Receita_Total"].to_dict()
 if "JPaulo" in valores and "Vinicius" in valores:
     dif = valores["JPaulo"] - valores["Vinicius"]
     label = "JPaulo ganhou mais" if dif > 0 else "Vinicius ganhou mais"
@@ -104,17 +105,19 @@ if "JPaulo" in valores and "Vinicius" in valores:
 # === Top 10 clientes por funcionário ===
 st.subheader("🏅 Top 10 Clientes Atendidos por Funcionário")
 df_top = df_filtrado.groupby(["Funcionário", "Cliente"]).agg(
-    Qtd_Atendimentos=("Data", "count"),
     Receita=("Valor", "sum")
 ).reset_index()
-df_top = df_top.sort_values(["Funcionário", "Receita"], ascending=[True, False])
+df_top = df_top.groupby(["Funcionário", "Cliente"]).agg(
+    Receita_Total=("Receita", "sum")
+).reset_index()
+df_top = df_top.sort_values(["Funcionário", "Receita_Total"], ascending=[True, False])
 
 col1, col2 = st.columns(2)
 for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
     top = df_top[df_top["Funcionário"] == func].head(10)
-    top["Receita_Formatada"] = top["Receita"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    top["Receita_Formatada"] = top["Receita_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     col.markdown(f"#### 👤 {func}")
-    col.dataframe(top[["Cliente", "Qtd_Atendimentos", "Receita_Formatada"]], use_container_width=True)
+    col.dataframe(top[["Cliente", "Receita_Formatada"]], use_container_width=True)
 
 # === Clientes em comum ===
 st.subheader("🔄 Clientes Atendidos por Ambos")
