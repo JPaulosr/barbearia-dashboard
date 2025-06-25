@@ -3,9 +3,13 @@ import pandas as pd
 import plotly.express as px
 from unidecode import unidecode
 from io import BytesIO
+import locale
 
 st.set_page_config(layout="wide")
 st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
+
+# Definir local para nomes de meses em português
+locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 
 @st.cache_data
 def carregar_dados():
@@ -40,27 +44,31 @@ if tipo_selecionado:
 st.subheader("\U0001F4C5 Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# === Receita mensal ===
+# === Receita mensal lado a lado (JPaulo vs JPaulo + Vinicius 50%) ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
 df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
-receita_mensal = df_func.groupby("AnoMes")["Valor"].sum().reset_index()
-receita_mensal["Valor Formatado"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+df_func["MesNome"] = df_func["Data"].dt.strftime("%b %Y").str.capitalize()
+receita_jp = df_func.groupby("MesNome")["Valor"].sum().reset_index(name="JPaulo")
 
 if funcionario_escolhido.lower() == "jpaulo":
     df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)].copy()
-    df_vini["AnoMes"] = df_vini["Data"].dt.to_period("M").astype(str)
-    df_vini["Valor_50"] = df_vini["Valor"] * 0.5
-    receita_vini_50 = df_vini.groupby("AnoMes")["Valor_50"].sum().reset_index(name="Valor_Vinicius_50")
-    receita_mensal = receita_mensal.merge(receita_vini_50, on="AnoMes", how="left")
-    receita_mensal["Total + Comissão"] = receita_mensal["Valor"] + receita_mensal["Valor_Vinicius_50"].fillna(0)
-    receita_mensal["Total Formatado"] = receita_mensal["Total + Comissão"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Total + Comissão", text="Total Formatado", labels={"Total + Comissão": "Receita Total (com comissão)", "AnoMes": "Ano-Mês"})
-else:
-    fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
+    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b %Y").str.capitalize()
+    receita_vini = df_vini.groupby("MesNome")["Valor"].sum().reset_index(name="Vinicius")
+    receita_merged = pd.merge(receita_jp, receita_vini, on="MesNome", how="left")
+    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
 
-fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
-fig_mensal.update_traces(textposition="outside", cliponaxis=False)
-st.plotly_chart(fig_mensal, use_container_width=True)
+    receita_melt = receita_merged.melt(id_vars="MesNome", value_vars=["JPaulo", "Com_Vinicius"], var_name="Tipo", value_name="Valor")
+
+    fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
+                              labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
+    fig_mensal_comp.update_layout(height=450, template="plotly_white")
+    st.plotly_chart(fig_mensal_comp, use_container_width=True)
+else:
+    receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado", labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
+    fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
+    fig_mensal.update_traces(textposition="outside", cliponaxis=False)
+    st.plotly_chart(fig_mensal, use_container_width=True)
 
 # === Receita Bruta e Receita com comissão de Vinicius ===
 if funcionario_escolhido.lower() == "vinicius":
