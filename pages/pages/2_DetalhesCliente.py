@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("📌 Detalhamento do Cliente")
+st.title("📌 Detalhamento do Funcionário")
 
 @st.cache_data
 def carregar_dados():
@@ -11,78 +11,58 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year
+    df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")  # Ex: Abr/2025
+    df["Mês_Nome"] = df["Data"].dt.month.map({
+        1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+        7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+    })
     return df
 
 df = carregar_dados()
 
-# === Filtro de cliente (com fallback da sessão)
-clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
-cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
-cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
+# Filtro por funcionário com fallback do session_state
+funcionarios_disponiveis = sorted(df["Funcionário"].dropna().unique())
+funcionario_default = st.session_state.get("funcionario", funcionarios_disponiveis[0])
+funcionario = st.selectbox("👤 Selecione o funcionário", funcionarios_disponiveis, index=funcionarios_disponiveis.index(funcionario_default))
 
-# Filtra dados do cliente
-df_cliente = df[df["Cliente"] == cliente]
+# Filtro por ano
+anos = sorted(df["Ano"].unique(), reverse=True)
+ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
 
-# 📅 Histórico de atendimentos
-st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
+# Filtra dados
+df_func = df[(df["Funcionário"] == funcionario) & (df["Ano"] == ano)]
 
-# 📊 Receita mensal por mês e ano
-st.subheader("📊 Receita mensal")
-receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
-fig_receita = px.bar(
+# Receita mensal
+st.subheader("📈 Receita Mensal")
+receita_mensal = df_func.groupby(["Mês", "Mês_Nome"])["Valor"].sum().reset_index().sort_values("Mês")
+fig = px.bar(
     receita_mensal,
-    x="Mês_Ano",
+    x="Mês_Nome",
     y="Valor",
     text_auto=True,
-    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
+    labels={"Valor": "Receita (R$)", "Mês_Nome": "Mês"}
 )
-fig_receita.update_layout(height=350)
-st.plotly_chart(fig_receita, use_container_width=True)
+fig.update_layout(height=350)
+st.plotly_chart(fig, use_container_width=True)
 
-# 📊 Receita por Serviço e Produto (único gráfico combinado)
-st.subheader("📊 Receita por Serviço e Produto")
-df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
-receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
-receita_geral = receita_geral.sort_values("Valor", ascending=False)
+# Total de atendimentos
+st.subheader("📋 Total de Atendimentos")
+qtd_atendimentos = df_func.drop_duplicates(subset=["Cliente", "Data"]).shape[0]
+st.metric(label="Atendimentos Únicos", value=qtd_atendimentos)
 
-fig_receita_tipos = px.bar(
-    receita_geral,
-    x="Serviço",
-    y="Valor",
-    color="Tipo",
-    text="Valor",
-    labels={"Valor": "Receita (R$)", "Serviço": "Item"},
-    barmode="group"
-)
-fig_receita_tipos.update_traces(
-    texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
-    textposition="outside"
-)
-fig_receita_tipos.update_layout(height=400)
-st.plotly_chart(fig_receita_tipos, use_container_width=True)
+# Combo vs Simples
+st.subheader("🔀 Combo vs Simples")
+agrupado = df_func.groupby(["Cliente", "Data"]).agg(Qtd_Serviços=("Serviço", "count")).reset_index()
+agrupado["Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+agrupado["Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
-# 📊 Atendimentos por Funcionário (contando Cliente + Data)
-st.subheader("📊 Atendimentos por Funcionário")
-atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
-atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
-atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
-st.dataframe(atendimentos_por_funcionario, use_container_width=True)
-
-# 📋 Tabela resumo
-st.subheader("📋 Resumo de Atendimentos")
-resumo = df_cliente.groupby("Data").agg(
-    Qtd_Serviços=("Serviço", "count"),
-    Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
-).reset_index()
-resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
-resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
-resumo_final = pd.DataFrame({
-    "Total Atendimentos": [resumo.shape[0]],
-    "Qtd Combos": [resumo["Qtd_Combo"].sum()],
-    "Qtd Simples": [resumo["Qtd_Simples"].sum()]
+resumo = pd.DataFrame({
+    "Total Atendimentos": [agrupado.shape[0]],
+    "Qtd Combos": [agrupado["Combo"].sum()],
+    "Qtd Simples": [agrupado["Simples"].sum()]
 })
-st.dataframe(resumo_final, use_container_width=True)
+st.dataframe(resumo, use_container_width=True)
+
+st.markdown("---")
+st.markdown("⬅️ Use o menu lateral para acessar outras seções.")
