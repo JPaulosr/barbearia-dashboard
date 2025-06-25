@@ -51,7 +51,7 @@ fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, 
 fig_mensal.update_traces(textposition="outside", cliponaxis=False)
 st.plotly_chart(fig_mensal, use_container_width=True)
 
-# === Se funcionário for Vinicius, mostrar bruto e líquido ===
+# === Receita Bruta e Receita com comissão de Vinicius ===
 if funcionario_escolhido.lower() == "vinicius":
     bruto = df_func["Valor"].sum()
     liquido = bruto * 0.5
@@ -62,6 +62,18 @@ if funcionario_escolhido.lower() == "vinicius":
     comparativo_vinicius["Valor Formatado"] = comparativo_vinicius["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     st.subheader("\U0001F4B8 Receita Bruta vs Líquida (Vinicius)")
     st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
+
+elif funcionario_escolhido.lower() == "jpaulo":
+    valor_jp = df_func["Valor"].sum()
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)]
+    valor_vini_50 = df_vini["Valor"].sum() * 0.5
+    receita_total = pd.DataFrame({
+        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)"],
+        "Valor": [valor_jp, valor_vini_50]
+    })
+    receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    st.subheader("\U0001F4B0 Receita JPaulo: Própria + Comissão do Vinicius")
+    st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
 # === Ticket Médio por Mês (registros antes da data, agrupado após) ===
 st.subheader("\U0001F4C9 Ticket Médio por Mês")
