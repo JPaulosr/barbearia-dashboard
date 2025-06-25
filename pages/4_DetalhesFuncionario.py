@@ -5,7 +5,7 @@ from unidecode import unidecode
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("\U0001F9D1\u200d\U0001F4BC Detalhes do Funcionário")
+st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
 
 @st.cache_data
 def carregar_dados():
@@ -71,6 +71,22 @@ if funcionario_escolhido.lower() == "jpaulo":
                                   labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
         fig_mensal_comp.update_layout(height=450, template="plotly_white")
         st.plotly_chart(fig_mensal_comp, use_container_width=True)
+
+        # === Tabela adicional com valores detalhados ===
+        receita_merged["Comissão (50%) do Vinicius"] = receita_merged["Vinicius"].fillna(0) * 0.5
+        receita_merged["Total (JPaulo + Comissão)"] = receita_merged["Com_Vinicius"]
+        receita_merged_formatada = receita_merged[["MesNum", "MesNome", "JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]].copy()
+        receita_merged_formatada = receita_merged_formatada.sort_values("MesNum")
+        receita_merged_formatada["Mês"] = receita_merged_formatada["MesNum"].map(meses_pt)
+        receita_merged_formatada["Receita JPaulo"] = receita_merged_formatada["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+        receita_merged_formatada["Comissão (50%) do Vinicius"] = receita_merged_formatada["Comissão (50%) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+        receita_merged_formatada["Total (JPaulo + Comissão)"] = receita_merged_formatada["Total (JPaulo + Comissão)"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+        st.dataframe(
+            receita_merged_formatada[["Mês", "Receita JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]],
+            use_container_width=True
+        )
+
     else:
         receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
         fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
@@ -85,6 +101,7 @@ else:
     fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True)
+
 # === Receita Bruta e Receita com comissão de Vinicius ===
 if funcionario_escolhido.lower() == "vinicius":
     bruto = df_func["Valor"].sum()
