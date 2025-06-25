@@ -1,27 +1,47 @@
 
-# Este é um exemplo simplificado. O conteúdo real completo será inserido aqui.
-# Apenas adicionando a nova tabela mantendo o restante do código.
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from unidecode import unidecode
+from io import BytesIO
 
-# Tabela de Comissão (JPaulo + 50% Vinicius por mês)
+st.set_page_config(layout="wide")
+st.title("\U0001F9D1\u200d\U0001F4BC Detalhes do Funcionário")
+
+@st.cache_data
+def carregar_dados():
+    df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
+    df.columns = [str(col).strip() for col in df.columns]
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
+    return df
+
+df = carregar_dados()
+
+# === Lista de funcionários ===
+funcionarios = df["Funcionário"].dropna().unique().tolist()
+funcionarios.sort()
+
+# === Filtro por ano ===
+anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
+ano_escolhido = st.selectbox("\U0001F4C5 Filtrar por ano", anos)
+
+# === Seleção de funcionário ===
+funcionario_escolhido = st.selectbox("\U0001F4CB Escolha um funcionário", funcionarios)
+
+# Corrige erro por acesso prematuro à variável
 if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
-    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == 2025)].copy()
-    df_vini["MesNum"] = df_vini["Data"].dt.month
-    receita_vini = df_vini.groupby("MesNum")["Valor"].sum().reset_index(name="Vinicius")
-    receita_jp = df_func.groupby("MesNum")["Valor"].sum().reset_index(name="JPaulo")
-    receita_merged = pd.merge(receita_jp, receita_vini, on="MesNum", how="left")
+    pass
 
-    receita_merged["Comissão (50%) do Vinicius"] = receita_merged["Vinicius"].fillna(0) * 0.5
-    receita_merged["Total (JPaulo + Comissão)"] = receita_merged["JPaulo"] + receita_merged["Comissão (50%) do Vinicius"]
+df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
 
-    meses_pt = {
-        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
-        7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-    }
-    receita_merged["Mês"] = receita_merged["MesNum"].map(meses_pt)
-    receita_merged = receita_merged[["Mês", "JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]]
+# === Filtro por tipo de serviço ===
+tipos_servico = df_func["Serviço"].dropna().unique().tolist()
+tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
+if tipo_selecionado:
+    df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
-    for col in ["JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]:
-        receita_merged[col] = receita_merged[col].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-    st.subheader("📋 Tabela de Comissão Detalhada por Mês")
-    st.dataframe(receita_merged, use_container_width=True)
+# === Histórico de atendimentos ===
+st.subheader("\U0001F4C5 Histórico de Atendimentos")
+st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
