@@ -102,7 +102,7 @@ if "JPaulo" in valores and "Vinicius" in valores:
     st.metric(label=label, value=f"R$ {abs(dif):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 # === Receita total por funcionário em cada ano ===
-st.subheader("🗕️ Receita Total por Funcionário em Cada Ano")
+st.subheader("🕕 Receita Total por Funcionário em Cada Ano")
 receita_ano_func = df.groupby(["Ano", "Funcionário"])["Valor"].sum().reset_index()
 receita_ano_func = receita_ano_func.pivot(index="Ano", columns="Funcionário", values="Valor").fillna(0)
 receita_ano_func = receita_ano_func.sort_index(ascending=False)
@@ -112,23 +112,22 @@ st.dataframe(receita_ano_func, use_container_width=True)
 
 # === Clientes em comum ===
 st.subheader("🔄 Clientes Atendidos por Ambos")
-df_unico = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(
-    Qtd_Serviços=("Serviço", "count"),
+df_atendimentos_corrigido = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(
     Receita=("Valor", "sum")
 ).reset_index()
-clientes_comuns_raw = df_unico.groupby(["Cliente", "Funcionário"]).agg(
-    Qtd_Atendimentos=("Data", "nunique"),
+df_comuns = df_atendimentos_corrigido.groupby(["Cliente", "Funcionário"]).agg(
+    Qtd_Atendimentos=("Data", "count"),
     Receita_Total=("Receita", "sum")
 ).reset_index()
-clientes_pivot = clientes_comuns_raw.pivot(index="Cliente", columns="Funcionário", values=["Qtd_Atendimentos", "Receita_Total"])
-clientes_comuns = clientes_pivot.dropna()
-clientes_comuns.columns = [f"{a}_{b}" for a, b in clientes_comuns.columns]
-clientes_comuns["Total_Receita"] = clientes_comuns[["Receita_Total_JPaulo", "Receita_Total_Vinicius"]].sum(axis=1)
-clientes_comuns["Total_Receita_Formatado"] = clientes_comuns["Total_Receita"].apply(
+df_pivot = df_comuns.pivot(index="Cliente", columns="Funcionário", values=["Qtd_Atendimentos", "Receita_Total"])
+df_pivot = df_pivot.dropna()
+df_pivot.columns = [f"{a}_{b}" for a, b in df_pivot.columns]
+df_pivot["Total_Receita"] = df_pivot[["Receita_Total_JPaulo", "Receita_Total_Vinicius"]].sum(axis=1)
+df_pivot["Total_Receita_Formatado"] = df_pivot["Total_Receita"].apply(
     lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 )
-clientes_comuns = clientes_comuns.sort_values("Total_Receita", ascending=False)
-st.dataframe(clientes_comuns[[
+df_pivot = df_pivot.sort_values("Total_Receita", ascending=False)
+st.dataframe(df_pivot[[
     "Qtd_Atendimentos_JPaulo", "Qtd_Atendimentos_Vinicius",
     "Receita_Total_JPaulo", "Receita_Total_Vinicius", "Total_Receita_Formatado"
 ]], use_container_width=True)
