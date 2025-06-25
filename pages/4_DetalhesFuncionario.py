@@ -13,7 +13,10 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Nome"] = df["Data"].dt.strftime('%b')
+    df["Mês_Nome"] = df["Data"].dt.month.map({
+        1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
+        7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
+    })
     return df
 
 df = carregar_dados()
@@ -23,9 +26,8 @@ anos = sorted(df["Ano"].unique(), reverse=True)
 ano = st.selectbox("Selecione o Ano", anos, index=0)
 df = df[df["Ano"] == ano]
 
-# Receita mensal por funcionário (ordenado de Jan a Jun)
+# Receita mensal por funcionário
 st.subheader("📈 Receita Mensal por Funcionário")
-
 receita_mensal = df.groupby(["Funcionário", "Mês", "Mês_Nome"])["Valor"].sum().reset_index()
 receita_mensal = receita_mensal.sort_values("Mês")
 
@@ -36,7 +38,7 @@ fig = px.bar(
     color="Funcionário",
     barmode="group",
     text_auto=True,
-    category_orders={"Mês_Nome": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"]}
+    category_orders={"Mês_Nome": ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun"]}
 )
 st.plotly_chart(fig, use_container_width=True)
 
