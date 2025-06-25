@@ -68,51 +68,33 @@ fig_mensal.update_layout(height=400, template="plotly_white")
 fig_mensal.update_traces(textposition="outside")
 st.plotly_chart(fig_mensal, use_container_width=True)
 
-# === Receita por tipo ===
-if df_func["Tipo"].nunique() > 1:
-    st.subheader("\U0001F967 Receita por Tipo (Produto ou Serviço)")
-    por_tipo = df_func.groupby("Tipo")["Valor"].sum().reset_index()
-    fig_tipo = px.pie(por_tipo, names="Tipo", values="Valor", hole=0.3)
-    fig_tipo.update_traces(textinfo="percent+label")
-    st.plotly_chart(fig_tipo, use_container_width=True)
-
-# === Tabela resumo com lógica de datas ===
-st.subheader("\U0001F4CB Resumo de Atendimentos")
+# === Distribuição Combo vs Simples ===
+st.subheader("\U0001F4D3 Distribuição: Combo vs Simples")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
-df_unicos = df_func.drop_duplicates(subset=["Grupo"])
+antes = df_func[df_func["Data"] < data_referencia].copy()
+depois = df_func[df_func["Data"] >= data_referencia].copy()
+antes["Qtd_Serv"] = 1
+depois = depois.groupby("Grupo").agg(Data=("Data", "first"), Cliente=("Cliente", "first"), Qtd_Serv=("Serviço", "count")).reset_index()
+df_completo = pd.concat([antes[["Grupo", "Data", "Cliente", "Qtd_Serv"]], depois])
+df_completo["Combo"] = df_completo["Qtd_Serv"].apply(lambda x: 1 if x > 1 else 0)
+df_completo["Simples"] = df_completo["Qtd_Serv"].apply(lambda x: 1 if x == 1 else 0)
 
-qtd_combo = df_unicos.groupby("Grupo")["Serviço"].count().gt(1).sum()
-qtd_total = len(df_unicos)
-qtd_simples = qtd_total - qtd_combo
-tique_medio = df_unicos.groupby("Grupo")["Valor"].sum().mean()
-
-resumo = pd.DataFrame({
-    "Total Atendimentos": [qtd_total],
-    "Combos": [qtd_combo],
-    "Simples": [qtd_simples],
-    "Tique Médio": [f"R$ {tique_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")]
+df_pizza = pd.DataFrame({
+    "Tipo": ["Combo", "Simples"],
+    "Quantidade": [df_completo["Combo"].sum(), df_completo["Simples"].sum()]
 })
-st.dataframe(resumo, use_container_width=True)
+fig_combo = px.pie(df_pizza, names="Tipo", values="Quantidade", hole=0.4)
+fig_combo.update_traces(textinfo="percent+label")
+st.plotly_chart(fig_combo, use_container_width=True)
 
-# === Distribuição: Combo vs Simples ===
-st.subheader("📄 Distribuição: Combo vs Simples")
-pie_combo = pd.DataFrame({"Tipo": ["Combo", "Simples"], "Qtd": [qtd_combo, qtd_simples]})
-fig_pie = px.pie(pie_combo, names="Tipo", values="Qtd", hole=0.4)
-fig_pie.update_traces(textinfo="percent+label")
-st.plotly_chart(fig_pie, use_container_width=True)
-
-# === Ticket médio por mês ===
-ticket_mensal = df_unicos.groupby(df_unicos["Data"].dt.to_period("M")).agg(
-    Receita=("Valor", "sum"),
-    Atendimentos=("Grupo", "nunique")
-).reset_index()
-ticket_mensal["Ticket Médio"] = ticket_mensal["Receita"] / ticket_mensal["Atendimentos"]
-ticket_mensal["Mês"] = ticket_mensal["Data"].astype(str)
-ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(
-    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-)
-st.subheader("\U0001F4C8 Ticket Médio por Mês")
-st.dataframe(ticket_mensal[["Mês", "Ticket Médio Formatado"]], use_container_width=True)
+# === Ticket Médio por Mês ===
+st.subheader("\U0001F4C9 Ticket Médio por Mês")
+df_completo["AnoMes"] = df_completo["Data"].dt.to_period("M").astype(str)
+df_valor = df_func.groupby("Grupo")["Valor"].sum().reset_index()
+df_completo = df_completo.merge(df_valor, on="Grupo", how="left")
+ticket_mensal = df_completo.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
+ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.dataframe(ticket_mensal, use_container_width=True)
 
 # === Exportar dados ===
 st.subheader("\U0001F4E5 Exportar dados filtrados")
