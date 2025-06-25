@@ -71,6 +71,17 @@ if funcionario_escolhido.lower() == "jpaulo":
                                   labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
         fig_mensal_comp.update_layout(height=450, template="plotly_white")
         st.plotly_chart(fig_mensal_comp, use_container_width=True)
+
+        # <<< ADICIONADO: Tabela detalhada com valores formatados >>>
+        receita_merged["Comissão (50%) do Vinicius"] = receita_merged["Vinicius"].fillna(0) * 0.5
+        receita_merged["Total (JPaulo + Comissão)"] = receita_merged["JPaulo"] + receita_merged["Comissão (50%) do Vinicius"]
+        receita_merged["Comissão (50%) do Vinicius"] = receita_merged["Comissão (50%) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+        receita_merged["JPaulo Formatado"] = receita_merged["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+        receita_merged["Total (JPaulo + Comissão)"] = receita_merged["Total (JPaulo + Comissão)"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+        tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]]
+        tabela.columns = ["Mês", "Receita JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]
+        st.dataframe(tabela, use_container_width=True)
     else:
         receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
         fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
@@ -85,6 +96,7 @@ else:
     fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True)
+
 # === Receita Bruta e Receita com comissão de Vinicius ===
 if funcionario_escolhido.lower() == "vinicius":
     bruto = df_func["Valor"].sum()
