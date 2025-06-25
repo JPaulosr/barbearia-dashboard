@@ -1,9 +1,11 @@
-
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+from unidecode import unidecode
+from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("🏦 Resumo Financeiro do Salão")
+st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
 
 @st.cache_data
 def carregar_dados():
@@ -11,68 +13,111 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year
+    df["Ano"] = df["Data"].dt.year.astype(int)
     return df
 
 df = carregar_dados()
 
+# === Lista de funcionários ===
+funcionarios = df["Funcionário"].dropna().unique().tolist()
+funcionarios.sort()
+
 # === Filtro por ano ===
-anos = sorted(df["Ano"].unique(), reverse=True)
-ano = st.selectbox("📅 Selecione o Ano", anos)
-df_ano = df[df["Ano"] == ano]
+anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
+ano_escolhido = st.selectbox("\U0001F4C5 Filtrar por ano", anos)
 
-# === Corte entre Fases ===
-data_corte = pd.to_datetime("2025-05-11")
-fase1 = df_ano[df_ano["Data"] < data_corte]
-fase2 = df_ano[df_ano["Data"] >= data_corte]
+# === Seleção de funcionário ===
+funcionario_escolhido = st.selectbox("\U0001F4CB Escolha um funcionário", funcionarios)
+df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
 
-# === Fase 1: Prestador de Serviço ===
-st.header("📘 Fase 1 — JPaulo como prestador (antes de 11/05/2025)")
+# === Filtro por tipo de serviço ===
+tipos_servico = df_func["Serviço"].dropna().unique().tolist()
+tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
+if tipo_selecionado:
+    df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
-receita_f1 = fase1[fase1["Funcionário"] == "JPaulo"]["Valor"].sum()
+# === Histórico de atendimentos ===
+st.subheader("\U0001F4C5 Histórico de Atendimentos")
+st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# Buscar despesas na Fase 1
-despesas_f1 = fase1[fase1["Tipo"].str.lower().str.contains("despesa", na=False)]
-total_despesas_f1 = despesas_f1["Valor"].sum()
+# === Receita mensal lado a lado (JPaulo vs JPaulo + Vinicius 50%) ===
+st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
+meses_ordem = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+meses_pt = {
+    "Jan": "Janeiro", "Feb": "Fevereiro", "Mar": "Março", "Apr": "Abril", "May": "Maio", "Jun": "Junho",
+    "Jul": "Julho", "Aug": "Agosto", "Sep": "Setembro", "Oct": "Outubro", "Nov": "Novembro", "Dec": "Dezembro"
+}
 
-st.markdown(f"- Receita bruta JPaulo: **R$ {receita_f1:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
-st.markdown(f"- Comissão paga ao dono (despesas): **R$ {total_despesas_f1:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
-st.markdown(f"**➡️ Resultado líquido Fase 1:** R$ {(receita_f1 - total_despesas_f1):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
+df_func["MesNome"] = df_func["Data"].dt.strftime("%b %Y").str[:3].map(meses_pt) + df_func["Data"].dt.strftime(" %Y")
+receita_jp = df_func.groupby("MesNome")["Valor"].sum().reset_index(name="JPaulo")
 
-# === Fase 2: Dono do salão ===
-st.header("📙 Fase 2 — JPaulo como dono (a partir de 11/05/2025)")
+if funcionario_escolhido.lower() == "jpaulo":
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)].copy()
+    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b").str[:3].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
+    receita_vini = df_vini.groupby("MesNome")["Valor"].sum().reset_index(name="Vinicius")
+    receita_merged = pd.merge(receita_jp, receita_vini, on="MesNome", how="left")
+    receita_merged = receita_merged[receita_merged["MesNome"].str.contains("2025")]  # Apenas ano 2025
+    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
 
-receita_jpaulo_f2 = fase2[fase2["Funcionário"] == "JPaulo"]["Valor"].sum()
-receita_vinicius_f2 = fase2[fase2["Funcionário"] == "Vinicius"]["Valor"].sum()
+    receita_melt = receita_merged.melt(id_vars="MesNome", value_vars=["JPaulo", "Com_Vinicius"], var_name="Tipo", value_name="Valor")
+    receita_melt["MesOrdem"] = receita_melt["MesNome"].str.extract(r"^(\w+)")[0].map({m: i for i, m in enumerate(meses_ordem)})
+    receita_melt = receita_melt.sort_values(["MesNome", "Tipo"]).sort_values("MesOrdem")
 
-receita_salao_f2 = receita_jpaulo_f2 + (receita_vinicius_f2 * 0.5)
+    fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
+                              labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
+    fig_mensal_comp.update_layout(height=450, template="plotly_white")
+    st.plotly_chart(fig_mensal_comp, use_container_width=True)
+else:
+    receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado", labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
+    fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
+    fig_mensal.update_traces(textposition="outside", cliponaxis=False)
+    st.plotly_chart(fig_mensal, use_container_width=True)
 
-st.subheader("📥 Receita do Salão (Fase 2)")
-st.markdown(f"- Receita JPaulo (100%): **R$ {receita_jpaulo_f2:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
-st.markdown(f"- Receita Vinicius (50%): **R$ {receita_vinicius_f2 * 0.5:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
-st.markdown(f"**➡️ Receita total salão:** R$ {receita_salao_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+# === Receita Bruta e Receita com comissão de Vinicius ===
+if funcionario_escolhido.lower() == "vinicius":
+    bruto = df_func["Valor"].sum()
+    liquido = bruto * 0.5
+    comparativo_vinicius = pd.DataFrame({
+        "Tipo de Receita": ["Bruta (100%)", "Líquida (50%)"],
+        "Valor": [bruto, liquido]
+    })
+    comparativo_vinicius["Valor Formatado"] = comparativo_vinicius["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    st.subheader("\U0001F4B8 Receita Bruta vs Líquida (Vinicius)")
+    st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
 
-# === Despesas fixas fase 2 ===
-st.subheader("📤 Despesas Fixas (Fase 2)")
-col1, col2, col3 = st.columns(3)
-aluguel = col1.number_input("Aluguel", min_value=0.0, value=800.0, step=50.0)
-agua = col2.number_input("Água", min_value=0.0, value=120.0, step=10.0)
-luz = col3.number_input("Luz", min_value=0.0, value=200.0, step=10.0)
-produtos = st.number_input("Produtos e materiais", min_value=0.0, value=300.0, step=50.0)
+elif funcionario_escolhido.lower() == "jpaulo":
+    valor_jp = df_func["Valor"].sum()
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)]
+    valor_vini_50 = df_vini["Valor"].sum() * 0.5
+    receita_total = pd.DataFrame({
+        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)", "Total"],
+        "Valor": [valor_jp, valor_vini_50, valor_jp + valor_vini_50]
+    })
+    receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    st.subheader("\U0001F4B0 Receita JPaulo: Própria + Comissão do Vinicius")
+    st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
-total_despesas_f2 = aluguel + agua + luz + produtos
+# === Ticket Médio por Mês (registros antes da data, agrupado após) ===
+st.subheader("\U0001F4C9 Ticket Médio por Mês")
+data_referencia = pd.to_datetime("2025-05-11")
+df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
+antes_ticket = df_func[df_func["Data"] < data_referencia].copy()
+antes_ticket["AnoMes"] = antes_ticket["Data"].dt.to_period("M").astype(str)
+antes_ticket = antes_ticket.groupby(["AnoMes"])["Valor"].mean().reset_index(name="Ticket Médio")
 
-# === Lucro final Fase 2 ===
-st.subheader("📈 Resultado Financeiro (Fase 2)")
-lucro_f2 = receita_salao_f2 - total_despesas_f2
-st.metric("Lucro do Salão", f"R$ {lucro_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+depois_ticket = df_func[df_func["Data"] >= data_referencia].copy()
+depois_ticket = depois_ticket.groupby(["Grupo", "Data"])["Valor"].sum().reset_index()
+depois_ticket["AnoMes"] = depois_ticket["Data"].dt.to_period("M").astype(str)
+depois_ticket = depois_ticket.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
 
-# === Total geral consolidado ===
-st.header("📊 Consolidado do Ano")
-receita_total = receita_f1 + receita_salao_f2
-despesas_total = total_despesas_f1 + total_despesas_f2
-lucro_total = receita_total - despesas_total
+ticket_mensal = pd.concat([antes_ticket, depois_ticket]).groupby("AnoMes")["Ticket Médio"].mean().reset_index()
+ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.dataframe(ticket_mensal, use_container_width=True)
 
-st.markdown(f"**Receita Total do Ano:** R$ {receita_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.markdown(f"**Despesas Totais do Ano:** R$ {despesas_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.markdown(f"**Lucro Líquido do Ano:** R$ {lucro_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+# === Exportar dados ===
+st.subheader("\U0001F4E5 Exportar dados filtrados")
+buffer = BytesIO()
+df_func.to_excel(buffer, index=False, sheet_name="Filtrado", engine="openpyxl")
+st.download_button("Baixar Excel com dados filtrados", data=buffer.getvalue(), file_name="dados_filtrados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
