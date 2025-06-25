@@ -54,15 +54,17 @@ receita_jp = df_func.groupby("MesNome")["Valor"].sum().reset_index(name="JPaulo"
 
 if funcionario_escolhido.lower() == "jpaulo":
     df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)].copy()
-    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b").str[:3].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
+    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b %Y").str[:3].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
     receita_vini = df_vini.groupby("MesNome")["Valor"].sum().reset_index(name="Vinicius")
+
     receita_merged = pd.merge(receita_jp, receita_vini, on="MesNome", how="left")
-    receita_merged = receita_merged[receita_merged["MesNome"].str.contains("2025")]  # Apenas ano 2025
+    receita_merged = receita_merged[receita_merged["MesNome"].str.contains("2025")]  # Apenas 2025
     receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
 
-    receita_melt = receita_merged.melt(id_vars="MesNome", value_vars=["JPaulo", "Com_Vinicius"], var_name="Tipo", value_name="Valor")
-    receita_melt["MesOrdem"] = receita_melt["MesNome"].str.extract(r"^(\w+)")[0].map({m: i for i, m in enumerate(meses_ordem)})
-    receita_melt = receita_melt.sort_values(["MesNome", "Tipo"]).sort_values("MesOrdem")
+    receita_merged["MesOrdem"] = receita_merged["MesNome"].str.extract(r"^(\\w+)")[0].map({m: i for i, m in enumerate(meses_ordem)})
+    receita_merged = receita_merged.sort_values("MesOrdem")
+
+    receita_melt = receita_merged.melt(id_vars=["MesNome", "MesOrdem"], value_vars=["JPaulo", "Com_Vinicius"], var_name="Tipo", value_name="Valor")
 
     fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
                               labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
