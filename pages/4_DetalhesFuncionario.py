@@ -3,13 +3,9 @@ import pandas as pd
 import plotly.express as px
 from unidecode import unidecode
 from io import BytesIO
-import locale
 
 st.set_page_config(layout="wide")
 st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
-
-# Definir local para nomes de meses em português
-locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 
 @st.cache_data
 def carregar_dados():
@@ -46,13 +42,18 @@ st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=T
 
 # === Receita mensal lado a lado (JPaulo vs JPaulo + Vinicius 50%) ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
+meses_pt = {
+    "Jan": "Janeiro", "Feb": "Fevereiro", "Mar": "Março", "Apr": "Abril", "May": "Maio", "Jun": "Junho",
+    "Jul": "Julho", "Aug": "Agosto", "Sep": "Setembro", "Oct": "Outubro", "Nov": "Novembro", "Dec": "Dezembro"
+}
+
 df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
-df_func["MesNome"] = df_func["Data"].dt.strftime("%b %Y").str.capitalize()
+df_func["MesNome"] = df_func["Data"].dt.strftime("%b %Y").str[:3].map(meses_pt) + df_func["Data"].dt.strftime(" %Y")
 receita_jp = df_func.groupby("MesNome")["Valor"].sum().reset_index(name="JPaulo")
 
 if funcionario_escolhido.lower() == "jpaulo":
     df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)].copy()
-    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b %Y").str.capitalize()
+    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b").str[:3].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
     receita_vini = df_vini.groupby("MesNome")["Valor"].sum().reset_index(name="Vinicius")
     receita_merged = pd.merge(receita_jp, receita_vini, on="MesNome", how="left")
     receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
