@@ -42,6 +42,7 @@ st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=T
 
 # === Receita mensal lado a lado (JPaulo vs JPaulo + Vinicius 50%) ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
+meses_ordem = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 meses_pt = {
     "Jan": "Janeiro", "Feb": "Fevereiro", "Mar": "Março", "Apr": "Abril", "May": "Maio", "Jun": "Junho",
     "Jul": "Julho", "Aug": "Agosto", "Sep": "Setembro", "Oct": "Outubro", "Nov": "Novembro", "Dec": "Dezembro"
@@ -56,9 +57,12 @@ if funcionario_escolhido.lower() == "jpaulo":
     df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b").str[:3].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
     receita_vini = df_vini.groupby("MesNome")["Valor"].sum().reset_index(name="Vinicius")
     receita_merged = pd.merge(receita_jp, receita_vini, on="MesNome", how="left")
+    receita_merged = receita_merged[receita_merged["MesNome"].str.contains("2025")]  # Apenas ano 2025
     receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
 
     receita_melt = receita_merged.melt(id_vars="MesNome", value_vars=["JPaulo", "Com_Vinicius"], var_name="Tipo", value_name="Valor")
+    receita_melt["MesOrdem"] = receita_melt["MesNome"].str.extract(r"^(\w+)")[0].map({m: i for i, m in enumerate(meses_ordem)})
+    receita_melt = receita_melt.sort_values(["MesNome", "Tipo"]).sort_values("MesOrdem")
 
     fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
                               labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
