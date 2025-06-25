@@ -29,6 +29,12 @@ ano_escolhido = st.selectbox("\U0001F4C5 Filtrar por ano", anos)
 funcionario_escolhido = st.selectbox("\U0001F4CB Escolha um funcionário", funcionarios)
 df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
 
+# === Filtro por tipo de serviço ===
+tipos_servico = df_func["Serviço"].dropna().unique().tolist()
+tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
+if tipo_selecionado:
+    df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
+
 # === Normalizar nomes para filtrar genéricos ===
 nomes_excluir = ["boliviano", "brasileiro", "menino"]
 def limpar_nome(nome):
@@ -46,7 +52,6 @@ st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
 data_referencia = pd.to_datetime("2025-05-11")
 df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
 
-# Lógica corrigida para agrupamento correto
 antes_ref = df_func[df_func["Data"] < data_referencia].copy()
 apos_ref = df_func[df_func["Data"] >= data_referencia].copy()
 
@@ -104,3 +109,32 @@ st.subheader("\U0001F488 Serviços mais executados")
 servicos = df_func["Serviço"].value_counts().reset_index()
 servicos.columns = ["Serviço", "Quantidade"]
 st.dataframe(servicos, use_container_width=True)
+
+# === Comparativo entre funcionários ===
+st.subheader("\U0001F91D Comparativo entre dois funcionários")
+f1, f2 = st.columns(2)
+with f1:
+    func1 = st.selectbox("Funcionário 1", funcionarios, key="f1")
+with f2:
+    func2 = st.selectbox("Funcionário 2", funcionarios, index=1 if funcionarios[0] == func1 else 0, key="f2")
+
+df_comp = df[(df["Funcionário"].isin([func1, func2])) & (df["Ano"] == ano_escolhido)].copy()
+df_comp["AnoMes"] = df_comp["Data"].dt.to_period("M").astype(str)
+
+data_ref = pd.to_datetime("2025-05-11")
+antes = df_comp[df_comp["Data"] < data_ref].copy()
+depois = df_comp[df_comp["Data"] >= data_ref].copy()
+antes["Grupo"] = antes["Data"].astype(str) + "_" + antes["Cliente"]
+depois["Grupo"] = depois["Data"].dt.strftime("%Y-%m-%d") + "_" + depois["Cliente"]
+depois = depois.drop_duplicates(subset=["Grupo"])
+
+df_comp_final = pd.concat([antes, depois])
+receita_cmp = df_comp_final.groupby(["Funcionário", "AnoMes"])["Valor"].sum().reset_index()
+fig_cmp = px.bar(receita_cmp, x="AnoMes", y="Valor", color="Funcionário", barmode="group", text_auto=True)
+fig_cmp.update_layout(title="Comparativo Mensal de Receita", template="plotly_white")
+st.plotly_chart(fig_cmp, use_container_width=True)
+
+# === Exportar dados ===
+st.subheader("\U0001F4E5 Exportar dados filtrados")
+excel = df_func.to_excel(index=False, sheet_name="Filtrado", engine="openpyxl")
+st.download_button("Baixar Excel com dados filtrados", data=excel, file_name="dados_filtrados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
