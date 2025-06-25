@@ -131,22 +131,34 @@ for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
 
 # === Clientes em comum ===
 st.subheader("🔄 Clientes Atendidos por Ambos")
-df_atendimentos_corrigido = df_filtrado.groupby(["Cliente", "Data", "Funcionário"]).agg(
-    Receita=("Valor", "sum")
+
+df_comuns = df_filtrado.groupby(["Cliente", "Funcionário"]).agg(
+    Qtd_Atendimentos=("Data", "nunique"),
+    Receita_Total=("Valor", "sum")
 ).reset_index()
-df_comuns = df_atendimentos_corrigido.groupby(["Cliente", "Funcionário"]).agg(
-    Qtd_Atendimentos=("Data", "count"),
-    Receita_Total=("Receita", "sum")
-).reset_index()
+
+clientes_ambos = df_comuns["Cliente"].value_counts()
+clientes_ambos = clientes_ambos[clientes_ambos == 2].index.tolist()
+df_comuns = df_comuns[df_comuns["Cliente"].isin(clientes_ambos)]
+
 df_pivot = df_comuns.pivot(index="Cliente", columns="Funcionário", values=["Qtd_Atendimentos", "Receita_Total"])
-df_pivot = df_pivot.dropna()
 df_pivot.columns = [f"{a}_{b}" for a, b in df_pivot.columns]
+df_pivot = df_pivot.dropna()
+
 df_pivot["Total_Receita"] = df_pivot[["Receita_Total_JPaulo", "Receita_Total_Vinicius"]].sum(axis=1)
 df_pivot["Total_Receita_Formatado"] = df_pivot["Total_Receita"].apply(
     lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 )
+
+df_pivot["Diferença (JPaulo - Vinicius)"] = df_pivot["Receita_Total_JPaulo"] - df_pivot["Receita_Total_Vinicius"]
+df_pivot["Diferença Formatada"] = df_pivot["Diferença (JPaulo - Vinicius)"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
+
 df_pivot = df_pivot.sort_values("Total_Receita", ascending=False)
+
 st.dataframe(df_pivot[[
     "Qtd_Atendimentos_JPaulo", "Qtd_Atendimentos_Vinicius",
-    "Receita_Total_JPaulo", "Receita_Total_Vinicius", "Total_Receita_Formatado"
+    "Receita_Total_JPaulo", "Receita_Total_Vinicius",
+    "Total_Receita_Formatado", "Diferença Formatada"
 ]], use_container_width=True)
