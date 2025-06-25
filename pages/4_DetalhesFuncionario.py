@@ -109,7 +109,23 @@ elif funcionario_escolhido.lower() == "jpaulo":
     st.subheader("\U0001F4B0 Receita JPaulo: Própria + Comissão do Vinicius")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
-# === Ticket Médio por Mês (registros antes da data, agrupado após) ===
+
+
+    # === Tabela: Comissão mensal recebida de Vinicius (50%) ===
+    if ano_escolhido == 2025:
+        df_vini_mes = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == 2025)].copy()
+        df_vini_mes["MesNome"] = df_vini_mes["Data"].dt.strftime("%B %Y")
+        df_vini_mes["MesNome"] = df_vini_mes["MesNome"].str.capitalize()
+        comissao_mes = df_vini_mes.groupby("MesNome")["Valor"].sum().reset_index()
+        comissao_mes["Comissão (50%) do Vinicius"] = comissao_mes["Valor"] * 0.5
+        comissao_mes = comissao_mes[["MesNome", "Comissão (50%) do Vinicius"]]
+        comissao_mes.columns = ["Mês", "Comissão (50%) do Vinicius"]
+        comissao_mes["Comissão (50%) do Vinicius"] = comissao_mes["Comissão (50%) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+        st.subheader("📄 Comissão Mensal Recebida de Vinicius (50%)")
+        st.dataframe(comissao_mes, use_container_width=True)
+
+    # === Ticket Médio por Mês (registros antes da data, agrupado após) ===
 st.subheader("\U0001F4C9 Ticket Médio por Mês")
 data_referencia = pd.to_datetime("2025-05-11")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
