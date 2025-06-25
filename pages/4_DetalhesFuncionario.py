@@ -36,62 +36,32 @@ tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
 if tipo_selecionado:
     df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
-# === Normalizar nomes para filtrar genéricos ===
-nomes_excluir = ["boliviano", "brasileiro", "menino"]
-def limpar_nome(nome):
-    nome_limpo = unidecode(str(nome).lower())
-    return not any(g in nome_limpo for g in nomes_excluir)
-
-# Histórico de atendimentos (sem remover nomes genéricos)
+# === Histórico de atendimentos ===
 st.subheader("\U0001F4C5 Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# Receita mensal correta (sem lógica de agrupamento)
+# === Receita mensal ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
 df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
 receita_mensal = df_func.groupby("AnoMes")["Valor"].sum().reset_index()
 receita_mensal["Valor Formatado"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
-fig_mensal.update_layout(height=400, template="plotly_white")
-fig_mensal.update_traces(textposition="outside")
+fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
+fig_mensal.update_traces(textposition="outside", cliponaxis=False)
 st.plotly_chart(fig_mensal, use_container_width=True)
 
-# === Distribuição Combo vs Simples ===
-st.subheader("\U0001F4D3 Distribuição: Combo vs Simples")
-data_referencia = pd.to_datetime("2025-05-11")
-df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
-antes = df_func[df_func["Data"] < data_referencia].copy()
-depois = df_func[df_func["Data"] >= data_referencia].copy()
-antes["Qtd_Serv"] = 1
-depois = depois.groupby("Grupo").agg(Data=("Data", "first"), Cliente=("Cliente", "first"), Qtd_Serv=("Serviço", "count")).reset_index()
-df_completo = pd.concat([antes[["Grupo", "Data", "Cliente", "Qtd_Serv"]], depois])
-df_completo["Combo"] = df_completo["Qtd_Serv"].apply(lambda x: 1 if x > 1 else 0)
-df_completo["Simples"] = df_completo["Qtd_Serv"].apply(lambda x: 1 if x == 1 else 0)
-
-pizza = pd.DataFrame({
-    "Tipo": ["Combo", "Simples"],
-    "Quantidade": [df_completo["Combo"].sum(), df_completo["Simples"].sum()]
-})
-fig_pizza = px.pie(pizza, names="Tipo", values="Quantidade", hole=0.4)
-fig_pizza.update_traces(textinfo="percent+label")
-st.plotly_chart(fig_pizza, use_container_width=True)
-
-# === Ticket Médio por Mês (registros antes da data, agrupado após) ===
-st.subheader("\U0001F4C9 Ticket Médio por Mês")
-antes_ticket = df_func[df_func["Data"] < data_referencia].copy()
-antes_ticket["AnoMes"] = antes_ticket["Data"].dt.to_period("M").astype(str)
-antes_ticket = antes_ticket.groupby(["AnoMes"])["Valor"].mean().reset_index(name="Ticket Médio")
-
-depois_ticket = df_func[df_func["Data"] >= data_referencia].copy()
-depois_ticket["Grupo"] = depois_ticket["Data"].dt.strftime("%Y-%m-%d") + "_" + depois_ticket["Cliente"]
-depois_ticket = depois_ticket.groupby(["Grupo", "Data"])["Valor"].sum().reset_index()
-depois_ticket["AnoMes"] = depois_ticket["Data"].dt.to_period("M").astype(str)
-depois_ticket = depois_ticket.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
-
-ticket_mensal = pd.concat([antes_ticket, depois_ticket]).groupby("AnoMes")["Ticket Médio"].mean().reset_index()
-ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.dataframe(ticket_mensal, use_container_width=True)
+# === Se funcionário for Vinicius, mostrar bruto e líquido ===
+if funcionario_escolhido.lower() == "vinicius":
+    bruto = df_func["Valor"].sum()
+    liquido = bruto * 0.5
+    comparativo_vinicius = pd.DataFrame({
+        "Tipo de Receita": ["Bruta (100%)", "Líquida (50%)"],
+        "Valor": [bruto, liquido]
+    })
+    comparativo_vinicius["Valor Formatado"] = comparativo_vinicius["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    st.subheader("\U0001F4B8 Receita Bruta vs Líquida (Vinicius)")
+    st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
 
 # === Exportar dados ===
 st.subheader("\U0001F4E5 Exportar dados filtrados")
