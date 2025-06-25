@@ -17,7 +17,7 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# === Filtros por Ano e Mês ===
+# === Sidebar: Filtros por Ano e Meses múltiplos ===
 st.sidebar.header("🎛️ Filtros")
 anos_disponiveis = sorted(df["Ano"].dropna().unique(), reverse=True)
 ano_escolhido = st.sidebar.selectbox("🗓️ Escolha o Ano", anos_disponiveis)
@@ -27,12 +27,17 @@ meses_pt = {
     5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
     9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
+
 meses_disponiveis = sorted(df[df["Ano"] == ano_escolhido]["Mês"].dropna().unique())
-mes_nome_escolhido = st.sidebar.selectbox("📆 Escolha o Mês", [meses_pt[m] for m in meses_disponiveis])
-mes_num = [k for k, v in meses_pt.items() if v == mes_nome_escolhido][0]
+mes_opcoes = [meses_pt[m] for m in meses_disponiveis]
+meses_selecionados = st.sidebar.multiselect("📆 Selecione os Meses (opcional)", mes_opcoes, default=mes_opcoes)
 
 # === Aplicar filtros ===
-df = df[(df["Ano"] == ano_escolhido) & (df["Mês"] == mes_num)]
+if meses_selecionados:
+    meses_numeros = [k for k, v in meses_pt.items() if v in meses_selecionados]
+    df = df[(df["Ano"] == ano_escolhido) & (df["Mês"].isin(meses_numeros))]
+else:
+    df = df[df["Ano"] == ano_escolhido]
 
 # === Indicadores principais ===
 receita_total = df["Valor"].sum()
