@@ -41,12 +41,25 @@ df_func = df_func[df_func["Cliente"].apply(limpar_nome)]
 st.subheader("\U0001F4C5 Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# === Receita mensal ===
+# === Receita mensal com lógica de datas ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
-df_func["AnoMes"] = df_func["Data"].dt.to_period("M")
-mensal = df_func.groupby("AnoMes")["Valor"].sum().reset_index()
-mensal["AnoMes"] = mensal["AnoMes"].astype(str)
+data_referencia = pd.to_datetime("2025-05-11")
+df_antes = df_func[df_func["Data"] < data_referencia]
+df_depois = df_func[df_func["Data"] >= data_referencia]
+
+agrup_antes = df_antes.copy()
+agrup_antes = agrup_antes.groupby(df_antes["Data"].dt.to_period("M")).agg(Valor=("Valor", "sum"))
+agrup_antes.index = agrup_antes.index.astype(str)
+
+agrup_depois = df_depois.groupby([df_depois["Data"].dt.to_period("M"), "Cliente"])["Valor"].sum().reset_index()
+agrup_depois = agrup_depois.groupby("Data")["Valor"].sum().reset_index()
+agrup_depois = agrup_depois.rename(columns={"Data": "AnoMes"})
+agrup_depois["AnoMes"] = agrup_depois["AnoMes"].astype(str)
+
+mensal = pd.concat([agrup_antes.reset_index().rename(columns={"Data": "AnoMes"}), agrup_depois], ignore_index=True)
+mensal = mensal.groupby("AnoMes")["Valor"].sum().reset_index()
 mensal["Valor Formatado"] = mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
 fig_mensal = px.bar(mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
 fig_mensal.update_layout(height=400, template="plotly_white")
 fig_mensal.update_traces(textposition="outside")
@@ -62,10 +75,6 @@ if df_func["Tipo"].nunique() > 1:
 
 # === Tabela resumo com lógica de datas ===
 st.subheader("\U0001F4CB Resumo de Atendimentos")
-data_referencia = pd.to_datetime("2025-05-11")
-df_antes = df_func[df_func["Data"] < data_referencia]
-df_depois = df_func[df_func["Data"] >= data_referencia]
-
 grupo_depois = df_depois.groupby(["Data", "Cliente"]).agg(Qtd_Serviços=("Serviço", "count"), Valor_Dia=("Valor", "sum")).reset_index()
 grupo_antes = df_antes.copy()
 grupo_antes["Qtd_Serviços"] = 1
@@ -86,7 +95,7 @@ resumo = pd.DataFrame({
 })
 st.dataframe(resumo, use_container_width=True)
 
-# === Gráfico de distribuição por cliente (top 10) ===
+# === Gráfico de distribuição por cliente (top 10 em barras) ===
 st.subheader("\U0001F465 Distribuição de Atendimentos por Cliente")
 df_func_unicos = pd.concat([
     df_antes,
