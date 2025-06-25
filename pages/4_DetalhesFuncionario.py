@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from unidecode import unidecode
+from io import BytesIO
 
 st.set_page_config(layout="wide")
 st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
@@ -41,26 +42,14 @@ def limpar_nome(nome):
     nome_limpo = unidecode(str(nome).lower())
     return not any(g in nome_limpo for g in nomes_excluir)
 
-df_func = df_func[df_func["Cliente"].apply(limpar_nome)]
-
-# === Histórico de atendimentos ===
+# Histórico de atendimentos (sem remover nomes genéricos)
 st.subheader("\U0001F4C5 Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# === Receita mensal com lógica de datas ===
+# Receita mensal correta (sem lógica de agrupamento)
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
-data_referencia = pd.to_datetime("2025-05-11")
 df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
-
-antes_ref = df_func[df_func["Data"] < data_referencia].copy()
-apos_ref = df_func[df_func["Data"] >= data_referencia].copy()
-
-antes_ref["Grupo"] = antes_ref["Data"].astype(str) + "_" + antes_ref["Cliente"]
-apos_ref["Grupo"] = apos_ref["Data"].dt.strftime("%Y-%m-%d") + "_" + apos_ref["Cliente"]
-apos_ref = apos_ref.drop_duplicates(subset=["Grupo"])
-
-df_mensal = pd.concat([antes_ref, apos_ref])
-receita_mensal = df_mensal.groupby("AnoMes")["Valor"].sum().reset_index()
+receita_mensal = df_func.groupby("AnoMes")["Valor"].sum().reset_index()
 receita_mensal["Valor Formatado"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
@@ -70,6 +59,7 @@ st.plotly_chart(fig_mensal, use_container_width=True)
 
 # === Distribuição Combo vs Simples ===
 st.subheader("\U0001F4D3 Distribuição: Combo vs Simples")
+data_referencia = pd.to_datetime("2025-05-11")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
 antes = df_func[df_func["Data"] < data_referencia].copy()
 depois = df_func[df_func["Data"] >= data_referencia].copy()
@@ -79,15 +69,15 @@ df_completo = pd.concat([antes[["Grupo", "Data", "Cliente", "Qtd_Serv"]], depois
 df_completo["Combo"] = df_completo["Qtd_Serv"].apply(lambda x: 1 if x > 1 else 0)
 df_completo["Simples"] = df_completo["Qtd_Serv"].apply(lambda x: 1 if x == 1 else 0)
 
-df_pizza = pd.DataFrame({
+pizza = pd.DataFrame({
     "Tipo": ["Combo", "Simples"],
     "Quantidade": [df_completo["Combo"].sum(), df_completo["Simples"].sum()]
 })
-fig_combo = px.pie(df_pizza, names="Tipo", values="Quantidade", hole=0.4)
-fig_combo.update_traces(textinfo="percent+label")
-st.plotly_chart(fig_combo, use_container_width=True)
+fig_pizza = px.pie(pizza, names="Tipo", values="Quantidade", hole=0.4)
+fig_pizza.update_traces(textinfo="percent+label")
+st.plotly_chart(fig_pizza, use_container_width=True)
 
-# === Ticket Médio por Mês ===
+# === Ticket Médio por Mês (usando df_completo) ===
 st.subheader("\U0001F4C9 Ticket Médio por Mês")
 df_completo["AnoMes"] = df_completo["Data"].dt.to_period("M").astype(str)
 df_valor = df_func.groupby("Grupo")["Valor"].sum().reset_index()
@@ -98,5 +88,6 @@ st.dataframe(ticket_mensal, use_container_width=True)
 
 # === Exportar dados ===
 st.subheader("\U0001F4E5 Exportar dados filtrados")
-excel = df_func.to_excel(index=False, sheet_name="Filtrado", engine="openpyxl")
-st.download_button("Baixar Excel com dados filtrados", data=excel, file_name="dados_filtrados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+buffer = BytesIO()
+df_func.to_excel(buffer, index=False, sheet_name="Filtrado", engine="openpyxl")
+st.download_button("Baixar Excel com dados filtrados", data=buffer.getvalue(), file_name="dados_filtrados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
