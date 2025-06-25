@@ -44,23 +44,21 @@ st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=T
 # === Receita mensal com lógica de datas ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
 data_referencia = pd.to_datetime("2025-05-11")
-df_antes = df_func[df_func["Data"] < data_referencia]
-df_depois = df_func[df_func["Data"] >= data_referencia]
+df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
 
-agrup_antes = df_antes.copy()
-agrup_antes = agrup_antes.groupby(df_antes["Data"].dt.to_period("M")).agg(Valor=("Valor", "sum"))
-agrup_antes.index = agrup_antes.index.astype(str)
+# Lógica corrigida para agrupamento correto
+antes_ref = df_func[df_func["Data"] < data_referencia].copy()
+apos_ref = df_func[df_func["Data"] >= data_referencia].copy()
 
-agrup_depois = df_depois.groupby([df_depois["Data"].dt.to_period("M"), "Cliente"])["Valor"].sum().reset_index()
-agrup_depois = agrup_depois.groupby("Data")["Valor"].sum().reset_index()
-agrup_depois = agrup_depois.rename(columns={"Data": "AnoMes"})
-agrup_depois["AnoMes"] = agrup_depois["AnoMes"].astype(str)
+antes_ref["Grupo"] = antes_ref["Data"].astype(str) + "_" + antes_ref["Cliente"]
+apos_ref["Grupo"] = apos_ref["Data"].dt.strftime("%Y-%m-%d") + "_" + apos_ref["Cliente"]
+apos_ref = apos_ref.drop_duplicates(subset=["Grupo"])
 
-mensal = pd.concat([agrup_antes.reset_index().rename(columns={"Data": "AnoMes"}), agrup_depois], ignore_index=True)
-mensal = mensal.groupby("AnoMes")["Valor"].sum().reset_index()
-mensal["Valor Formatado"] = mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+df_mensal = pd.concat([antes_ref, apos_ref])
+receita_mensal = df_mensal.groupby("AnoMes")["Valor"].sum().reset_index()
+receita_mensal["Valor Formatado"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-fig_mensal = px.bar(mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
+fig_mensal = px.bar(receita_mensal, x="AnoMes", y="Valor", text="Valor Formatado", labels={"Valor": "Receita (R$)", "AnoMes": "Ano-Mês"})
 fig_mensal.update_layout(height=400, template="plotly_white")
 fig_mensal.update_traces(textposition="outside")
 st.plotly_chart(fig_mensal, use_container_width=True)
@@ -75,17 +73,13 @@ if df_func["Tipo"].nunique() > 1:
 
 # === Tabela resumo com lógica de datas ===
 st.subheader("\U0001F4CB Resumo de Atendimentos")
-grupo_depois = df_depois.groupby(["Data", "Cliente"]).agg(Qtd_Serviços=("Serviço", "count"), Valor_Dia=("Valor", "sum")).reset_index()
-grupo_antes = df_antes.copy()
-grupo_antes["Qtd_Serviços"] = 1
-grupo_antes["Valor_Dia"] = grupo_antes["Valor"]
-grupo_antes = grupo_antes[["Data", "Cliente", "Qtd_Serviços", "Valor_Dia"]]
+df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
+df_unicos = df_func.drop_duplicates(subset=["Grupo"])
 
-grupo_total = pd.concat([grupo_antes, grupo_depois], ignore_index=True)
-qtd_combo = grupo_total[grupo_total["Qtd_Serviços"] > 1].shape[0]
-qtd_simples = grupo_total[grupo_total["Qtd_Serviços"] == 1].shape[0]
-tique_medio = grupo_total["Valor_Dia"].mean()
-qtd_total = qtd_combo + qtd_simples
+qtd_combo = df_unicos.groupby("Grupo")["Serviço"].count().gt(1).sum()
+qtd_total = len(df_unicos)
+qtd_simples = qtd_total - qtd_combo
+tique_medio = df_unicos.groupby("Grupo")["Valor"].sum().mean()
 
 resumo = pd.DataFrame({
     "Total Atendimentos": [qtd_total],
@@ -97,11 +91,7 @@ st.dataframe(resumo, use_container_width=True)
 
 # === Gráfico de distribuição por cliente (top 10 em barras) ===
 st.subheader("\U0001F465 Distribuição de Atendimentos por Cliente")
-df_func_unicos = pd.concat([
-    df_antes,
-    df_depois.drop_duplicates(subset=["Data", "Cliente"])
-])
-atend_cliente = df_func_unicos["Cliente"].value_counts().reset_index()
+atend_cliente = df_unicos["Cliente"].value_counts().reset_index()
 atend_cliente.columns = ["Cliente", "Atendimentos"]
 top_10_clientes = atend_cliente.head(10)
 fig_clientes = px.bar(top_10_clientes, x="Cliente", y="Atendimentos", text="Atendimentos", labels={"Atendimentos": "Nº Atendimentos"})
