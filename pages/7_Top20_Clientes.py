@@ -4,11 +4,11 @@ import plotly.express as px
 from unidecode import unidecode
 
 st.set_page_config(layout="wide")
-st.title("\U0001F3C6 Top 20 Clientes")
+st.title("🏆 Top 20 Clientes")
 
-# Filtros
-ano = st.selectbox("\U0001F4C5 Filtrar por ano", options=[2023, 2024, 2025], index=2)
-funcionarios = st.multiselect("\U0001F465 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
+# Filtros iniciais
+ano = st.selectbox("📅 Filtrar por ano", options=[2023, 2024, 2025], index=2)
+funcionarios = st.multiselect("👥 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
 
 @st.cache_data
 def carregar_dados():
@@ -23,8 +23,6 @@ def carregar_dados():
 
 df = carregar_dados()
 df = df[df["Ano"] == ano]
-
-# Filtra funcionários
 df = df[df["Funcionário"].isin(funcionarios)]
 
 # Remove nomes genéricos
@@ -35,14 +33,13 @@ def limpar_nome(nome):
 
 df = df[df["Cliente"].apply(limpar_nome)]
 
-# Agrupa por Cliente + Data para contagem correta de atendimentos e tipo (combo/simples)
+# Agrupa Cliente + Data
 agrupado = df.groupby(["Cliente", "Data"]).agg(
     Qtd_Serviços=('Serviço', 'count'),
     Qtd_Produtos=('Tipo', lambda x: (x == "Produto").sum()),
     Valor_Total=('Valor', 'sum')
 ).reset_index()
 
-# Identifica combos e simples por cliente e data
 agrupado["Qtd_Combo"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
 agrupado["Qtd_Simples"] = agrupado["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
 
@@ -56,23 +53,46 @@ def top_20_por(df):
         Qtd_Simples=("Qtd_Simples", "sum"),
         Valor_Total=("Valor_Total", "sum")
     ).reset_index()
+
     resumo["Valor_Formatado"] = resumo["Valor_Total"].apply(lambda x: f"R$ {x:,.2f}".replace(".", "x").replace(",", ".").replace("x", ","))
+    
+    # Categorias personalizadas
+    def categoria_cliente(valor):
+        if valor > 200:
+            return "🥇 VIP"
+        elif valor >= 50:
+            return "🥈 Frequente"
+        else:
+            return "🥉 Novato"
+    
+    resumo["Categoria"] = resumo["Valor_Total"].apply(categoria_cliente)
+    
     resumo = resumo.sort_values(by="Valor_Total", ascending=False).reset_index(drop=True)
     resumo["Posição"] = resumo.index + 1
     return resumo
 
 resumo_geral = top_20_por(agrupado)
 
-# Pesquisa por nome
-st.subheader("\U0001F3AF Top 20 Clientes - Geral")
-filtro = st.text_input("\U0001F50D Pesquisar cliente", "")
-resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro, case=False)]
+# Filtro por nome
+st.subheader("🎯 Top 20 Clientes - Geral")
+filtro_nome = st.text_input("🔍 Pesquisar cliente", "")
+resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro_nome, case=False)]
 
-st.dataframe(resumo_filtrado[["Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", "Valor_Formatado"]], use_container_width=True)
+# Filtro por categoria
+categorias_disponiveis = resumo_geral["Categoria"].unique().tolist()
+filtro_categoria = st.multiselect("🏅 Filtrar por categoria", categorias_disponiveis, default=categorias_disponiveis)
+resumo_filtrado = resumo_filtrado[resumo_filtrado["Categoria"].isin(filtro_categoria)]
 
-# Gráfico dinâmico
-st.subheader("\U0001F4CA Top 5 por Receita")
-if filtro and len(resumo_filtrado) == 1:
+# Exibir tabela
+st.dataframe(resumo_filtrado[[
+    "Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", 
+    "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", 
+    "Valor_Formatado", "Categoria"
+]], use_container_width=True)
+
+# Gráfico Top 5
+st.subheader("📊 Top 5 Clientes por Receita")
+if filtro_nome and len(resumo_filtrado) == 1:
     cliente = resumo_filtrado.iloc[0]["Cliente"]
     df_cliente = df[df["Cliente"].str.lower() == cliente.lower()]
     grafico_detalhado = df_cliente.groupby(["Serviço", "Mês_Nome"])["Valor"].sum().reset_index()
@@ -87,18 +107,25 @@ if filtro and len(resumo_filtrado) == 1:
         labels={"Valor": "Receita (R$)"}
     )
 else:
-    top5 = resumo_geral.head(5)
-    fig = px.bar(top5, x="Cliente", y="Valor_Total", title="Top 5 Clientes por Receita", text_auto='.2s')
+    top5 = resumo_filtrado.head(5)
+    fig = px.bar(
+        top5,
+        y="Cliente",
+        x="Valor_Total",
+        orientation="h",
+        title="Top 5 Clientes por Receita",
+        text=top5["Valor_Total"].apply(lambda x: f"R$ {x:,.0f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+        color="Cliente"
+    )
 
 st.plotly_chart(fig, use_container_width=True)
 
-# === Comparativo entre dois clientes ===
-st.subheader("\u2696\ufe0f Comparar dois clientes")
-
-clientes_disponiveis = resumo_geral["Cliente"].tolist()
+# Comparativo entre dois clientes
+st.subheader("⚖️ Comparar dois clientes")
+clientes_disponiveis = resumo_filtrado["Cliente"].tolist()
 col1, col2 = st.columns(2)
-c1 = col1.selectbox("\U0001F464 Cliente 1", clientes_disponiveis)
-c2 = col2.selectbox("\U0001F464 Cliente 2", clientes_disponiveis, index=1 if len(clientes_disponiveis) > 1 else 0)
+c1 = col1.selectbox("👤 Cliente 1", clientes_disponiveis)
+c2 = col2.selectbox("👤 Cliente 2", clientes_disponiveis, index=1 if len(clientes_disponiveis) > 1 else 0)
 
 df_c1 = df[df["Cliente"] == c1]
 df_c2 = df[df["Cliente"] == c2]
@@ -124,10 +151,10 @@ st.dataframe(resumo_geral_comp, use_container_width=True)
 st.markdown("**Serviços Realizados por Tipo**")
 st.dataframe(servicos_comparativo, use_container_width=True)
 
-# === Navegar para detalhamento ===
-st.subheader("\U0001F50D Ver detalhamento de um cliente")
-cliente_escolhido = st.selectbox("\U0001F4CC Escolha um cliente", clientes_disponiveis)
+# Navegar para detalhamento
+st.subheader("🔍 Ver detalhamento de um cliente")
+cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis)
 
-if st.button("\u27a1 Ver detalhes"):
+if st.button("➡ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
     st.switch_page("pages/2_DetalhesCliente.py")
