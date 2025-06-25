@@ -1,10 +1,9 @@
+
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("\U0001F9D1\u200d\U0001F4BC Detalhes do Funcionário")
+st.title("🏦 Resumo Financeiro do Salão")
 
 @st.cache_data
 def carregar_dados():
@@ -12,76 +11,68 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Ano"] = df["Data"].dt.year
     return df
 
 df = carregar_dados()
 
-# === Lista de funcionários ===
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-funcionarios.sort()
-
 # === Filtro por ano ===
-anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
-ano_escolhido = st.selectbox("\U0001F4C5 Filtrar por ano", anos)
+anos = sorted(df["Ano"].unique(), reverse=True)
+ano = st.selectbox("📅 Selecione o Ano", anos)
+df_ano = df[df["Ano"] == ano]
 
-# === Seleção de funcionário ===
-funcionario_escolhido = st.selectbox("\U0001F4CB Escolha um funcionário", funcionarios)
-df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
+# === Corte entre Fases ===
+data_corte = pd.to_datetime("2025-05-11")
+fase1 = df_ano[df_ano["Data"] < data_corte]
+fase2 = df_ano[df_ano["Data"] >= data_corte]
 
-# === Filtro por tipo de serviço ===
-tipos_servico = df_func["Serviço"].dropna().unique().tolist()
-tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
-if tipo_selecionado:
-    df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
+# === Fase 1: Prestador de Serviço ===
+st.header("📘 Fase 1 — JPaulo como prestador (antes de 11/05/2025)")
 
-# === Histórico de atendimentos ===
-st.subheader("\U0001F4C5 Histórico de Atendimentos")
-st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
+receita_f1 = fase1[fase1["Funcionário"] == "JPaulo"]["Valor"].sum()
 
-# === Receita mensal ===
-st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
+# Buscar despesas na Fase 1
+despesas_f1 = fase1[fase1["Tipo"].str.lower().str.contains("despesa", na=False)]
+total_despesas_f1 = despesas_f1["Valor"].sum()
 
-meses_pt = {
-    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-}
+st.markdown(f"- Receita bruta JPaulo: **R$ {receita_f1:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
+st.markdown(f"- Comissão paga ao dono (despesas): **R$ {total_despesas_f1:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
+st.markdown(f"**➡️ Resultado líquido Fase 1:** R$ {(receita_f1 - total_despesas_f1):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-df_func["Mes"] = df_func["Data"].dt.month
-df_func["MesNome"] = df_func["Mes"].map(meses_pt)
-receita_jp = df_func.groupby(["Mes", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
-receita_jp = receita_jp.sort_values("Mes")
+# === Fase 2: Dono do salão ===
+st.header("📙 Fase 2 — JPaulo como dono (a partir de 11/05/2025)")
 
-if funcionario_escolhido.lower() == "jpaulo":
-    if ano_escolhido < 2025:
-        receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-        fig_jp = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
-                        labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
-        fig_jp.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
-        fig_jp.update_traces(textposition="outside", cliponaxis=False)
-        st.plotly_chart(fig_jp, use_container_width=True)
-    elif ano_escolhido == 2025:
-        df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == 2025)].copy()
-        df_vini["Mes"] = df_vini["Data"].dt.month
-        df_vini["MesNome"] = df_vini["Mes"].map(meses_pt)
-        receita_vini = df_vini.groupby(["Mes", "MesNome"])["Valor"].sum().reset_index(name="Vinicius")
+receita_jpaulo_f2 = fase2[fase2["Funcionário"] == "JPaulo"]["Valor"].sum()
+receita_vinicius_f2 = fase2[fase2["Funcionário"] == "Vinicius"]["Valor"].sum()
 
-        receita_merged = pd.merge(receita_jp, receita_vini, on=["Mes", "MesNome"], how="left")
-        receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
+receita_salao_f2 = receita_jpaulo_f2 + (receita_vinicius_f2 * 0.5)
 
-        receita_melt = receita_merged.melt(id_vars=["Mes", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
-                                           var_name="Tipo", value_name="Valor")
-        receita_melt = receita_melt.sort_values("Mes")
+st.subheader("📥 Receita do Salão (Fase 2)")
+st.markdown(f"- Receita JPaulo (100%): **R$ {receita_jpaulo_f2:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
+st.markdown(f"- Receita Vinicius (50%): **R$ {receita_vinicius_f2 * 0.5:,.2f}**".replace(",", "v").replace(".", ",").replace("v", "."))
+st.markdown(f"**➡️ Receita total salão:** R$ {receita_salao_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-        fig_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
-                          labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
-        fig_comp.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
-        st.plotly_chart(fig_comp, use_container_width=True)
-else:
-    receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    fig_outro = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
-                       labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
-    fig_outro.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
-    fig_outro.update_traces(textposition="outside", cliponaxis=False)
-    st.plotly_chart(fig_outro, use_container_width=True)
+# === Despesas fixas fase 2 ===
+st.subheader("📤 Despesas Fixas (Fase 2)")
+col1, col2, col3 = st.columns(3)
+aluguel = col1.number_input("Aluguel", min_value=0.0, value=800.0, step=50.0)
+agua = col2.number_input("Água", min_value=0.0, value=120.0, step=10.0)
+luz = col3.number_input("Luz", min_value=0.0, value=200.0, step=10.0)
+produtos = st.number_input("Produtos e materiais", min_value=0.0, value=300.0, step=50.0)
+
+total_despesas_f2 = aluguel + agua + luz + produtos
+
+# === Lucro final Fase 2 ===
+st.subheader("📈 Resultado Financeiro (Fase 2)")
+lucro_f2 = receita_salao_f2 - total_despesas_f2
+st.metric("Lucro do Salão", f"R$ {lucro_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+# === Total geral consolidado ===
+st.header("📊 Consolidado do Ano")
+receita_total = receita_f1 + receita_salao_f2
+despesas_total = total_despesas_f1 + total_despesas_f2
+lucro_total = receita_total - despesas_total
+
+st.markdown(f"**Receita Total do Ano:** R$ {receita_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.markdown(f"**Despesas Totais do Ano:** R$ {despesas_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.markdown(f"**Lucro Líquido do Ano:** R$ {lucro_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
