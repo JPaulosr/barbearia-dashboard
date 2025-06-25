@@ -77,12 +77,19 @@ fig_pizza = px.pie(pizza, names="Tipo", values="Quantidade", hole=0.4)
 fig_pizza.update_traces(textinfo="percent+label")
 st.plotly_chart(fig_pizza, use_container_width=True)
 
-# === Ticket Médio por Mês (usando df_completo) ===
+# === Ticket Médio por Mês (ajustado: registros antes da data, agrupado após) ===
 st.subheader("\U0001F4C9 Ticket Médio por Mês")
-df_completo["AnoMes"] = df_completo["Data"].dt.to_period("M").astype(str)
-df_valor = df_func.groupby("Grupo")["Valor"].sum().reset_index()
-df_completo = df_completo.merge(df_valor, on="Grupo", how="left")
-ticket_mensal = df_completo.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
+df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
+antes_ticket = df_func[df_func["Data"] < data_referencia].copy()
+antes_ticket["AnoMes"] = antes_ticket["Data"].dt.to_period("M").astype(str)
+antes_ticket = antes_ticket.groupby(["Grupo", "AnoMes"])["Valor"].sum().reset_index()
+
+depois_ticket = df_func[df_func["Data"] >= data_referencia].copy()
+depois_ticket = depois_ticket.groupby(["Grupo", "Data"])["Valor"].sum().reset_index()
+depois_ticket["AnoMes"] = depois_ticket["Data"].dt.to_period("M").astype(str)
+
+ticket_total = pd.concat([antes_ticket[["AnoMes", "Valor"]], depois_ticket[["AnoMes", "Valor"]]])
+ticket_mensal = ticket_total.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
 ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 st.dataframe(ticket_mensal, use_container_width=True)
 
