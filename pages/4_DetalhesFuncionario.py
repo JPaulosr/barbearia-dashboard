@@ -5,7 +5,7 @@ from unidecode import unidecode
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("\U0001F9D1\u200d\U0001F4BC Detalhes do Funcionário")
+st.title("\U0001F9D1‍\U0001F4BC Detalhes do Funcionário")
 
 @st.cache_data
 def carregar_dados():
@@ -40,51 +40,41 @@ if tipo_selecionado:
 st.subheader("\U0001F4C5 Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# === Receita mensal ===
+# === Receita mensal lado a lado (JPaulo vs JPaulo + Vinicius 50%) ===
 st.subheader("\U0001F4CA Receita Mensal por Mês e Ano")
-
+meses_ordem = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 meses_pt = {
-    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
-    7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    "Jan": "Janeiro", "Feb": "Fevereiro", "Mar": "Março", "Apr": "Abril", "May": "Maio", "Jun": "Junho",
+    "Jul": "Julho", "Aug": "Agosto", "Sep": "Setembro", "Oct": "Outubro", "Nov": "Novembro", "Dec": "Dezembro"
 }
 
-df_func["MesNum"] = df_func["Data"].dt.month
-df_func["MesNome"] = df_func["MesNum"].map(meses_pt) + df_func["Data"].dt.strftime(" %Y")
-receita_jp = df_func.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
-receita_jp = receita_jp.sort_values("MesNum")
+df_func["AnoMes"] = df_func["Data"].dt.to_period("M").astype(str)
+df_func["MesNome"] = df_func["Data"].dt.strftime("%b %Y").str[:3].map(meses_pt) + df_func["Data"].dt.strftime(" %Y")
+receita_jp = df_func.groupby("MesNome")["Valor"].sum().reset_index(name="JPaulo")
 
 if funcionario_escolhido.lower() == "jpaulo":
-    if ano_escolhido == 2025:
-        df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == 2025)].copy()
-        df_vini["MesNum"] = df_vini["Data"].dt.month
-        df_vini["MesNome"] = df_vini["MesNum"].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
-        receita_vini = df_vini.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="Vinicius")
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)].copy()
+    df_vini["MesNome"] = df_vini["Data"].dt.strftime("%b").str[:3].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
+    receita_vini = df_vini.groupby("MesNome")["Valor"].sum().reset_index(name="Vinicius")
+    receita_merged = pd.merge(receita_jp, receita_vini, on="MesNome", how="left")
+    receita_merged = receita_merged[receita_merged["MesNome"].str.contains("2025")]  # Apenas ano 2025
+    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
 
-        receita_merged = pd.merge(receita_jp, receita_vini, on=["MesNum", "MesNome"], how="left")
-        receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
+    receita_melt = receita_merged.melt(id_vars="MesNome", value_vars=["JPaulo", "Com_Vinicius"], var_name="Tipo", value_name="Valor")
+    receita_melt["MesOrdem"] = receita_melt["MesNome"].str.extract(r"^(\w+)")[0].map({m: i for i, m in enumerate(meses_ordem)})
+    receita_melt = receita_melt.sort_values(["MesNome", "Tipo"]).sort_values("MesOrdem")
 
-        receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
-                                           var_name="Tipo", value_name="Valor")
-        receita_melt = receita_melt.sort_values("MesNum")
-
-        fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
-                                  labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
-        fig_mensal_comp.update_layout(height=450, template="plotly_white")
-        st.plotly_chart(fig_mensal_comp, use_container_width=True)
-    else:
-        receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-        fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
-                            labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
-        fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
-        fig_mensal.update_traces(textposition="outside", cliponaxis=False)
-        st.plotly_chart(fig_mensal, use_container_width=True)
+    fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
+                              labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
+    fig_mensal_comp.update_layout(height=450, template="plotly_white")
+    st.plotly_chart(fig_mensal_comp, use_container_width=True)
 else:
     receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
-                        labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
+    fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado", labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
     fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True)
+
 # === Receita Bruta e Receita com comissão de Vinicius ===
 if funcionario_escolhido.lower() == "vinicius":
     bruto = df_func["Valor"].sum()
@@ -109,23 +99,7 @@ elif funcionario_escolhido.lower() == "jpaulo":
     st.subheader("\U0001F4B0 Receita JPaulo: Própria + Comissão do Vinicius")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
-
-
-    # === Tabela: Comissão mensal recebida de Vinicius (50%) ===
-    if ano_escolhido == 2025:
-        df_vini_mes = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == 2025)].copy()
-        df_vini_mes["MesNome"] = df_vini_mes["Data"].dt.strftime("%B %Y")
-        df_vini_mes["MesNome"] = df_vini_mes["MesNome"].str.capitalize()
-        comissao_mes = df_vini_mes.groupby("MesNome")["Valor"].sum().reset_index()
-        comissao_mes["Comissão (50%) do Vinicius"] = comissao_mes["Valor"] * 0.5
-        comissao_mes = comissao_mes[["MesNome", "Comissão (50%) do Vinicius"]]
-        comissao_mes.columns = ["Mês", "Comissão (50%) do Vinicius"]
-        comissao_mes["Comissão (50%) do Vinicius"] = comissao_mes["Comissão (50%) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-        st.subheader("📄 Comissão Mensal Recebida de Vinicius (50%)")
-        st.dataframe(comissao_mes, use_container_width=True)
-
-    # === Ticket Médio por Mês (registros antes da data, agrupado após) ===
+# === Ticket Médio por Mês (registros antes da data, agrupado após) ===
 st.subheader("\U0001F4C9 Ticket Médio por Mês")
 data_referencia = pd.to_datetime("2025-05-11")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
