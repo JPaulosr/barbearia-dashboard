@@ -115,8 +115,39 @@ clientes_por_func = df_filtrado.groupby(["Funcionário", "Cliente"])["Valor"].su
 clientes_por_func = clientes_por_func.sort_values(["Funcionário", "Valor"], ascending=[True, False])
 
 col1, col2 = st.columns(2)
-
 for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
     top_clientes = clientes_por_func[clientes_por_func["Funcionário"] == func].head(10)
     top_clientes["Valor Formatado"] = top_clientes["Valor"].apply(
-        lambda x: f"R$ {x:,.2f}".re
+        lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+    )
+    col.markdown(f"#### 👤 {func}")
+    col.dataframe(top_clientes[["Cliente", "Valor Formatado"]], use_container_width=True)
+
+# =============================
+# 📆 Receita Total por Funcionário em Cada Ano
+# =============================
+st.subheader("📆 Receita Total por Funcionário em Cada Ano")
+
+receita_ano_func = (
+    df.groupby(["Ano", "Funcionário"])["Valor"]
+    .sum()
+    .reset_index()
+    .pivot(index="Ano", columns="Funcionário", values="Valor")
+    .fillna(0)
+)
+
+receita_formatada = receita_ano_func.copy()
+for col in receita_formatada.columns:
+    receita_formatada[col] = receita_formatada[col].apply(
+        lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+    )
+
+st.dataframe(receita_formatada, use_container_width=True)
+
+# =============================
+# Rodapé
+# =============================
+st.markdown("""
+---
+⬅️ Use o menu lateral para acessar outras páginas ou detalhes por cliente.
+""")
