@@ -74,10 +74,12 @@ fig_pizza = px.pie(df_pizza, values="Valor", names="Tipo", title="Distribuição
 fig_pizza.update_traces(textinfo='percent+label')
 st.plotly_chart(fig_pizza, use_container_width=True)
 
-# === Top 10 Clientes ===
+# === Top 10 Clientes (excluindo nomes genéricos) ===
 st.markdown("### 🥇 Top 10 Clientes")
+nomes_excluir = ["boliviano", "brasileiro", "menino"]
 df_top = df.groupby("Cliente").agg({"Serviço": "count", "Valor": "sum"}).reset_index()
 df_top.columns = ["Cliente", "Qtd_Serviços", "Valor"]
+df_top = df_top[~df_top["Cliente"].str.lower().isin(nomes_excluir)]
 df_top = df_top.sort_values(by="Valor", ascending=False).head(10)
 df_top["Valor Formatado"] = df_top["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 st.dataframe(df_top[["Cliente", "Qtd_Serviços", "Valor Formatado"]], use_container_width=True)
