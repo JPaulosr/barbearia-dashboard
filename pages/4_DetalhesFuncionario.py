@@ -26,9 +26,9 @@ anos = sorted(df["Ano"].unique(), reverse=True)
 ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
 df = df[df["Ano"] == ano]
 
-# ================================
+# =============================
 # 📈 Receita Mensal por Funcionário
-# ================================
+# =============================
 st.subheader("📈 Receita Mensal por Funcionário")
 receita_mensal = df.groupby(["Funcionário", "Mês", "Mês_Nome"])["Valor"].sum().reset_index()
 receita_mensal = receita_mensal.sort_values("Mês")
@@ -44,15 +44,14 @@ fig = px.bar(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# ===================================
+# =============================
 # 📋 Total de Atendimentos por Funcionário
-# ===================================
+# =============================
 st.subheader("📋 Total de Atendimentos por Funcionário")
 atendimentos = df.groupby("Funcionário")["Data"].count().reset_index().rename(columns={"Data": "Qtd Atendimentos"})
 
-# Mostrar como métricas
 col1, col2 = st.columns(2)
-for i, row in atendimentos.iterrows():
+for _, row in atendimentos.iterrows():
     if row["Funcionário"] == "JPaulo":
         col1.metric("Atendimentos - JPaulo", row["Qtd Atendimentos"])
     elif row["Funcionário"] == "Vinicius":
@@ -60,9 +59,9 @@ for i, row in atendimentos.iterrows():
 
 st.dataframe(atendimentos, use_container_width=True)
 
-# ===========================================
-# 🔀 Distribuição de Atendimentos: Combo vs Simples
-# ===========================================
+# =============================
+# 🔀 Combo vs Simples
+# =============================
 st.subheader("🔀 Distribuição: Combo vs Simples")
 agrupado = df.groupby(["Cliente", "Data", "Funcionário"]).agg(
     Qtd_Serviços=("Serviço", "count")
@@ -76,9 +75,8 @@ combo_simples = agrupado.groupby("Funcionário").agg(
     Qtd_Simples=("Simples", "sum")
 ).reset_index()
 
-# Mostrar como colunas com métricas
 col1, col2 = st.columns(2)
-for i, row in combo_simples.iterrows():
+for _, row in combo_simples.iterrows():
     if row["Funcionário"] == "JPaulo":
         col1.metric("Combos - JPaulo", row["Qtd_Combo"])
         col1.metric("Simples - JPaulo", row["Qtd_Simples"])
@@ -88,7 +86,19 @@ for i, row in combo_simples.iterrows():
 
 st.dataframe(combo_simples, use_container_width=True)
 
+# =============================
+# 💰 Receita Total por Funcionário
+# =============================
+st.subheader("💰 Receita Total no Ano por Funcionário")
+receita_total = df.groupby("Funcionário")["Valor"].sum().reset_index()
+receita_total["Valor Formatado"] = receita_total["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
+st.dataframe(receita_total[["Funcionário", "Valor Formatado"]], use_container_width=True)
+
+# =============================
 # Rodapé
+# =============================
 st.markdown("""
 ---
 ⬅️ Use o menu lateral para acessar outras páginas ou detalhes por cliente.
