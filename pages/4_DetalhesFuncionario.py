@@ -21,7 +21,6 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Filtro por ano
 anos = sorted(df["Ano"].unique(), reverse=True)
 ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
 df_filtrado = df[df["Ano"] == ano]
@@ -32,7 +31,6 @@ df_filtrado = df[df["Ano"] == ano]
 st.subheader("📈 Receita Mensal por Funcionário")
 receita_mensal = df_filtrado.groupby(["Funcionário", "Mês", "Mês_Nome"])["Valor"].sum().reset_index()
 receita_mensal = receita_mensal.sort_values("Mês")
-
 fig = px.bar(
     receita_mensal,
     x="Mês_Nome",
@@ -45,7 +43,7 @@ fig = px.bar(
 st.plotly_chart(fig, use_container_width=True)
 
 # =============================
-# 📋 Total de Atendimentos e Combos com lógica 11/05
+# 📋 Total de Atendimentos e Combos com lógica de 11/05
 # =============================
 st.subheader("📋 Total de Atendimentos por Funcionário")
 
@@ -142,7 +140,7 @@ st.dataframe(receita_formatada, use_container_width=True)
 # =============================
 # Rodapé
 # =============================
-st.markdown(\"\"\"
+st.markdown("""
 ---
 ⬅️ Use o menu lateral para acessar outras páginas ou detalhes por cliente.
-\"\"\")
+""")
