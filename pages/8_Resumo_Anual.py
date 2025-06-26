@@ -1,16 +1,34 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import gspread
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
-st.title("📊 Dashboard da Barbearia")
+st.title("📊 Resumo Financeiro da Barbearia")
+
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+BASE_ABA = "Base de Dados"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
 
 @st.cache_data
 def carregar_dados():
     try:
-        df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
+        planilha = conectar_sheets()
+        aba = planilha.worksheet(BASE_ABA)
+        df = get_as_dataframe(aba).dropna(how="all")
         df.columns = [str(col).strip() for col in df.columns]
         df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+        df = df.dropna(subset=["Data"])
         df["Ano"] = df["Data"].dt.year
         df["Mês"] = df["Data"].dt.month
         df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
@@ -24,11 +42,12 @@ df = carregar_dados()
 # === Indicadores principais ===
 receita_total = df["Valor"].sum()
 total_atendimentos = len(df)
-df["Data"] = pd.to_datetime(df["Data"])
+
 data_limite = pd.to_datetime("2025-05-11")
 antes = df[df["Data"] < data_limite]
 depois = df[df["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
 clientes_unicos = pd.concat([antes, depois])["Cliente"].nunique()
+
 ticket_medio = receita_total / total_atendimentos if total_atendimentos else 0
 
 col1, col2, col3, col4 = st.columns(4)
@@ -56,7 +75,7 @@ fig_pizza = px.pie(df_pizza, values="Valor", names="Tipo", title="Distribuição
 fig_pizza.update_traces(textinfo='percent+label')
 st.plotly_chart(fig_pizza, use_container_width=True)
 
-# === Top 10 Clientes ===
+# === Top 10 Clientes (com nomes genéricos mantidos para receita total) ===
 st.markdown("### 🥇 Top 10 Clientes")
 df_top = df.groupby("Cliente").agg({"Serviço": "count", "Valor": "sum"}).reset_index()
 df_top.columns = ["Cliente", "Qtd_Serviços", "Valor"]
@@ -65,4 +84,4 @@ df_top["Valor Formatado"] = df_top["Valor"].apply(lambda x: f"R$ {x:,.2f}".repla
 st.dataframe(df_top[["Cliente", "Qtd_Serviços", "Valor Formatado"]], use_container_width=True)
 
 st.markdown("---")
-st.caption("Criado por JPaulo ✨ | Versão principal do painel consolidado")
+st.caption("Criado por JPaulo ✨ | Visão consolidada da performance financeira")
