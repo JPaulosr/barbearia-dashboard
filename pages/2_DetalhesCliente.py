@@ -40,8 +40,13 @@ fig_receita = px.bar(
     text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
 )
-fig_receita.update_traces(textposition="outside")
-fig_receita.update_layout(height=350, margin=dict(t=60))
+fig_receita.update_traces(textposition="inside")
+fig_receita.update_layout(
+    height=400,
+    margin=dict(t=50),
+    uniformtext_minsize=10,
+    uniformtext_mode='show'
+)
 st.plotly_chart(fig_receita, use_container_width=True)
 
 # 📊 Receita por Serviço e Produto (único gráfico combinado)
