@@ -1,11 +1,9 @@
 import streamlit as st
 import pandas as pd
-import datetime
-from datetime import timedelta
 import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
-import json
+import datetime
 
 st.set_page_config(layout="wide")
 st.title("📆 Frequência dos Clientes")
@@ -16,7 +14,7 @@ BASE_ABA = "Base de Dados"
 
 @st.cache_resource
 def conectar_sheets():
-    info = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]  # ✅ Correção aqui
     escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
