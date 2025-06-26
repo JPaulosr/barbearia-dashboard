@@ -24,33 +24,41 @@ def conectar_sheets():
 def carregar_dados():
     planilha = conectar_sheets()
     df_base = get_as_dataframe(planilha.worksheet(BASE_ABA)).dropna(how="all")
-    df_base.columns = [str(col).strip() for col in df_base.columns]
-    df_base["Data"] = pd.to_datetime(df_base["Data"], errors="coerce")
+    df_despesas = get_as_dataframe(planilha.worksheet(DESPESAS_ABA)).dropna(how="all")
+
+    for df in [df_base, df_despesas]:
+        df.columns = [str(col).strip() for col in df.columns]
+
+    df_base["Data"] = pd.to_datetime(df_base["Data"], errors='coerce')
     df_base = df_base.dropna(subset=["Data"])
     df_base["Ano"] = df_base["Data"].dt.year
+    df_base["Fase"] = df_base["Fase"].fillna("")
 
-    df_despesas = get_as_dataframe(planilha.worksheet(DESPESAS_ABA)).dropna(how="all")
-    df_despesas.columns = [str(col).strip() for col in df_despesas.columns]
-    df_despesas["Data"] = pd.to_datetime(df_despesas["Data"], errors="coerce")
+    df_despesas["Data"] = pd.to_datetime(df_despesas["Data"], errors='coerce')
     df_despesas = df_despesas.dropna(subset=["Data"])
     df_despesas["Ano"] = df_despesas["Data"].dt.year
+    df_despesas["Valor"] = df_despesas["Valor"].astype(str).str.replace("R\$", "").str.replace(".", "").str.replace(",", ".").astype(float)
 
     return df_base, df_despesas
 
-df, df_despesas = carregar_dados()
+df, despesas = carregar_dados()
 
 anos = sorted(df["Ano"].dropna().unique(), reverse=True)
 ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
+
 df_ano = df[df["Ano"] == ano]
-df_despesas_ano = df_despesas[df_despesas["Ano"] == ano]
+despesas_ano = despesas[despesas["Ano"] == ano]
 
-# === Fase 1: Autônomo (prestador) ===
+# =====================
+# FASE 1 – Prestador de Serviço
+# =====================
 st.header("📘 Fase 1 – JPaulo como prestador de serviço")
-df_f1 = df_ano[df_ano["Fase"] == "Autônomo (prestador)"]
-df_desp_f1 = df_despesas_ano[df_despesas_ano["Descrição"].str.lower().str.contains("neto")]
 
-receita_f1 = df_f1[df_f1["Funcionário"] == "JPaulo"]["Valor"].sum()
-comissao_neto = df_desp_f1["Valor"].sum()
+fase1 = df_ano[df_ano["Fase"] == "Autônomo (prestador)"]
+despesas_f1 = despesas_ano[despesas_ano["Descrição"].str.lower().str.contains("neto")]
+
+receita_f1 = fase1[fase1["Funcionário"] == "JPaulo"]["Valor"].sum()
+comissao_neto = despesas_f1["Valor"].sum()
 lucro_f1 = receita_f1 - comissao_neto
 
 col1, col2, col3 = st.columns(3)
@@ -60,59 +68,57 @@ col3.metric("Lucro Líquido", f"R$ {lucro_f1:,.2f}".replace(",", "v").replace(".
 
 st.divider()
 
-# === Fase 2: Dono sozinho ===
+# =====================
+# FASE 2 – Dono sem Funcionário
+# =====================
 st.header("📙 Fase 2 – JPaulo como dono do salão (sem funcionário)")
-df_f2 = df_ano[df_ano["Fase"] == "Dono (sozinho)"]
-receita_f2 = df_f2[df_f2["Funcionário"] == "JPaulo"]["Valor"].sum()
 
-st.subheader("💵 Receita do Salão")
-col1, col2 = st.columns(2)
-col1.metric("Receita JPaulo (100%)", f"R$ {receita_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Comissão paga", "R$ 0,00")
+fase2 = df_ano[df_ano["Fase"] == "Dono (sozinho)"]
+despesas_f2 = despesas_ano[despesas_ano["Descrição"].str.lower().str.contains("produto|água|agua|luz|aluguel")]
 
-# === Despesas fixas (definidas pelo usuário)
-st.subheader("💸 Despesas do Salão")
-with st.form("despesas_fixas"):
-    col1, col2, col3, col4 = st.columns(4)
-    aluguel = col1.number_input("Aluguel", min_value=0.0, value=1200.0, step=50.0)
-    agua = col2.number_input("Água", min_value=0.0, value=200.0, step=10.0)
-    luz = col3.number_input("Luz", min_value=0.0, value=300.0, step=10.0)
-    produtos = col4.number_input("Produtos", min_value=0.0, value=400.0, step=10.0)
-    submit = st.form_submit_button("Atualizar valores")
-
-despesas_f2 = aluguel + agua + luz + produtos
-lucro_f2 = receita_f2 - despesas_f2
-
-col1, col2 = st.columns(2)
-col1.metric("Total de Despesas", f"R$ {despesas_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Lucro do Salão", f"R$ {lucro_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-st.divider()
-
-# === Fase 3: Dono com funcionário ===
-st.header("📗 Fase 3 – Dono com funcionário (Vinicius)")
-df_f3 = df_ano[df_ano["Fase"] == "Dono + funcionário"]
-df_desp_f3 = df_despesas_ano[df_despesas_ano["Descrição"].str.lower().str.contains("vinicius")]
-
-receita_jp3 = df_f3[df_f3["Funcionário"] == "JPaulo"]["Valor"].sum()
-comissao_vinicius = df_desp_f3["Valor"].sum()
-receita_total_f3 = receita_jp3 + comissao_vinicius
-lucro_f3 = receita_total_f3 - despesas_f2 - comissao_vinicius
+receita_f2 = fase2[fase2["Funcionário"] == "JPaulo"]["Valor"].sum()
+despesas_fixas = despesas_f2["Valor"].sum()
+lucro_f2 = receita_f2 - despesas_fixas
 
 col1, col2, col3 = st.columns(3)
-col1.metric("Receita JPaulo", f"R$ {receita_jp3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Comissão Vinicius", f"R$ {comissao_vinicius:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col3.metric("Receita Total", f"R$ {receita_total_f3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col1.metric("Receita (JPaulo)", f"R$ {receita_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col2.metric("Despesas fixas", f"R$ {despesas_fixas:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col3.metric("Lucro do Salão", f"R$ {lucro_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-col1, col2 = st.columns(2)
-col1.metric("Despesas Fixas", f"R$ {despesas_f2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Lucro Líquido", f"R$ {lucro_f3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-# === Consolidado ===
 st.divider()
+
+# =====================
+# FASE 3 – Dono com Funcionário
+# =====================
+st.header("📒 Fase 3 – JPaulo com funcionário (Vinicius)")
+
+fase3 = df_ano[df_ano["Fase"] == "Dono + funcionário"]
+despesas_vinicius = despesas_ano[despesas_ano["Descrição"].str.lower().str.contains("vinicius")]
+despesas_outros = despesas_ano[~despesas_ano["Descrição"].str.lower().str.contains("vinicius|neto")]
+
+receita_jp3 = fase3[fase3["Funcionário"] == "JPaulo"]["Valor"].sum()
+comissao_vinicius = despesas_vinicius["Valor"].sum()
+despesas_fixas3 = despesas_outros["Valor"].sum()
+receita_total3 = receita_jp3
+lucro_f3 = receita_total3 - comissao_vinicius - despesas_fixas3
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Receita (JPaulo)", f"R$ {receita_jp3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col2.metric("Comissão Vinicius", f"R$ {comissao_vinicius:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col3.metric("Despesas fixas", f"R$ {despesas_fixas3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+col4, col5 = st.columns(2)
+col4.metric("Receita Total", f"R$ {receita_total3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col5.metric("Lucro Líquido", f"R$ {lucro_f3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+st.divider()
+
+# =====================
+# CONSOLIDADO DO ANO
+# =====================
 st.header("📌 Consolidado do Ano")
-receita_total = receita_f1 + receita_f2 + receita_total_f3
-despesas_total = comissao_neto + despesas_f2 + comissao_vinicius
+receita_total = receita_f1 + receita_f2 + receita_total3
+despesas_total = comissao_neto + despesas_fixas + comissao_vinicius + despesas_fixas3
 lucro_total = receita_total - despesas_total
 
 col1, col2, col3 = st.columns(3)
@@ -120,5 +126,4 @@ col1.metric("Receita Total", f"R$ {receita_total:,.2f}".replace(",", "v").replac
 col2.metric("Despesas Totais", f"R$ {despesas_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 col3.metric("Lucro Total", f"R$ {lucro_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-st.markdown("---")
-st.caption("Criado por JPaulo ✨ | Estrutura financeira anual segmentada por fase")
+st.caption("Painel atualizado com base em fases e despesas reais registradas na planilha ✅")
