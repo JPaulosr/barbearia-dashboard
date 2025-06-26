@@ -2,17 +2,30 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from unidecode import unidecode
+import gspread
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
 st.title("🏆 Top 20 Clientes")
 
-# Filtros iniciais
-ano = st.selectbox("📅 Filtrar por ano", options=[2023, 2024, 2025], index=2)
-funcionarios = st.multiselect("👥 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+BASE_ABA = "Base de Dados"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
 
 @st.cache_data
 def carregar_dados():
-    df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
+    planilha = conectar_sheets()
+    aba = planilha.worksheet(BASE_ABA)
+    df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
     df = df.dropna(subset=["Data"])
@@ -21,20 +34,24 @@ def carregar_dados():
     df["Mês_Nome"] = df["Data"].dt.strftime('%b')
     return df
 
+# === Filtros iniciais
+ano = st.selectbox("📅 Filtrar por ano", options=[2023, 2024, 2025], index=2)
+funcionarios = st.multiselect("👥 Filtrar por funcionário", ["JPaulo", "Vinicius"], default=["JPaulo", "Vinicius"])
+
 df = carregar_dados()
 df = df[df["Ano"] == ano]
 df = df[df["Funcionário"].isin(funcionarios)]
 
-# Remove nomes genéricos
+# === Remove nomes genéricos para ranking
 nomes_excluir = ["boliviano", "brasileiro", "menino"]
 def limpar_nome(nome):
     nome_limpo = unidecode(str(nome).lower())
     return not any(generico in nome_limpo for generico in nomes_excluir)
 
-df = df[df["Cliente"].apply(limpar_nome)]
+df_ranking = df[df["Cliente"].apply(limpar_nome)]
 
-# Agrupa Cliente + Data
-agrupado = df.groupby(["Cliente", "Data"]).agg(
+# === Agrupamento Cliente + Data
+agrupado = df_ranking.groupby(["Cliente", "Data"]).agg(
     Qtd_Serviços=('Serviço', 'count'),
     Qtd_Produtos=('Tipo', lambda x: (x == "Produto").sum()),
     Valor_Total=('Valor', 'sum')
@@ -65,14 +82,13 @@ def top_20_por(df):
             return "🥉 Novato"
     
     resumo["Categoria"] = resumo["Valor_Total"].apply(categoria_cliente)
-    
     resumo = resumo.sort_values(by="Valor_Total", ascending=False).reset_index(drop=True)
     resumo["Posição"] = resumo.index + 1
     return resumo
 
 resumo_geral = top_20_por(agrupado)
 
-# Filtros dinâmicos
+# === Filtros dinâmicos
 st.subheader("🎯 Top 20 Clientes - Geral")
 filtro_nome = st.text_input("🔍 Pesquisar cliente", "")
 resumo_filtrado = resumo_geral[resumo_geral["Cliente"].str.contains(filtro_nome, case=False)]
@@ -81,14 +97,10 @@ categorias_disponiveis = resumo_geral["Categoria"].unique().tolist()
 filtro_categoria = st.multiselect("🏅 Filtrar por categoria", categorias_disponiveis, default=categorias_disponiveis)
 resumo_filtrado = resumo_filtrado[resumo_filtrado["Categoria"].isin(filtro_categoria)]
 
-# Exibição da tabela
-st.dataframe(resumo_filtrado[[
-    "Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", 
-    "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", 
-    "Valor_Formatado", "Categoria"
-]], use_container_width=True)
+# === Exibição da tabela
+st.dataframe(resumo_filtrado[[ "Posição", "Cliente", "Qtd_Serviços", "Qtd_Produtos", "Qtd_Atendimento", "Qtd_Combo", "Qtd_Simples", "Valor_Formatado", "Categoria" ]], use_container_width=True)
 
-# Gráfico Top 5
+# === Gráfico Top 5
 st.subheader("📊 Top 5 Clientes por Receita")
 if filtro_nome and len(resumo_filtrado) == 1:
     cliente = resumo_filtrado.iloc[0]["Cliente"]
@@ -118,7 +130,7 @@ else:
 
 st.plotly_chart(fig, use_container_width=True)
 
-# Comparativo entre dois clientes
+# === Comparativo entre dois clientes
 st.subheader("⚖️ Comparar dois clientes")
 clientes_disponiveis = resumo_filtrado["Cliente"].tolist()
 col1, col2 = st.columns(2)
@@ -152,7 +164,7 @@ else:
     st.markdown("**Serviços Realizados por Tipo**")
     st.dataframe(servicos_comparativo, use_container_width=True)
 
-# Detalhamento individual
+# === Detalhamento individual
 st.subheader("🔍 Ver detalhamento de um cliente")
 cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis)
 
