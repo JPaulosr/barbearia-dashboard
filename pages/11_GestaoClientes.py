@@ -24,7 +24,7 @@ def conectar_sheets():
     planilha = cliente.open_by_key(SHEET_ID)
     return planilha
 
-@st.cache_data
+# ⛔️ Não usar cache aqui pois recebe objeto complexo como argumento
 def carregar_base(planilha):
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba, dtype=str).dropna(how="all")
@@ -64,11 +64,10 @@ st.markdown("Você pode alterar o status de clientes genéricos, inativos ou que
 busca = st.text_input("🔍 Buscar cliente por nome").strip().lower()
 clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lower().str.contains(busca)] if busca else clientes_com_status
 
-# Ordenação por status (Ignorado > Inativo > Ativo)
+# Ordenar: Ignorado > Inativo > Ativo
 status_order = {"Ignorado": 0, "Inativo": 1, "Ativo": 2}
-clientes_filtrados = clientes_filtrados.copy()
 clientes_filtrados["Ordem"] = clientes_filtrados["Status"].map(status_order)
-clientes_filtrados = clientes_filtrados.sort_values(by="Ordem")
+clientes_filtrados = clientes_filtrados.sort_values("Ordem")
 
 # Apresentação visual com cores
 novo_status = []
