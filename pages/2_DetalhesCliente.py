@@ -101,10 +101,15 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# 📈 Frequência do Cliente
+# 📈 Frequência do Cliente (corrigida com regra dos combos)
 st.subheader("📈 Frequência de Atendimento")
 
-datas = df_cliente.sort_values("Data")["Data"].tolist()
+data_corte = pd.to_datetime("2025-05-11")
+df_antes = df_cliente[df_cliente["Data"] < data_corte].copy()
+df_depois = df_cliente[df_cliente["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
+df_freq = pd.concat([df_antes, df_depois]).sort_values("Data")
+datas = df_freq["Data"].tolist()
+
 if len(datas) < 2:
     st.info("Cliente possui apenas um atendimento. Frequência não aplicável.")
 else:
