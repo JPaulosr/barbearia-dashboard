@@ -36,8 +36,12 @@ clientes_com_status["Status"] = clientes_com_status["Status"].fillna("Ativo")
 st.subheader("📋 Lista de Clientes com Status")
 st.markdown("Você pode alterar o status de clientes genéricos, inativos ou que não devem aparecer nos relatórios.")
 
+# Filtro de busca
+busca = st.text_input("🔍 Buscar cliente por nome").strip().lower()
+clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lower().str.contains(busca)] if busca else clientes_com_status
+
 novo_status = []
-for i, row in clientes_com_status.iterrows():
+for i, row in clientes_filtrados.iterrows():
     col1, col2 = st.columns([3, 2])
     with col1:
         st.markdown(f"**{row['Cliente']}**")
@@ -47,6 +51,7 @@ for i, row in clientes_com_status.iterrows():
 
 # Atualizar e salvar
 if st.button("💾 Salvar alterações"):
-    clientes_com_status["Status"] = novo_status
-    salvar_status(clientes_com_status[["Cliente", "Status"]])
+    clientes_filtrados["Status"] = novo_status
+    clientes_com_status.update(clientes_filtrados.set_index("Cliente"))
+    salvar_status(clientes_com_status[["Cliente", "Status"]].reset_index(drop=True))
     st.success("Status atualizado com sucesso!")
