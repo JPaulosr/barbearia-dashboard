@@ -11,6 +11,7 @@ st.title("📆 Frequência dos Clientes")
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
+STATUS_ABA = "clientes_status"
 
 @st.cache_resource
 def conectar_sheets():
@@ -23,19 +24,33 @@ def conectar_sheets():
 @st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
-    aba = planilha.worksheet(BASE_ABA)
-    df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df = df.dropna(subset=["Data"])
-    return df
+    base = get_as_dataframe(planilha.worksheet(BASE_ABA)).dropna(how="all")
+    base.columns = [str(col).strip() for col in base.columns]
+    base["Data"] = pd.to_datetime(base["Data"], errors="coerce")
+    base = base.dropna(subset=["Data"])
+    return base
+
+@st.cache_data
+def carregar_status():
+    try:
+        planilha = conectar_sheets()
+        status = get_as_dataframe(planilha.worksheet(STATUS_ABA)).dropna(how="all")
+        status.columns = [str(col).strip() for col in status.columns]
+        return status[["Cliente", "Status"]]
+    except:
+        return pd.DataFrame(columns=["Cliente", "Status"])
 
 df = carregar_dados()
+df_status = carregar_status()
 
-# Agrupar por Cliente e Data (atendimento único)
+# === Remover clientes inativos e ignorados ===
+clientes_validos = df_status[~df_status["Status"].isin(["Inativo", "Ignorado"])]["Cliente"].unique().tolist()
+df = df[df["Cliente"].isin(clientes_validos)]
+
+# === Agrupar por Cliente e Data (atendimento único)
 atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
-# Gerar lista de frequência por cliente
+# === Cálculo da frequência
 frequencia_clientes = []
 hoje = pd.Timestamp.today().normalize()
 
@@ -66,23 +81,20 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
         "Status_Label": status[1]
     })
 
-# Cria dataframe
 freq_df = pd.DataFrame(frequencia_clientes)
 
-# Filtro por status
+# === Filtro por status
 status_opcoes = ["Todos", "Em dia", "Pouco atrasado", "Muito atrasado"]
 status_selecionado = st.selectbox("🔎 Filtrar por status", status_opcoes)
 
 if status_selecionado != "Todos":
     freq_df = freq_df[freq_df["Status_Label"] == status_selecionado]
 
-# Ordenar pelo mais atrasado
+# === Ordenar e exibir
 freq_df = freq_df.sort_values("Dias Desde Último", ascending=False)
-
-# Exibir tabela
 st.dataframe(freq_df.drop(columns=["Status_Label"]), use_container_width=True)
 
-# Gráfico (Top 20 por dias sem atendimento)
+# === Gráfico Top 20
 st.subheader("📊 Top 20 Clientes com mais dias sem vir")
 top_grafico = freq_df.head(20)
 fig = px.bar(
