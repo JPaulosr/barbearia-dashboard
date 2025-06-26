@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import gspread
+from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-import datetime
 
 st.set_page_config(layout="wide")
 st.title("📆 Frequência dos Clientes")
@@ -14,7 +14,7 @@ BASE_ABA = "Base de Dados"
 
 @st.cache_resource
 def conectar_sheets():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]  # ✅ Correção aqui
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
     escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
@@ -24,7 +24,7 @@ def conectar_sheets():
 def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
-    df = pd.DataFrame(aba.get_all_records())
+    df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
