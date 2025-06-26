@@ -3,9 +3,10 @@ import pandas as pd
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("📆 Frequência dos Clientes")
+st.title("🗓️ Frequência dos Clientes")
 
 @st.cache_data
+
 def carregar_dados():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
@@ -14,44 +15,63 @@ def carregar_dados():
     return df
 
 df = carregar_dados()
-hoje = pd.to_datetime(datetime.today().date())
 
-clientes = df["Cliente"].dropna().unique()
-resumo_lista = []
+# === Filtro de funcionario ===
+funcionarios = df["Funcionário"].dropna().unique().tolist()
+funcionarios_selecionados = st.multiselect("👨‍💼 Filtrar por funcionário", funcionarios, default=funcionarios)
 
-for cliente in clientes:
-    df_cliente = df[df["Cliente"] == cliente].sort_values("Data")
-    datas = df_cliente["Data"].tolist()
+if funcionarios_selecionados:
+    df = df[df["Funcionário"].isin(funcionarios_selecionados)]
 
-    if len(datas) < 2:
-        freq_media = None
+# === Processar frequência ===
+hoje = pd.to_datetime(datetime.now().date())
+frequencia_clientes = []
+
+for cliente, grupo in df.groupby("Cliente"):
+    datas = grupo.sort_values("Data")["Data"].tolist()
+    if len(datas) >= 2:
+        diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
+        freq_media = sum(diffs) / len(diffs)
     else:
-        intervalos = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
-        freq_media = round(sum(intervalos) / len(intervalos), 1)
+        freq_media = None
 
     ultima_data = datas[-1]
     dias_sem_cortar = (hoje - ultima_data).days
 
+    # Status
     if freq_media:
         if dias_sem_cortar <= freq_media:
-            status = "✔️ Em dia"
+            status = "🟢 Em dia"
         elif dias_sem_cortar <= freq_media + 5:
-            status = "⚠️ Pouco atrasado"
+            status = "🟠 Pouco atrasado"
         else:
-            status = "❌ Atrasado"
+            status = "🔴 Atrasado"
     else:
-        status = "-"
+        status = "❓ Sem histórico"
 
-    resumo_lista.append({
+    frequencia_clientes.append({
         "Cliente": cliente,
-        "Último Atendimento": ultima_data.date(),
-        "Dias sem cortar": dias_sem_cortar,
-        "Frequência Média (dias)": freq_media if freq_media else "-",
+        "Data do Último Atendimento": ultima_data.date(),
+        "Dias desde o Último": dias_sem_cortar,
+        "Frequência Média (dias)": round(freq_media, 1) if freq_media else "-",
         "Status": status
     })
 
-resumo_df = pd.DataFrame(resumo_lista)
-resumo_df = resumo_df.sort_values(by="Dias sem cortar", ascending=False)
+resumo_df = pd.DataFrame(frequencia_clientes)
 
-st.dataframe(resumo_df, use_container_width=True)
-st.caption("Clientes com base no intervalo entre os últimos atendimentos")
+# === Filtro por status ===
+status_opcoes = resumo_df["Status"].unique().tolist()
+status_selecionados = st.multiselect("⚠️ Filtrar por status", status_opcoes, default=status_opcoes)
+
+resumo_df = resumo_df[resumo_df["Status"].isin(status_selecionados)]
+
+# === Mostrar tabela ===
+st.dataframe(resumo_df.sort_values("Dias desde o Último", ascending=False), use_container_width=True)
+
+# === Exportar CSV ===
+st.download_button(
+    label="📂 Baixar como CSV",
+    data=resumo_df.to_csv(index=False).encode("utf-8"),
+    file_name="frequencia_clientes.csv",
+    mime="text/csv"
+)
