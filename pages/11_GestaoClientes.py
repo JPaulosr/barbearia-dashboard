@@ -40,12 +40,27 @@ st.markdown("Você pode alterar o status de clientes genéricos, inativos ou que
 busca = st.text_input("🔍 Buscar cliente por nome").strip().lower()
 clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lower().str.contains(busca)] if busca else clientes_com_status
 
+# Ordenar por prioridade de status
+status_prioridade = {"Ignorado": 0, "Inativo": 1, "Ativo": 2}
+clientes_filtrados["StatusOrd"] = clientes_filtrados["Status"].map(status_prioridade)
+clientes_filtrados = clientes_filtrados.sort_values(by=["StatusOrd", "Cliente"])
+
+# Cores por status
+cores_status = {
+    "Ignorado": "#ffcccc",
+    "Inativo": "#ffeeba",
+    "Ativo": "#d4edda"
+}
+
 novo_status = []
 for i, row in clientes_filtrados.iterrows():
+    cor = cores_status.get(row["Status"], "#f0f0f0")
     with st.container():
-        st.markdown(f"### 👤 {row['Cliente']}")
+        st.markdown(f"<div style='background-color:{cor}; padding:10px; border-radius:8px'>", unsafe_allow_html=True)
+        st.markdown(f"**👤 {row['Cliente']}**")
         status = st.selectbox(f"Status de {row['Cliente']}", STATUS_OPTIONS, index=STATUS_OPTIONS.index(row["Status"]), key=f"status_{i}")
         novo_status.append(status)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # Atualizar e salvar
 if st.button("💾 Salvar alterações"):
