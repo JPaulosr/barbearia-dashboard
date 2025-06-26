@@ -42,11 +42,9 @@ clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lowe
 
 novo_status = []
 for i, row in clientes_filtrados.iterrows():
-    col1, col2 = st.columns([3, 2])
-    with col1:
-        st.markdown(f"**{row['Cliente']}**")
-    with col2:
-        status = st.selectbox("", STATUS_OPTIONS, index=STATUS_OPTIONS.index(row["Status"]), key=f"status_{i}")
+    with st.container():
+        st.markdown(f"### 👤 {row['Cliente']}")
+        status = st.selectbox(f"Status de {row['Cliente']}", STATUS_OPTIONS, index=STATUS_OPTIONS.index(row["Status"]), key=f"status_{i}")
         novo_status.append(status)
 
 # Atualizar e salvar
