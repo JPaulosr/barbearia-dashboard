@@ -3,51 +3,50 @@ import pandas as pd
 import os
 
 st.set_page_config(layout="wide")
-st.title("🛠️ Gestão de Clientes")
+st.title("🧠 Gestão de Clientes")
 
-# === Carrega base de dados principal ===
+STATUS_OPTIONS = ["Ativo", "Ignorado", "Inativo"]
+STATUS_FILE = "clientes_status.csv"
+
 @st.cache_data
-
 def carregar_base():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
-    df.columns = [col.strip() for col in df.columns]
+    df.columns = [str(col).strip() for col in df.columns]
     return df
 
+@st.cache_data
+def carregar_status():
+    if os.path.exists(STATUS_FILE):
+        return pd.read_csv(STATUS_FILE)
+    else:
+        return pd.DataFrame(columns=["Cliente", "Status"])
+
+def salvar_status(df_status):
+    df_status.to_csv(STATUS_FILE, index=False)
+
+# Carregar dados principais e status separado
 df = carregar_base()
+df_clientes = pd.DataFrame({"Cliente": sorted(df["Cliente"].dropna().unique())})
+df_status = carregar_status()
 
-# === Caminho do arquivo de status ===
-caminho_status = "clientes_status.csv"
+# Combinar com status atual
+clientes_com_status = df_clientes.merge(df_status, on="Cliente", how="left")
+clientes_com_status["Status"] = clientes_com_status["Status"].fillna("Ativo")
 
-# === Garante que o arquivo de status exista ===
-if not os.path.exists(caminho_status):
-    clientes_unicos = sorted(df["Cliente"].dropna().unique())
-    df_status_inicial = pd.DataFrame({"Cliente": clientes_unicos, "Status": ["Ativo"] * len(clientes_unicos)})
-    df_status_inicial.to_csv(caminho_status, index=False)
+st.subheader("📋 Lista de Clientes com Status")
+st.markdown("Você pode alterar o status de clientes genéricos, inativos ou que não devem aparecer nos relatórios.")
 
-# === Carrega status atual ===
-df_status = pd.read_csv(caminho_status)
+novo_status = []
+for i, row in clientes_com_status.iterrows():
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        st.markdown(f"**{row['Cliente']}**")
+    with col2:
+        status = st.selectbox("", STATUS_OPTIONS, index=STATUS_OPTIONS.index(row["Status"]), key=f"status_{i}")
+        novo_status.append(status)
 
-# === Atualiza lista de clientes se houver novos ===
-clientes_novos = set(df["Cliente"].dropna().unique()) - set(df_status["Cliente"])
-if clientes_novos:
-    novos = pd.DataFrame({"Cliente": list(clientes_novos), "Status": ["Ativo"] * len(clientes_novos)})
-    df_status = pd.concat([df_status, novos], ignore_index=True)
-    df_status.to_csv(caminho_status, index=False)
-
-# === Interface de edição ===
-st.subheader("📃 Lista de Clientes com Status")
-
-status_opcoes = ["Ativo", "Inativo", "Ignorado"]
-
-clientes = df_status.sort_values("Cliente").reset_index(drop=True)
-
-for i, row in clientes.iterrows():
-    col1, col2 = st.columns([4, 2])
-    col1.markdown(f"**{row['Cliente']}**")
-    novo_status = col2.selectbox("", status_opcoes, index=status_opcoes.index(row["Status"]), key=f"status_{i}")
-    df_status.at[i, "Status"] = novo_status
-
-# === Botão de salvar ===
+# Atualizar e salvar
 if st.button("💾 Salvar alterações"):
-    df_status.to_csv(caminho_status, index=False)
-    st.success("Status dos clientes atualizado com sucesso!")
+    clientes_com_status["Status"] = novo_status
+    salvar_status(clientes_com_status[["Cliente", "Status"]])
+    st.success("Status atualizado com sucesso!")
