@@ -43,12 +43,15 @@ df_fase2 = df_ano[df_ano["Data"] >= data_corte]
 # === FASE 1: JPAULO COMO PRESTADOR
 st.header("📘 Fase 1 – JPaulo como prestador de serviço")
 receita_fase1 = df_fase1[df_fase1["Funcionário"] == "JPaulo"]["Valor"].sum()
-despesas_fase1 = df_fase1[df_fase1["Tipo"] == "Despesa"]["Valor"].sum()
+despesas_fase1 = df_fase1[
+    (df_fase1["Tipo"] == "Despesa") &
+    (df_fase1["Descrição"].str.lower().str.contains("neto"))
+]["Valor"].sum()
 lucro_fase1 = receita_fase1 - despesas_fase1
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Receita (JPaulo)", f"R$ {receita_fase1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Despesas (comissão paga)", f"R$ {despesas_fase1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col2.metric("Comissão paga ao Neto", f"R$ {despesas_fase1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 col3.metric("Lucro Líquido", f"R$ {lucro_fase1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 st.divider()
@@ -57,13 +60,19 @@ st.divider()
 st.header("📙 Fase 2 – JPaulo como dono do salão")
 
 receita_jpaulo = df_fase2[df_fase2["Funcionário"] == "JPaulo"]["Valor"].sum()
-receita_vinicius = df_fase2[df_fase2["Funcionário"] == "Vinicius"]["Valor"].sum() * 0.5
-receita_total_salao = receita_jpaulo + receita_vinicius
+
+# Puxar comissão real do Vinicius
+comissao_vinicius = df_fase2[
+    (df_fase2["Tipo"] == "Despesa") &
+    (df_fase2["Descrição"].str.lower().str.contains("vinicius"))
+]["Valor"].sum()
+
+receita_total_salao = receita_jpaulo + comissao_vinicius
 
 st.subheader("💵 Receita do Salão")
 col1, col2, col3 = st.columns(3)
 col1.metric("Receita JPaulo (100%)", f"R$ {receita_jpaulo:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Receita Vinicius (50%)", f"R$ {receita_vinicius:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col2.metric("Comissão paga ao Vinicius", f"R$ {comissao_vinicius:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 col3.metric("Receita Total", f"R$ {receita_total_salao:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 # === DESPESAS FIXAS
