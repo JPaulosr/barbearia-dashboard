@@ -107,3 +107,28 @@ resumo_final = pd.DataFrame({
     "Qtd Simples": [resumo["Qtd_Simples"].sum()]
 })
 st.dataframe(resumo_final, use_container_width=True)
+
+# 📈 Frequência do Cliente
+st.subheader("📈 Frequência de Atendimento")
+
+datas = df_cliente.sort_values("Data")["Data"].tolist()
+if len(datas) < 2:
+    st.info("Cliente possui apenas um atendimento. Frequência não aplicável.")
+else:
+    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
+    media_freq = sum(diffs) / len(diffs)
+    ultimo_atendimento = datas[-1]
+    dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
+
+    if dias_desde_ultimo <= media_freq:
+        status = "🟢 Em dia"
+    elif dias_desde_ultimo <= media_freq * 1.5:
+        status = "🟠 Pouco atrasado"
+    else:
+        status = "🔴 Muito atrasado"
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("📅 Último Atendimento", ultimo_atendimento.date())
+    col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
+    col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
+    col4.metric("📌 Status", status)
