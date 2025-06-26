@@ -3,7 +3,6 @@ import pandas as pd
 import gspread
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
-import json
 import plotly.express as px
 
 st.set_page_config(layout="wide")
@@ -18,7 +17,7 @@ STATUS_OPTIONS = ["Ativo", "Ignorado", "Inativo"]
 # === CONEXÃO COM GOOGLE SHEETS USANDO st.secrets
 @st.cache_resource
 def conectar_sheets():
-    info = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]  # CORRIGIDO
     escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
