@@ -30,7 +30,7 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")  # Ex: Abr/2025
+    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")
     return df
 
 df = carregar_dados()
@@ -47,7 +47,7 @@ df_cliente = df[df["Cliente"] == cliente]
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
 st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
-# 📊 Receita mensal por mês e ano
+# 📊 Receita mensal
 st.subheader("📊 Receita mensal")
 receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
 fig_receita = px.bar(
@@ -58,20 +58,14 @@ fig_receita = px.bar(
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
 )
 fig_receita.update_traces(textposition="inside")
-fig_receita.update_layout(
-    height=400,
-    margin=dict(t=50),
-    uniformtext_minsize=10,
-    uniformtext_mode='show'
-)
+fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 📊 Receita por Serviço e Produto (único gráfico combinado)
+# 📊 Receita por Serviço e Produto
 st.subheader("📊 Receita por Serviço e Produto")
 df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
 receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
 receita_geral = receita_geral.sort_values("Valor", ascending=False)
-
 fig_receita_tipos = px.bar(
     receita_geral,
     x="Serviço",
@@ -81,19 +75,18 @@ fig_receita_tipos = px.bar(
     labels={"Valor": "Receita (R$)", "Serviço": "Item"},
     barmode="group"
 )
-
 fig_receita_tipos.update_traces(textposition="outside")
 fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-# 📊 Atendimentos por Funcionário (contando Cliente + Data)
+# 📊 Atendimentos por Funcionário
 st.subheader("📊 Atendimentos por Funcionário")
 atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
 atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
 atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
-# 📋 Tabela resumo
+# 📋 Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
 resumo = df_cliente.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
@@ -128,7 +121,7 @@ else:
         status = "🔴 Muito atrasado"
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📅 Último Atendimento", ultimo_atendimento.date())
+    col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
     col4.metric("📌 Status", status)
