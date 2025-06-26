@@ -25,6 +25,7 @@ def conectar_sheets():
     planilha = cliente.open_by_key(SHEET_ID)
     return planilha
 
+# ⛔️ Não cachear funções com objetos como argumentos
 def carregar_base(planilha):
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba, dtype=str).dropna(how="all")
@@ -56,31 +57,32 @@ df_status = carregar_status(planilha)
 clientes_com_status = df_clientes.merge(df_status, on="Cliente", how="left")
 clientes_com_status["Status"] = clientes_com_status["Status"].fillna("Ativo")
 
-st.subheader("📝 Lista de Clientes com Status")
+# === INTERFACE
+st.subheader("📋 Lista de Clientes com Status")
 st.markdown("Você pode alterar o status de clientes genéricos, inativos ou que não devem aparecer nos relatórios.")
 
-# === FILTRO DE BUSCA
+# FILTRO
 busca = st.text_input("🔍 Buscar cliente por nome").strip().lower()
 clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lower().str.contains(busca)] if busca else clientes_com_status
 
-# ORDENAR: Ignorado > Inativo > Ativo
+# ORDEM DE EXIBIÇÃO: Ignorado > Inativo > Ativo
 status_order = {"Ignorado": 0, "Inativo": 1, "Ativo": 2}
 clientes_filtrados["Ordem"] = clientes_filtrados["Status"].map(status_order)
 clientes_filtrados = clientes_filtrados.sort_values("Ordem")
 
-# EXIBIÇÃO INTERATIVA COM CORES E CONTORNOS
+# LAYOUT MELHORADO + CATEGORIZAÇÃO VISUAL
 novo_status = []
 for i, row in clientes_filtrados.iterrows():
     cor = "#ffcccc" if row["Status"] == "Ignorado" else "#fff2b2" if row["Status"] == "Inativo" else "#d8f8d8"
+    texto_cor = "#000000"
     with st.container():
         st.markdown(
             f"""
-            <div style="background-color:{cor}; padding:12px; border-radius:10px; margin-bottom:5px">
-                <b style="font-size:16px">👤 {row["Cliente"]}</b><br>
-                <span style="font-size:13px">Status de {row['Cliente']}:</span>
+            <div style="background-color:{cor}; padding:15px; border-radius:10px; margin-bottom:10px">
+                <div style="font-size:17px; font-weight:bold; color:{texto_cor}; margin-bottom:5px">👤 {row['Cliente']}</div>
+                <div style="font-size:14px; color:{texto_cor}; margin-bottom:8px">Status de {row['Cliente']}:</div>
             </div>
-            """,
-            unsafe_allow_html=True
+            """, unsafe_allow_html=True
         )
         status = st.selectbox(
             f"Status de {row['Cliente']}",
@@ -90,20 +92,22 @@ for i, row in clientes_filtrados.iterrows():
         )
         novo_status.append(status)
 
-# === SALVAR ALTERAÇÕES
+# SALVAR ALTERAÇÕES
 if st.button("💾 Salvar alterações"):
     clientes_filtrados["Status"] = novo_status
-    clientes_com_status.update(clientes_filtrados.set_index("Cliente"))
-    salvar_status(planilha, clientes_com_status[["Cliente", "Status"]].reset_index())
+    atualizados = clientes_filtrados.set_index("Cliente")[["Status"]]
+    clientes_com_status.set_index("Cliente", inplace=True)
+    clientes_com_status.update(atualizados)
+    clientes_com_status.reset_index(inplace=True)
+    salvar_status(planilha, clientes_com_status[["Cliente", "Status"]])
     st.success("Status atualizado com sucesso!")
 
-# === RESUMO VISUAL
+# RESUMO
 st.subheader("📈 Resumo por Status")
-st.dataframe(
-    clientes_com_status["Status"].value_counts().reset_index().rename(columns={"index": "Status", "Status": "Qtd Clientes"}),
-    use_container_width=True
-)
+resumo = clientes_com_status["Status"].value_counts().reset_index()
+resumo.columns = ["Status", "Qtd Clientes"]
+st.dataframe(resumo, use_container_width=True)
 
-# GRÁFICO DE PIZZA
+# GRÁFICO
 fig = px.pie(clientes_com_status, names="Status", title="Distribuição de Clientes por Status")
 st.plotly_chart(fig, use_container_width=True)
