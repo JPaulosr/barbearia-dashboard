@@ -5,18 +5,18 @@ from datetime import timedelta
 import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe
+import json
 
 st.set_page_config(layout="wide")
 st.title("📆 Frequência dos Clientes")
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"
+BASE_ABA = "Base de Dados"
 
 @st.cache_resource
 def conectar_sheets():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    info = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
     escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
@@ -25,8 +25,8 @@ def conectar_sheets():
 @st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
-    aba = planilha.worksheet(ABA_DADOS)
-    df = get_as_dataframe(aba, dtype=str).dropna(how="all")
+    aba = planilha.worksheet(BASE_ABA)
+    df = pd.DataFrame(aba.get_all_records())
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
