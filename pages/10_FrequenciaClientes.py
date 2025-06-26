@@ -1,84 +1,66 @@
 import streamlit as st
 import pandas as pd
-import datetime
-from datetime import timedelta
+import os
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("📆 Frequência dos Clientes")
+st.title("🧠 Gestão de Clientes")
+
+STATUS_OPTIONS = ["Ativo", "Ignorado", "Inativo"]
+STATUS_FILE = "clientes_status.csv"
 
 @st.cache_data
-
-def carregar_dados():
+def carregar_base():
     df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     return df
 
-df = carregar_dados()
-
-# Agrupar por Cliente e Data (atendimento único)
-atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
-
-# Gerar lista de frequência por cliente
-frequencia_clientes = []
-hoje = pd.Timestamp.today().normalize()
-
-for cliente, grupo in atendimentos.groupby("Cliente"):
-    datas = grupo.sort_values("Data")["Data"].tolist()
-    if len(datas) < 2:
-        continue
-
-    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
-    media_freq = sum(diffs) / len(diffs)
-    ultimo_atendimento = datas[-1]
-    dias_desde_ultimo = (hoje - ultimo_atendimento).days
-
-    if dias_desde_ultimo <= media_freq:
-        status = ("🟢 Em dia", "Em dia")
-    elif dias_desde_ultimo <= media_freq * 1.5:
-        status = ("🟠 Pouco atrasado", "Pouco atrasado")
+@st.cache_data
+def carregar_status():
+    if os.path.exists(STATUS_FILE):
+        return pd.read_csv(STATUS_FILE)
     else:
-        status = ("🔴 Muito atrasado", "Muito atrasado")
+        return pd.DataFrame(columns=["Cliente", "Status"])
 
-    frequencia_clientes.append({
-        "Cliente": cliente,
-        "Último Atendimento": ultimo_atendimento.date(),
-        "Qtd Atendimentos": len(datas),
-        "Frequência Média (dias)": round(media_freq, 1),
-        "Dias Desde Último": dias_desde_ultimo,
-        "Status": status[0],
-        "Status_Label": status[1]
-    })
+def salvar_status(df_status):
+    df_status.to_csv(STATUS_FILE, index=False)
 
-# Cria dataframe
-freq_df = pd.DataFrame(frequencia_clientes)
+# Carregar dados principais e status separado
+df = carregar_base()
+df_clientes = pd.DataFrame({"Cliente": sorted(df["Cliente"].dropna().unique())})
+df_status = carregar_status()
 
-# Filtro por status
-status_opcoes = ["Todos", "Em dia", "Pouco atrasado", "Muito atrasado"]
-status_selecionado = st.selectbox("🔎 Filtrar por status", status_opcoes)
+# Combinar com status atual
+clientes_com_status = df_clientes.merge(df_status, on="Cliente", how="left")
+clientes_com_status["Status"] = clientes_com_status["Status"].fillna("Ativo")
 
-if status_selecionado != "Todos":
-    freq_df = freq_df[freq_df["Status_Label"] == status_selecionado]
+st.subheader("📋 Lista de Clientes com Status")
+st.markdown("Você pode alterar o status de clientes genéricos, inativos ou que não devem aparecer nos relatórios.")
 
-# Ordenar pelo mais atrasado
-freq_df = freq_df.sort_values("Dias Desde Último", ascending=False)
+# Filtro de busca
+busca = st.text_input("🔍 Buscar cliente por nome").strip().lower()
+clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lower().str.contains(busca)] if busca else clientes_com_status
 
-# Exibir tabela
-st.dataframe(freq_df.drop(columns=["Status_Label"]), use_container_width=True)
+novo_status = []
+for i, row in clientes_filtrados.iterrows():
+    with st.container():
+        st.markdown(f"### 👤 {row['Cliente']}")
+        status = st.selectbox("Status", STATUS_OPTIONS, index=STATUS_OPTIONS.index(row["Status"]), key=f"status_{i}")
+        novo_status.append(status)
 
-# Gráfico (Top 20 por dias sem atendimento)
-st.subheader("📊 Top 20 Clientes com mais dias sem vir")
-top_grafico = freq_df.head(20)
-fig = px.bar(
-    top_grafico,
-    x="Cliente",
-    y="Dias Desde Último",
-    color="Status_Label",
-    labels={"Dias Desde Último": "Dias de ausência", "Status_Label": "Status"},
-    text="Dias Desde Último"
-)
-fig.update_layout(xaxis_tickangle=-45, height=500)
-fig.update_traces(textposition="outside")
+# Atualizar e salvar
+if st.button("💾 Salvar alterações"):
+    clientes_filtrados["Status"] = novo_status
+    clientes_com_status.update(clientes_filtrados.set_index("Cliente"))
+    salvar_status(clientes_com_status[["Cliente", "Status"]].reset_index(drop=True))
+    st.success("Status atualizado com sucesso!")
+
+# 📊 Contadores
+st.subheader("📈 Resumo por Status")
+st.dataframe(clientes_com_status["Status"].value_counts().reset_index().rename(columns={"index": "Status", "Status": "Qtd Clientes"}), use_container_width=True)
+
+# 📊 Gráfico de pizza
+fig = px.pie(clientes_com_status, names="Status", title="Distribuição de Clientes por Status")
 st.plotly_chart(fig, use_container_width=True)
