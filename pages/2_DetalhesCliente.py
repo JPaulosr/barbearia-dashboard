@@ -37,10 +37,11 @@ fig_receita = px.bar(
     receita_mensal,
     x="Mês_Ano",
     y="Valor",
-    text_auto=True,
+    text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
 )
-fig_receita.update_layout(height=350)
+fig_receita.update_traces(textposition="outside")
+fig_receita.update_layout(height=350, margin=dict(t=60))
 st.plotly_chart(fig_receita, use_container_width=True)
 
 # 📊 Receita por Serviço e Produto (único gráfico combinado)
@@ -54,15 +55,13 @@ fig_receita_tipos = px.bar(
     x="Serviço",
     y="Valor",
     color="Tipo",
-    text="Valor",
+    text=receita_geral["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
     labels={"Valor": "Receita (R$)", "Serviço": "Item"},
     barmode="group"
 )
-fig_receita_tipos.update_traces(
-    texttemplate="R$ %{text:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
-    textposition="outside"
-)
-fig_receita_tipos.update_layout(height=400)
+
+fig_receita_tipos.update_traces(textposition="outside")
+fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
 # 📊 Atendimentos por Funcionário (contando Cliente + Data)
