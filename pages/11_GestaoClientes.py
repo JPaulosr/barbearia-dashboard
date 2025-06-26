@@ -64,6 +64,7 @@ busca = st.text_input("🔍 Buscar cliente por nome").strip().lower()
 clientes_filtrados = clientes_com_status[clientes_com_status["Cliente"].str.lower().str.contains(busca)] if busca else clientes_com_status
 
 # ORDENAR: Ignorado > Inativo > Ativo
+# ORDENAR: Ignorado > Inativo > Ativo
 status_order = {"Ignorado": 0, "Inativo": 1, "Ativo": 2}
 clientes_filtrados["Ordem"] = clientes_filtrados["Status"].map(status_order)
 clientes_filtrados = clientes_filtrados.sort_values("Ordem")
@@ -71,11 +72,18 @@ clientes_filtrados = clientes_filtrados.sort_values("Ordem")
 # EXIBIÇÃO INTERATIVA COM CORES
 novo_status = []
 for i, row in clientes_filtrados.iterrows():
-    cor = "#ffdddd" if row["Status"] == "Ignorado" else "#fff2cc" if row["Status"] == "Inativo" else "#ddffdd"
+    cor = "#ffcccc" if row["Status"] == "Ignorado" else "#fff4c2" if row["Status"] == "Inativo" else "#d4fcd4"
     with st.container():
-        st.markdown(f'<div style="background-color:{cor}; padding:10px; border-radius:5px"><strong>👤 {row["Cliente"]}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f"""
+            <div style="background-color:{cor}; padding:15px; border-radius:8px; margin-bottom:10px">
+                <div style="font-weight: bold; font-size: 18px;">👤 {row['Cliente']}</div>
+                <div style="margin-top:8px">
+                    <label>Status de {row['Cliente']}:</label>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
         status = st.selectbox(
-            f"Status de {row['Cliente']}",
+            "",  # ocultar label padrão
             STATUS_OPTIONS,
             index=STATUS_OPTIONS.index(row["Status"]),
             key=f"status_{i}"
