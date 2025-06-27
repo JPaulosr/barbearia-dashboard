@@ -84,7 +84,6 @@ df_func["MesNome"] = df_func["MesNum"].map(meses_pt) + df_func["Data"].dt.strfti
 receita_jp = df_func.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
 receita_jp = receita_jp.sort_values("MesNum")
 
-# Verifica se filtro de tipo de serviço está ativo
 filtro_ativo = bool(tipo_selecionado)
 
 if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025 and not filtro_ativo:
@@ -109,11 +108,10 @@ else:
     receita_melt = receita_jp.rename(columns={"JPaulo": "Valor"})
     receita_melt["Tipo"] = "JPaulo"
 
-# Gráfico único
-fig_mensal_unico = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
-                          labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
-fig_mensal_unico.update_layout(height=450, template="plotly_white")
-st.plotly_chart(fig_mensal_unico, use_container_width=True)
+fig_mensal = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
+                    labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
+fig_mensal.update_layout(height=450, template="plotly_white")
+st.plotly_chart(fig_mensal, use_container_width=True)
 st.subheader("📊 Receita Mensal por Mês e Ano")
 
 meses_pt = {
