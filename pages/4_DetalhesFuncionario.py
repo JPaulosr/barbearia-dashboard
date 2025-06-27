@@ -34,19 +34,22 @@ def carregar_dados():
     df["Ano"] = df["Data"].dt.year.astype(int)
     return df
 
+df = carregar_dados()
+
 @st.cache_data
-def carregar_despesas():
+def carregar_comissoes():
     planilha = conectar_sheets()
     aba = planilha.worksheet(DESPESAS_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
+    df = df[df["Descrição"].str.contains("vinicius", case=False, na=False)]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Mes"] = df["Data"].dt.month
     return df
 
-df = carregar_dados()
-df_despesas = carregar_despesas()
+comissoes_vinicius = carregar_comissoes()
 
 # === Lista de funcionários ===
 funcionarios = df["Funcionário"].dropna().unique().tolist()
@@ -89,17 +92,15 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     df_vini["MesNome"] = df_vini["MesNum"].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
     receita_vini = df_vini.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="Vinicius")
 
-    # Pegar comissões reais da aba Despesas
-    comissoes_vini = df_despesas[(df_despesas["Descrição"].str.contains("Vinicius", case=False, na=False)) & (df_despesas["Ano"] == 2025)]
-    comissoes_vini["MesNum"] = comissoes_vini["Data"].dt.month
-    comissoes_mes = comissoes_vini.groupby("MesNum")["Valor"].sum().reset_index(name="Comissao_Real")
+    comissoes_filtradas = comissoes_vinicius[comissoes_vinicius["Ano"] == 2025]
+    comissoes_mensais = comissoes_filtradas.groupby("Mes")["Valor"].sum().reset_index()
+    comissoes_mensais.columns = ["MesNum", "ComissaoVinicius"]
 
     receita_merged = pd.merge(receita_jp, receita_vini, on=["MesNum", "MesNome"], how="left")
-    receita_merged = pd.merge(receita_merged, comissoes_mes, on="MesNum", how="left")
-    receita_merged["Comissao_Real"] = receita_merged["Comissao_Real"].fillna(0)
-    receita_merged["Total"] = receita_merged["JPaulo"] + receita_merged["Comissao_Real"]
+    receita_merged = pd.merge(receita_merged, comissoes_mensais, on="MesNum", how="left")
+    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["ComissaoVinicius"].fillna(0)
 
-    receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Total"],
+    receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
                                        var_name="Tipo", value_name="Valor")
     receita_melt = receita_melt.sort_values("MesNum")
 
@@ -108,12 +109,12 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     fig_mensal_comp.update_layout(height=450, template="plotly_white")
     st.plotly_chart(fig_mensal_comp, use_container_width=True)
 
+    receita_merged["Comissao Formatada"] = receita_merged["ComissaoVinicius"].fillna(0).apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     receita_merged["JPaulo Formatado"] = receita_merged["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    receita_merged["Comissão Real"] = receita_merged["Comissao_Real"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    receita_merged["Total Formatado"] = receita_merged["Total"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    receita_merged["Total Formatado"] = receita_merged["Com_Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-    tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão Real", "Total Formatado"]]
-    tabela.columns = ["Mês", "Receita JPaulo", "Comissão Real do Vinicius", "Total (JPaulo + Comissão)"]
+    tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissao Formatada", "Total Formatado"]]
+    tabela.columns = ["Mês", "Receita JPaulo", "Comissão do Vinicius", "Total (JPaulo + Comissão)"]
     st.dataframe(tabela, use_container_width=True)
 else:
     receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
@@ -123,7 +124,7 @@ else:
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True)
 
-# === Ticket Médio por Mês ===
+# === Ticket Médio por Mês
 st.subheader("📉 Ticket Médio por Mês")
 data_referencia = pd.to_datetime("2025-05-11")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
