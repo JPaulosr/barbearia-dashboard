@@ -84,7 +84,11 @@ st.divider()
 
 # === FASE 3 – DONO COM FUNCIONÁRIO
 fase3 = df_ano[df_ano["Fase"] == "Dono + funcionário"]
-desp3 = df_desp_ano[df_desp_ano["Descrição"].str.lower().str.contains("vinicius", na=False)]
+
+# Considera todas as despesas do salão, exceto as que envolvem o Neto (fase 1)
+desp3 = df_desp_ano[
+    ~df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False)
+]
 
 receita_jpaulo = fase3[fase3["Funcionário"] == "JPaulo"]["Valor"].sum()
 receita_vinicius = fase3[fase3["Funcionário"] == "Vinicius"]["Valor"].sum()
