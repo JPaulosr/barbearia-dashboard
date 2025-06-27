@@ -54,10 +54,10 @@ funcionarios.sort()
 
 # === Filtro por ano ===
 anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
-ano_escolhido = st.selectbox("📅 Filtrar por ano", anos)
+ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
 # === Seleção de funcionário ===
-funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
+funcionario_escolhido = st.selectbox("🗛️ Escolha um funcionário", funcionarios)
 df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
 
 # === Filtro por tipo de serviço ===
@@ -67,7 +67,7 @@ if tipo_selecionado:
     df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
 # === Histórico de atendimentos ===
-st.subheader("📅 Histórico de Atendimentos")
+st.subheader("🗕️ Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
 # === Receita mensal ===
@@ -138,4 +138,7 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
-# (continuação: else if vinicius, ticket médio, exportação...)
+elif funcionario_escolhido.lower() == "vinicius":
+    pass  # continua com o restante...
+
+# (continua com ticket médio, exportação etc.)
