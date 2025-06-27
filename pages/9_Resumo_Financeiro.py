@@ -3,7 +3,8 @@ import pandas as pd
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-import matplotlib.pyplot as plt
+import plotly.express as px
+import io
 
 st.set_page_config(layout="wide")
 st.title("📊 Resultado Financeiro Total do Salão")
@@ -64,37 +65,82 @@ st.divider()
 # === RECEITA POR FUNCIONÁRIO
 st.subheader("👤 Receita por Funcionário")
 df_func = df_ano.groupby("Funcionário")["Valor"].sum().reset_index().sort_values(by="Valor", ascending=False)
-
 st.dataframe(df_func.rename(columns={"Valor": "Receita (R$)"}), use_container_width=True)
 
-# === GRÁFICO DE BARRAS – Receita por Funcionário
-fig, ax = plt.subplots()
-ax.bar(df_func["Funcionário"], df_func["Valor"])
-ax.set_title("Receita por Funcionário")
-ax.set_ylabel("Receita (R$)")
-ax.set_xlabel("Funcionário")
-ax.tick_params(axis='x', rotation=0)
-st.pyplot(fig)
+# === GRÁFICO DE BARRAS – Receita por Funcionário (Plotly)
+st.subheader("📊 Receita por Funcionário (Gráfico)")
+fig_bar = px.bar(
+    df_func,
+    x="Funcionário",
+    y="Valor",
+    text_auto=".2s",
+    title="Receita por Funcionário",
+    labels={"Valor": "Receita (R$)"},
+)
+fig_bar.update_layout(
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+    font=dict(color="white"),
+    title_x=0.5
+)
+st.plotly_chart(fig_bar, use_container_width=True)
 
 st.divider()
 
-# === GRÁFICO MENSAL – Receita e Despesas
-st.subheader("📅 Evolução Mensal de Receita e Despesas")
+# === GRÁFICO DE LINHA – Receita vs Despesa por Mês
+st.subheader("📈 Evolução Mensal de Receita e Despesas")
 
 # Receita mensal
 receita_mensal = df_ano.groupby("Mês")["Valor"].sum().reset_index(name="Receita")
 # Despesa mensal
 despesa_mensal = df_desp_ano.groupby("Mês")["Valor"].sum().reset_index(name="Despesa")
 
-# Juntar as duas bases
+# Juntar e preparar
 df_mensal = pd.merge(receita_mensal, despesa_mensal, on="Mês", how="outer").fillna(0).sort_values("Mês")
+df_mensal["Mês"] = df_mensal["Mês"].apply(lambda x: f"{x:02d}")
+df_melt = df_mensal.melt(id_vars="Mês", value_vars=["Receita", "Despesa"], var_name="Tipo", value_name="Valor")
 
-fig2, ax2 = plt.subplots()
-ax2.plot(df_mensal["Mês"], df_mensal["Receita"], marker='o', label="Receita")
-ax2.plot(df_mensal["Mês"], df_mensal["Despesa"], marker='o', label="Despesa", color="red")
-ax2.set_title("Evolução Mensal")
-ax2.set_xlabel("Mês")
-ax2.set_ylabel("R$")
-ax2.legend()
-ax2.grid(True)
-st.pyplot(fig2)
+fig_linha = px.line(
+    df_melt,
+    x="Mês",
+    y="Valor",
+    color="Tipo",
+    markers=True,
+    title="Receita vs Despesas por Mês",
+    labels={"Valor": "R$", "Mês": "Mês"}
+)
+fig_linha.update_layout(
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+    font=dict(color="white"),
+    title_x=0.5
+)
+st.plotly_chart(fig_linha, use_container_width=True)
+
+st.divider()
+
+# === EXPORTAÇÃO EXCEL
+st.subheader("📤 Exportar Resultado")
+
+df_export = pd.DataFrame({
+    "Ano": [ano],
+    "Receita Total": [receita_total],
+    "Despesas Totais": [despesas_total],
+    "Lucro Total": [lucro_total]
+})
+df_func_export = df_func.rename(columns={"Valor": "Receita por Funcionário (R$)"}).copy()
+
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    df_export.to_excel(writer, index=False, sheet_name='Resumo Financeiro')
+    df_func_export.to_excel(writer, index=False, sheet_name='Receita por Funcionário')
+    df_mensal.to_excel(writer, index=False, sheet_name='Mensal (Receita e Despesa)')
+    writer.save()
+    dados_excel = output.getvalue()
+
+st.download_button(
+    label="⬇️ Baixar Excel (.xlsx)",
+    data=dados_excel,
+    file_name=f"financeiro_salao_{ano}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
