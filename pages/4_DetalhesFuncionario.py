@@ -47,7 +47,7 @@ def carregar_comissoes():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mes"] = df["Data"].dt.month
-    df["Valor"] = df["Valor"].replace("R\\$", "", regex=True).str.replace(".", "", regex=False).str.replace(",", ".", regex=False).astype(float)
+    df["Valor"] = df["Valor"].astype(str).replace("R\\$", "", regex=True).str.replace(".", "", regex=False).str.replace(",", ".", regex=False).astype(float)
     return df
 
 comissoes_vinicius = carregar_comissoes()
@@ -58,7 +58,7 @@ funcionarios.sort()
 
 # === Filtro por ano ===
 anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
-ano_escolhido = st.selectbox("📅 Filtrar por ano", anos)
+ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
@@ -71,7 +71,7 @@ if tipo_selecionado:
     df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
 # === Histórico de atendimentos ===
-st.subheader("📅 Histórico de Atendimentos")
+st.subheader("🗕️ Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
 # === Receita mensal ===
