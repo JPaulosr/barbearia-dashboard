@@ -44,10 +44,12 @@ ano = st.selectbox("🗓️ Selecione o Ano", anos)
 df_ano = df[df["Ano"] == ano]
 df_desp_ano = df_despesas[df_despesas["Ano"] == ano]
 
-# === FASE 1 – AUTÔNOMO / PRESTADOR
+# === FASE 1 – PRESTADOR DE SERVIÇO
 fase1 = df_ano[df_ano["Fase"] == "Autônomo (prestador)"]
-desp1 = df_desp_ano[df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False) |
-                    df_desp_ano["Descrição"].str.lower().str.contains("produto", na=False)]
+desp1 = df_desp_ano[
+    df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False) |
+    df_desp_ano["Descrição"].str.lower().str.contains("produto", na=False)
+]
 
 receita1 = fase1[fase1["Funcionário"] == "JPaulo"]["Valor"].sum()
 despesas1 = desp1["Valor"].sum()
@@ -61,9 +63,12 @@ col3.metric("Lucro", f"R$ {lucro1:,.2f}".replace(",", "v").replace(".", ",").rep
 
 st.divider()
 
-# === FASE 2 – DONO SOZINHO
-fase2 = df_ano[df_ano["Fase"] == "Dono Salão"]
-desp2 = df_desp_ano[~df_desp_ano["Descrição"].str.lower().str.contains("vinicius", na=False)]
+# === FASE 2 – DONO SEM FUNCIONÁRIO
+fase2 = df_ano[df_ano["Fase"] == "Dono (sozinho)"]
+desp2 = df_desp_ano[
+    ~df_desp_ano["Descrição"].str.lower().str.contains("vinicius", na=False) &
+    ~df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False)
+]
 
 receita2 = fase2[fase2["Funcionário"] == "JPaulo"]["Valor"].sum()
 despesas2 = desp2["Valor"].sum()
@@ -78,7 +83,7 @@ col3.metric("Lucro", f"R$ {lucro2:,.2f}".replace(",", "v").replace(".", ",").rep
 st.divider()
 
 # === FASE 3 – DONO COM FUNCIONÁRIO
-fase3 = df_ano[df_ano["Fase"] == "Funcionário"]
+fase3 = df_ano[df_ano["Fase"] == "Dono + funcionário"]
 desp3 = df_desp_ano[df_desp_ano["Descrição"].str.lower().str.contains("vinicius", na=False)]
 
 receita_jpaulo = fase3[fase3["Funcionário"] == "JPaulo"]["Valor"].sum()
