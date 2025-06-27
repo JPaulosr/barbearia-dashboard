@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -58,7 +59,7 @@ ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
-df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)]
+df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)].copy()
 
 # === Filtro por tipo de serviço ===
 tipos_servico = df_func["Serviço"].dropna().unique().tolist()
@@ -83,23 +84,17 @@ df_func["MesNome"] = df_func["MesNum"].map(meses_pt) + df_func["Data"].dt.strfti
 receita_jp = df_func.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
 receita_jp = receita_jp.sort_values("MesNum")
 
+# === Comissão real do Vinicius (não depende de filtro)
+df_com_vinicius = df_despesas[
+    (df_despesas["Prestador"] == "Vinicius") &
+    (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
+    (df_despesas["Ano"] == 2025)
+].copy()
+df_com_vinicius["MesNum"] = df_com_vinicius["Data"].dt.month
+df_com_vinicius = df_com_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="Comissão (real) do Vinicius")
+
 if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
-    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == 2025)].copy()
-    df_vini["MesNum"] = df_vini["Data"].dt.month
-    df_vini["MesNome"] = df_vini["MesNum"].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
-    receita_vini = df_vini.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="Vinicius")
-
-    receita_merged = pd.merge(receita_jp, receita_vini, on=["MesNum", "MesNome"], how="left")
-
-    df_com_vinicius = df_despesas[
-        (df_despesas["Prestador"] == "Vinicius") &
-        (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
-        (df_despesas["Ano"] == 2025)
-    ].copy()
-    df_com_vinicius["MesNum"] = df_com_vinicius["Data"].dt.month
-    df_com_vinicius = df_com_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="Comissão (real) do Vinicius")
-
-    receita_merged = receita_merged.merge(df_com_vinicius, on="MesNum", how="left").fillna(0)
+    receita_merged = receita_jp.merge(df_com_vinicius, on="MesNum", how="left").fillna(0)
     receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Comissão (real) do Vinicius"]
 
     receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
@@ -107,7 +102,7 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     receita_melt = receita_melt.sort_values("MesNum")
 
     fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
-                              labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
+                             labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
     fig_mensal_comp.update_layout(height=450, template="plotly_white")
     st.plotly_chart(fig_mensal_comp, use_container_width=True)
 
@@ -118,7 +113,6 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (real) do Vinicius", "Total (JPaulo + Comissão)"]]
     tabela.columns = ["Mês", "Receita JPaulo", "Comissão (real) do Vinicius", "Total (JPaulo + Comissão)"]
     st.dataframe(tabela, use_container_width=True)
-
 else:
     receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
@@ -146,7 +140,6 @@ if funcionario_escolhido.lower() == "vinicius":
 
 elif funcionario_escolhido.lower() == "jpaulo":
     valor_jp = df_func["Valor"].sum()
-
     comissao_real_vinicius = df_despesas[
         (df_despesas["Prestador"] == "Vinicius") &
         (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
@@ -157,10 +150,7 @@ elif funcionario_escolhido.lower() == "jpaulo":
         "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (comissão real)", "Total"],
         "Valor": [valor_jp, comissao_real_vinicius, valor_jp + comissao_real_vinicius]
     })
-    receita_total["Valor Formatado"] = receita_total["Valor"].apply(
-        lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    )
-
+    receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
