@@ -151,10 +151,11 @@ elif funcionario_escolhido.lower() == "jpaulo":
         "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)", "Total"],
         "Valor": [valor_jp, valor_vini_50, valor_jp + valor_vini_50]
     })
+    
     tabela_resumo["Valor Formatado"] = tabela_resumo["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
     st.dataframe(tabela_resumo[["Origem", "Valor Formatado"]], use_container_width=True)
-
+    
 # === Ticket Médio por Mês
 st.subheader("📉 Ticket Médio por Mês")
 data_referencia = pd.to_datetime("2025-05-11")
