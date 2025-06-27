@@ -47,6 +47,7 @@ def carregar_comissoes():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mes"] = df["Data"].dt.month
+    df["Valor"] = df["Valor"].replace("R\\$", "", regex=True).str.replace(".", "", regex=False).str.replace(",", ".", regex=False).astype(float)
     return df
 
 comissoes_vinicius = carregar_comissoes()
