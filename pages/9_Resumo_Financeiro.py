@@ -5,7 +5,7 @@ from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
-st.title("📊 Resumo Financeiro do Salão")
+st.title("📊 Resultado Financeiro Total do Salão")
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -36,6 +36,7 @@ def carregar_bases():
 
     return df_base, df_desp
 
+# === CARREGAR DADOS
 df, df_despesas = carregar_bases()
 
 anos = sorted(df["Ano"].dropna().unique(), reverse=True)
@@ -44,61 +45,21 @@ ano = st.selectbox("🗓️ Selecione o Ano", anos)
 df_ano = df[df["Ano"] == ano]
 df_desp_ano = df_despesas[df_despesas["Ano"] == ano]
 
-# === FASE 1 – PRESTADOR DE SERVIÇO
-fase1 = df_ano[df_ano["Fase"] == "Autônomo (prestador)"]
-desp1 = df_desp_ano[
-    df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False) |
-    df_desp_ano["Descrição"].str.lower().str.contains("produto", na=False)
-]
+# === CÁLCULOS GERAIS
+receita_total = df_ano["Valor"].sum()
+despesas_total = df_desp_ano["Valor"].sum()
+lucro_total = receita_total - despesas_total
 
-receita1 = fase1[fase1["Funcionário"] == "JPaulo"]["Valor"].sum()
-despesas1 = desp1["Valor"].sum()
-lucro1 = receita1 - despesas1
-
-st.subheader("🧊 Fase 1 – Prestador de Serviço")
+st.subheader("📊 Resultado Consolidado do Salão")
 col1, col2, col3 = st.columns(3)
-col1.metric("Receita (JPaulo)", f"R$ {receita1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Despesas Totais", f"R$ {despesas1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col3.metric("Lucro", f"R$ {lucro1:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col1.metric("Receita Total", f"R$ {receita_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col2.metric("Despesas Totais", f"R$ {despesas_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col3.metric("Lucro Total", f"R$ {lucro_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 st.divider()
 
-# === FASE 2 – DONO SEM FUNCIONÁRIO
-fase2 = df_ano[df_ano["Fase"] == "Dono (sozinho)"]
-desp2 = df_desp_ano[
-    ~df_desp_ano["Descrição"].str.lower().str.contains("vinicius", na=False) &
-    ~df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False)
-]
+# === RECEITA POR FUNCIONÁRIO
+st.subheader("👤 Receita por Funcionário")
+df_func = df_ano.groupby("Funcionário")["Valor"].sum().reset_index().sort_values(by="Valor", ascending=False)
 
-receita2 = fase2[fase2["Funcionário"] == "JPaulo"]["Valor"].sum()
-despesas2 = desp2["Valor"].sum()
-lucro2 = receita2 - despesas2
-
-st.subheader("🧡 Fase 2 – Dono sem Funcionário")
-col1, col2, col3 = st.columns(3)
-col1.metric("Receita (JPaulo)", f"R$ {receita2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Despesas Totais", f"R$ {despesas2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col3.metric("Lucro", f"R$ {lucro2:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-st.divider()
-
-# === FASE 3 – DONO COM FUNCIONÁRIO
-fase3 = df_ano[df_ano["Fase"] == "Dono + funcionário"]
-
-# Considera todas as despesas do salão, exceto as que envolvem o Neto (fase 1)
-desp3 = df_desp_ano[
-    ~df_desp_ano["Descrição"].str.lower().str.contains("neto", na=False)
-]
-
-receita_jpaulo = fase3[fase3["Funcionário"] == "JPaulo"]["Valor"].sum()
-receita_vinicius = fase3[fase3["Funcionário"] == "Vinicius"]["Valor"].sum()
-receita3 = receita_jpaulo + receita_vinicius
-
-despesas3 = desp3["Valor"].sum()
-lucro3 = receita3 - despesas3
-
-st.subheader("📜 Fase 3 – Dono com Funcionário")
-col1, col2, col3 = st.columns(3)
-col1.metric("Receita Total", f"R$ {receita3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("Despesas Totais", f"R$ {despesas3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col3.metric("Lucro", f"R$ {lucro3:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.dataframe(df_func.rename(columns={"Valor": "Receita (R$)"}), use_container_width=True)
