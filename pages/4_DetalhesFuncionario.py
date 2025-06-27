@@ -13,6 +13,7 @@ st.title("🧑‍💼 Detalhes do Funcionário")
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
+DESPESAS_ABA = "Despesas"
 
 @st.cache_resource
 def conectar_sheets():
@@ -34,6 +35,21 @@ def carregar_dados():
     return df
 
 df = carregar_dados()
+
+@st.cache_data
+def carregar_comissoes():
+    planilha = conectar_sheets()
+    aba = planilha.worksheet(DESPESAS_ABA)
+    df = get_as_dataframe(aba).dropna(how="all")
+    df.columns = [str(col).strip() for col in df.columns]
+    df = df[df["Descrição"].str.contains("vinicius", case=False, na=False)]
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Mes"] = df["Data"].dt.month
+    return df
+
+comissoes_vinicius = carregar_comissoes()
 
 # === Lista de funcionários ===
 funcionarios = df["Funcionário"].dropna().unique().tolist()
@@ -76,8 +92,13 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     df_vini["MesNome"] = df_vini["MesNum"].map(meses_pt) + df_vini["Data"].dt.strftime(" %Y")
     receita_vini = df_vini.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="Vinicius")
 
+    comissoes_filtradas = comissoes_vinicius[comissoes_vinicius["Ano"] == 2025]
+    comissoes_mensais = comissoes_filtradas.groupby("Mes")["Valor"].sum().reset_index()
+    comissoes_mensais.columns = ["MesNum", "ComissaoVinicius"]
+
     receita_merged = pd.merge(receita_jp, receita_vini, on=["MesNum", "MesNome"], how="left")
-    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Vinicius"].fillna(0) * 0.5
+    receita_merged = pd.merge(receita_merged, comissoes_mensais, on="MesNum", how="left")
+    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["ComissaoVinicius"].fillna(0)
 
     receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
                                        var_name="Tipo", value_name="Valor")
@@ -88,15 +109,12 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     fig_mensal_comp.update_layout(height=450, template="plotly_white")
     st.plotly_chart(fig_mensal_comp, use_container_width=True)
 
-    # Tabela detalhada
-    receita_merged["Comissão (50%) do Vinicius"] = receita_merged["Vinicius"].fillna(0) * 0.5
-    receita_merged["Total (JPaulo + Comissão)"] = receita_merged["JPaulo"] + receita_merged["Comissão (50%) do Vinicius"]
-    receita_merged["Comissão (50%) do Vinicius"] = receita_merged["Comissão (50%) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    receita_merged["Comissao Formatada"] = receita_merged["ComissaoVinicius"].fillna(0).apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     receita_merged["JPaulo Formatado"] = receita_merged["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    receita_merged["Total (JPaulo + Comissão)"] = receita_merged["Total (JPaulo + Comissão)"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    receita_merged["Total Formatado"] = receita_merged["Com_Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
-    tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]]
-    tabela.columns = ["Mês", "Receita JPaulo", "Comissão (50%) do Vinicius", "Total (JPaulo + Comissão)"]
+    tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissao Formatada", "Total Formatado"]]
+    tabela.columns = ["Mês", "Receita JPaulo", "Comissão do Vinicius", "Total (JPaulo + Comissão)"]
     st.dataframe(tabela, use_container_width=True)
 else:
     receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
@@ -105,30 +123,6 @@ else:
     fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True)
-
-# === Receita Bruta x Comissão
-if funcionario_escolhido.lower() == "vinicius":
-    bruto = df_func["Valor"].sum()
-    liquido = bruto * 0.5
-    comparativo_vinicius = pd.DataFrame({
-        "Tipo de Receita": ["Bruta (100%)", "Líquida (50%)"],
-        "Valor": [bruto, liquido]
-    })
-    comparativo_vinicius["Valor Formatado"] = comparativo_vinicius["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    st.subheader("💸 Receita Bruta vs Líquida (Vinicius)")
-    st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
-
-elif funcionario_escolhido.lower() == "jpaulo":
-    valor_jp = df_func["Valor"].sum()
-    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)]
-    valor_vini_50 = df_vini["Valor"].sum() * 0.5
-    receita_total = pd.DataFrame({
-        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)", "Total"],
-        "Valor": [valor_jp, valor_vini_50, valor_jp + valor_vini_50]
-    })
-    receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
-    st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
 # === Ticket Médio por Mês
 st.subheader("📉 Ticket Médio por Mês")
