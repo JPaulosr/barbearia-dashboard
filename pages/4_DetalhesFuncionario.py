@@ -54,7 +54,7 @@ funcionarios.sort()
 
 # === Filtro por ano ===
 anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
-ano_escolhido = st.selectbox("📅 Filtrar por ano", anos)
+ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
@@ -67,7 +67,7 @@ if tipo_selecionado:
     df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
 # === Histórico de atendimentos ===
-st.subheader("📅 Histórico de Atendimentos")
+st.subheader("🗕️ Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
 # === Receita mensal ===
@@ -118,8 +118,16 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (real) do Vinicius", "Total (JPaulo + Comissão)"]]
     tabela.columns = ["Mês", "Receita JPaulo", "Comissão (real) do Vinicius", "Total (JPaulo + Comissão)"]
     st.dataframe(tabela, use_container_width=True)
+else:
+    receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    fig_mensal = px.bar(receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
+                        labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"})
+    fig_mensal.update_layout(height=450, template="plotly_white", margin=dict(t=40, b=20))
+    fig_mensal.update_traces(textposition="outside", cliponaxis=False)
+    st.plotly_chart(fig_mensal, use_container_width=True)
 
-elif funcionario_escolhido.lower() == "vinicius":
+# === Receita Bruta x Comissão
+if funcionario_escolhido.lower() == "vinicius":
     bruto = df_func["Valor"].sum()
     comissao_real = df_despesas[
         (df_despesas["Prestador"] == "Vinicius") &
@@ -137,16 +145,11 @@ elif funcionario_escolhido.lower() == "vinicius":
 
 elif funcionario_escolhido.lower() == "jpaulo":
     valor_jp = df_func["Valor"].sum()
-
-    comissao_real_vinicius = df_despesas[
-        (df_despesas["Prestador"] == "Vinicius") &
-        (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
-        (df_despesas["Ano"] == ano_escolhido)
-    ]["Valor"].sum()
-
+    df_vini = df[(df["Funcionário"] == "Vinicius") & (df["Ano"] == ano_escolhido)]
+    valor_vini_50 = df_vini["Valor"].sum() * 0.5
     receita_total = pd.DataFrame({
-        "Origem": ["Receita Bruta JPaulo", "Comissão paga ao Vinicius", "Total"],
-        "Valor": [valor_jp, comissao_real_vinicius, valor_jp + comissao_real_vinicius]
+        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (50%)", "Total"],
+        "Valor": [valor_jp, valor_vini_50, valor_jp + valor_vini_50]
     })
     receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
@@ -170,7 +173,7 @@ ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(
 st.dataframe(ticket_mensal, use_container_width=True)
 
 # === Exportar dados ===
-st.subheader("📤 Exportar dados filtrados")
+st.subheader("📄 Exportar dados filtrados")
 buffer = BytesIO()
 df_func.to_excel(buffer, index=False, sheet_name="Filtrado", engine="openpyxl")
 st.download_button("Baixar Excel com dados filtrados", data=buffer.getvalue(), file_name="dados_filtrados.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
