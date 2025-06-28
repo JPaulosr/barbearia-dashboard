@@ -63,7 +63,7 @@ df_hora["Insight"] = df_hora.apply(gerar_insight, axis=1)
 # === Filtros ===
 st.sidebar.header("🔍 Filtros")
 data_sel = st.sidebar.date_input("Selecionar data", value=pd.to_datetime("today"))
-df_hora = df_hora[df_hora["Data"] == pd.to_datetime(data_sel)]
+df_hora = df_hora[df_hora["Data"].dt.date == data_sel]
 
 clientes = sorted(df_hora["Cliente"].dropna().unique().tolist())
 funcionarios = sorted(df_hora["Funcionário"].dropna().unique().tolist())
