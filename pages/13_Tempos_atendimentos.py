@@ -37,8 +37,7 @@ def carregar_dados():
 df = carregar_dados()
 
 # === Calcular tempos ===
-df_hora = df[df["Data"].dt.date == data_sel].copy()
-df_hora = df_hora.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how="any")
+df_hora = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how="any").copy()
 
 # Junta data com hora
 for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
@@ -63,8 +62,9 @@ df_hora["Insight"] = df_hora.apply(gerar_insight, axis=1)
 
 # === Filtros ===
 st.sidebar.header("🔍 Filtros")
-data_sel = st.sidebar.date_input("Selecionar data", value=pd.to_datetime("today")).date()
-df_hora = df_hora[df_hora["Data"].dt.date == data_sel]
+data_unicas = df["Data"].dropna().dt.date.unique()
+data_sel = st.sidebar.date_input("Selecionar data", value=max(data_unicas)).__date__()
+df_hora = df_hora[df_hora["Data"] == pd.to_datetime(data_sel)]
 
 clientes = sorted(df_hora["Cliente"].dropna().unique().tolist())
 funcionarios = sorted(df_hora["Funcionário"].dropna().unique().tolist())
