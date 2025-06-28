@@ -8,7 +8,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(layout="wide")
 st.title("📆 Frequência dos Clientes")
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
+# === CONFIG GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
@@ -42,17 +42,14 @@ def carregar_status():
     except:
         return pd.DataFrame(columns=["Cliente", "Status"])
 
+# === CARREGAMENTO E PRÉ-PROCESSAMENTO
 df = carregar_dados()
 df_status = carregar_status()
-
-# === Remover inativos e ignorados
 clientes_validos = df_status[~df_status["Status"].isin(["Inativo", "Ignorado"])]["Cliente"].unique().tolist()
 df = df[df["Cliente"].isin(clientes_validos)]
-
-# === Agrupar por Cliente e Data (atendimento único)
 atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
-# === Calcular frequência
+# === CÁLCULO DE FREQUÊNCIA
 frequencia_clientes = []
 hoje = pd.Timestamp.today().normalize()
 
@@ -85,22 +82,40 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
 
 freq_df = pd.DataFrame(frequencia_clientes)
 
-# === Filtro de status
-status_opcoes = ["Todos", "Em dia", "Pouco atrasado", "Muito atrasado"]
-status_selecionado = st.selectbox("🔎 Filtrar por status", status_opcoes)
+# === FILTRO INTERATIVO
+col_filtros, col_tabela, col_graficos = st.columns([1.2, 2.5, 2])
 
-if status_selecionado != "Todos":
-    freq_df = freq_df[freq_df["Status_Label"] == status_selecionado]
+with col_filtros:
+    st.markdown("### 🎯 Filtros")
 
-# === Ordenar por criticidade (muito atrasado vem primeiro)
-status_prioridade = {"Muito atrasado": 0, "Pouco atrasado": 1, "Em dia": 2}
-freq_df["OrdemStatus"] = freq_df["Status_Label"].map(status_prioridade)
-freq_df = freq_df.sort_values(["OrdemStatus", "Dias Desde Último"], ascending=[True, False])
+    cliente_opcoes = ["Todos"] + sorted(freq_df["Cliente"].unique().tolist())
+    cliente_selecionado = st.selectbox("👤 Cliente", cliente_opcoes)
 
-# === Exibir tabela
-st.dataframe(freq_df.drop(columns=["Status_Label", "OrdemStatus"]), use_container_width=True)
+    if cliente_selecionado != "Todos":
+        freq_df = freq_df[freq_df["Cliente"] == cliente_selecionado]
 
-# === Gráfico (Top 20 mais atrasados)
+    status_prioridade = {"Muito atrasado": 0, "Pouco atrasado": 1, "Em dia": 2}
+    freq_df["OrdemStatus"] = freq_df["Status_Label"].map(status_prioridade)
+    freq_df = freq_df.sort_values(["OrdemStatus", "Dias Desde Último"], ascending=[True, False])
+
+with col_tabela:
+    st.markdown("### 📋 Tabela de Frequência")
+    st.dataframe(freq_df.drop(columns=["Status_Label", "OrdemStatus"]), use_container_width=True)
+
+with col_graficos:
+    st.markdown("### 🧮 Indicadores")
+    total = freq_df["Cliente"].nunique()
+    em_dia = freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente"].nunique()
+    pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique()
+    muito = freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique()
+
+    st.metric("👥 Clientes ativos", total)
+    st.metric("🟢 Em dia", em_dia)
+    st.metric("🟠 Pouco atrasado", pouco)
+    st.metric("🔴 Muito atrasado", muito)
+
+# === GRÁFICO TOP 20 ATRASADOS
+st.divider()
 st.subheader("📊 Top 20 Clientes com mais dias sem vir")
 top_grafico = freq_df.head(20)
 fig = px.bar(
@@ -114,3 +129,19 @@ fig = px.bar(
 fig.update_layout(xaxis_tickangle=-45, height=500)
 fig.update_traces(textposition="outside")
 st.plotly_chart(fig, use_container_width=True)
+
+# === TOP 5 FREQUÊNCIA MÉDIA
+st.divider()
+st.subheader("🏆 Ranking por Frequência Média")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### ✅ Top 5 Clientes com Melhor Frequência")
+    melhores = freq_df.sort_values("Frequência Média (dias)").head(5)
+    st.dataframe(melhores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
+
+with col2:
+    st.markdown("### ⚠️ Top 5 Clientes com Pior Frequência")
+    piores = freq_df.sort_values("Frequência Média (dias)", ascending=False).head(5)
+    st.dataframe(piores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
