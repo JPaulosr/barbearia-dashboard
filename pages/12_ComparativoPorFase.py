@@ -80,11 +80,29 @@ for (ano, fase), grupo in df_mes.groupby(["Ano", "Fase"]):
 
 st.subheader(f"📊 Comparativo de {mes_nome}")
 df_tabela = pd.DataFrame(tabela).sort_values(by=["Ano", "Fase"])
-st.dataframe(df_tabela, use_container_width=True)
 
-# Gráfico
-fig = px.bar(df_tabela, x="Ano", y="Lucro", color="Fase", barmode="group",
-             title=f"Lucro por Fase no mês de {mes_nome}", labels={"Lucro": "Lucro (R$)"})
+# Formatar valores como moeda para exibição
+df_formatada = df_tabela.copy()
+for col in ["Receita", "Despesa", "Lucro"]:
+    df_formatada[col] = df_formatada[col].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+st.dataframe(df_formatada, use_container_width=True)
+
+# Gráfico formatado com valores em R$ + valores visíveis nas barras
+fig = px.bar(
+    df_tabela,
+    x="Ano",
+    y="Lucro",
+    color="Fase",
+    barmode="group",
+    title=f"Lucro por Fase no mês de {mes_nome}",
+    labels={"Lucro": "Lucro (R$)"},
+    text_auto=".2s"
+)
+fig.update_traces(
+    hovertemplate='Ano: %{x}<br>Fase: %{color}<br>Lucro: R$ %{y:,.2f}<extra></extra>',
+    textposition="outside"
+)
 fig.update_layout(
     plot_bgcolor="rgba(0,0,0,0)",
     paper_bgcolor="rgba(0,0,0,0)",
@@ -93,7 +111,7 @@ fig.update_layout(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# Exportação
+# Exportação Excel
 st.subheader("📤 Exportar Resultado")
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -107,4 +125,3 @@ st.download_button(
     file_name=f"comparativo_fases_{mes_nome.lower()}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
