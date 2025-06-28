@@ -5,13 +5,14 @@ import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
+# === CONFIG ===
 st.set_page_config(layout="wide")
-st.title("📊 Controle de Fila e Fluxo no Salão")
+st.title("⏱️ Tempos por Atendimento")
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 
+# === Funções auxiliares ===
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -25,56 +26,76 @@ def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [col.strip() for col in df.columns]
+    df.columns = [col.strip() for col in df.columns]  # limpa espaços
+
+    # Corrige possíveis erros de nomes de colunas
+    colunas_esperadas = ["Data", "Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída"]
+    for col in colunas_esperadas:
+        if col not in df.columns:
+            df[col] = pd.NaT if 'Hora' in col else None
+
     df = df.dropna(subset=["Data"])
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+
     for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], format="%H:%M:%S", errors="coerce")
+        df[col] = pd.to_datetime(df[col], format="%H:%M:%S", errors="coerce")
+
     return df
 
 df = carregar_dados()
 
+# === Calcular tempos ===
+df_hora = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how="any").copy()
+df_hora["Espera (min)"] = (df_hora["Hora Início"] - df_hora["Hora Chegada"]).dt.total_seconds() / 60
+df_hora["Atendimento (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Início"]).dt.total_seconds() / 60
+df_hora["Tempo Total (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Chegada"]).dt.total_seconds() / 60
+df_hora = df_hora.round({"Espera (min)": 1, "Atendimento (min)": 1, "Tempo Total (min)": 1})
+
+# === Insights ===
+def gerar_insight(row):
+    if row["Tempo Total (min)"] >= 70:
+        return "🔥 Muito Demorado"
+    elif row["Tempo Total (min)"] >= 50:
+        return "⏳ Demorado"
+    elif row["Tempo Total (min)"] >= 30:
+        return "✅ Normal"
+    else:
+        return "⚡ Rápido"
+
+df_hora["Insight"] = df_hora.apply(gerar_insight, axis=1)
+
 # === Filtros ===
 st.sidebar.header("🔍 Filtros")
-datas = sorted(df["Data"].dropna().dt.date.unique(), reverse=True)
-data_sel = st.sidebar.selectbox("📅 Escolha a data", datas, index=0)
-funcionarios = sorted(df["Funcionário"].dropna().unique().tolist())
-func_sel = st.sidebar.selectbox("💈 Filtrar por Funcionário", ["Todos"] + funcionarios)
+data_sel = st.sidebar.date_input("Selecionar data", value=pd.to_datetime("today"))
+df_hora = df_hora[df_hora["Data"] == pd.to_datetime(data_sel)]
 
-# === Aplicar filtros ===
-df_dia = df[df["Data"].dt.date == data_sel].copy()
+clientes = sorted(df_hora["Cliente"].dropna().unique().tolist())
+funcionarios = sorted(df_hora["Funcionário"].dropna().unique().tolist())
+
+cliente_sel = st.sidebar.selectbox("👤 Cliente", ["Todos"] + clientes)
+func_sel = st.sidebar.selectbox("✂️ Funcionário", ["Todos"] + funcionarios)
+
+if cliente_sel != "Todos":
+    df_hora = df_hora[df_hora["Cliente"] == cliente_sel]
 if func_sel != "Todos":
-    df_dia = df_dia[df_dia["Funcionário"] == func_sel]
+    df_hora = df_hora[df_hora["Funcionário"] == func_sel]
 
-df_dia = df_dia.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how="any")
-
-# === Cálculo dos tempos ===
-df_dia["Espera (min)"] = (df_dia["Hora Início"] - df_dia["Hora Chegada"]).dt.total_seconds() / 60
-df_dia["Atendimento (min)"] = (df_dia["Hora Saída"] - df_dia["Hora Início"]).dt.total_seconds() / 60
-df_dia["Tempo Total (min)"] = (df_dia["Hora Saída"] - df_dia["Hora Chegada"]).dt.total_seconds() / 60
-df_dia = df_dia.round({"Espera (min)": 1, "Atendimento (min)": 1, "Tempo Total (min)": 1})
-
-# === Indicadores gerais ===
-st.subheader("📈 Indicadores do Dia")
+# === Indicadores ===
+st.subheader("📊 Indicadores do Dia")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Clientes atendidos", len(df_dia))
-col2.metric("Média de Espera", f"{df_dia['Espera (min)'].mean():.1f} min")
-col3.metric("Média Atendimento", f"{df_dia['Atendimento (min)'].mean():.1f} min")
-col4.metric("Tempo Total Médio", f"{df_dia['Tempo Total (min)'].mean():.1f} min")
+col1.metric("Clientes atendidos", len(df_hora))
+col2.metric("Média de Espera", f"{df_hora['Espera (min)'].mean():.1f} min" if not df_hora.empty else "-")
+col3.metric("Média Atendimento", f"{df_hora['Atendimento (min)'].mean():.1f} min" if not df_hora.empty else "-")
+col4.metric("Tempo Total Médio", f"{df_hora['Tempo Total (min)'].mean():.1f} min" if not df_hora.empty else "-")
 
-# === Gráfico de Espera ===
+# === Gráfico ===
 st.subheader("🕒 Gráfico - Tempo de Espera por Cliente")
-fig = px.bar(df_dia.sort_values("Espera (min)", ascending=False),
-             x="Cliente", y="Espera (min)", color="Espera (min)", text_auto=True)
-fig.update_layout(height=400)
-st.plotly_chart(fig, use_container_width=True)
+if not df_hora.empty:
+    fig = px.bar(df_hora, x="Cliente", y="Espera (min)", color="Funcionário", text="Espera (min)")
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Nenhum atendimento registrado nesta data.")
 
-# === Tabela detalhada ===
+# === Tabela ===
 st.subheader("📋 Atendimentos do Dia")
-st.dataframe(df_dia[["Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída",
-                    "Espera (min)", "Atendimento (min)", "Tempo Total (min)"]], use_container_width=True)
-
-# === Rodapé ===
-st.markdown("---")
-st.markdown("Esses dados ajudam a entender a real dinâmica do salão e melhorar decisões no dia a dia.")
+st.dataframe(df_hora[["Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída", "Espera (min)", "Atendimento (min)", "Tempo Total (min)"]], use_container_width=True)
