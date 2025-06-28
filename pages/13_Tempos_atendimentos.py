@@ -38,7 +38,7 @@ def carregar_dados():
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 
     for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
-        df[col] = pd.to_datetime(df[col], format="%H:%M", errors="coerce").dt.time
+        df[col] = pd.to_datetime(df["Data"].dt.strftime("%Y-%m-%d") + " " + df[col].astype(str), format="%Y-%m-%d %H:%M", errors="coerce")
 
     return df
 
