@@ -5,6 +5,7 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
+from datetime import time
 
 # === CONFIG ===
 st.set_page_config(layout="wide")
@@ -37,8 +38,22 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 
+    def converter_hora(valor):
+        if pd.isna(valor):
+            return None
+        if isinstance(valor, (int, float)):
+            hora = int(valor * 24)
+            minuto = int((valor * 24 - hora) * 60)
+            return time(hour=hora, minute=minuto)
+        if isinstance(valor, str) and ":" in valor:
+            try:
+                return pd.to_datetime(valor, format="%H:%M").time()
+            except:
+                return None
+        return None
+
     for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
-        df[col] = pd.to_datetime(df["Data"].dt.strftime("%Y-%m-%d") + " " + df[col].astype(str), format="%Y-%m-%d %H:%M", errors="coerce")
+        df[col] = df[col].apply(converter_hora)
 
     return df
 
@@ -49,7 +64,7 @@ df_hora = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how=
 
 # Concatena a data com a hora para cálculo correto
 for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
-    df_hora[col] = pd.to_datetime(df_hora["Data"].dt.strftime("%Y-%m-%d") + " " + df_hora[col].astype(str))
+    df_hora[col] = pd.to_datetime(df_hora["Data"].dt.strftime("%Y-%m-%d") + " " + df_hora[col].astype(str), format="%Y-%m-%d %H:%M", errors="coerce")
 
 df_hora["Espera (min)"] = (df_hora["Hora Início"] - df_hora["Hora Chegada"]).dt.total_seconds() / 60
 df_hora["Atendimento (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Início"]).dt.total_seconds() / 60
