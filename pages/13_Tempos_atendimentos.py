@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -26,9 +27,8 @@ def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [col.strip() for col in df.columns]  # limpa espaços
+    df.columns = [col.strip() for col in df.columns]
 
-    # Corrige possíveis erros de nomes de colunas
     colunas_esperadas = ["Data", "Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída"]
     for col in colunas_esperadas:
         if col not in df.columns:
@@ -38,7 +38,7 @@ def carregar_dados():
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 
     for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
-        df[col] = pd.to_datetime(df[col], format="%H:%M:%S", errors="coerce")
+        df[col] = pd.to_datetime(df[col], format="%H:%M", errors="coerce").dt.time
 
     return df
 
@@ -46,6 +46,11 @@ df = carregar_dados()
 
 # === Calcular tempos ===
 df_hora = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how="any").copy()
+
+# Concatena a data com a hora para cálculo correto
+for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
+    df_hora[col] = pd.to_datetime(df_hora["Data"].dt.strftime("%Y-%m-%d") + " " + df_hora[col].astype(str))
+
 df_hora["Espera (min)"] = (df_hora["Hora Início"] - df_hora["Hora Chegada"]).dt.total_seconds() / 60
 df_hora["Atendimento (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Início"]).dt.total_seconds() / 60
 df_hora["Tempo Total (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Chegada"]).dt.total_seconds() / 60
@@ -98,4 +103,10 @@ else:
 
 # === Tabela ===
 st.subheader("📋 Atendimentos do Dia")
-st.dataframe(df_hora[["Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída", "Espera (min)", "Atendimento (min)", "Tempo Total (min)"]], use_container_width=True)
+st.dataframe(
+    df_hora[[
+        "Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída",
+        "Espera (min)", "Atendimento (min)", "Tempo Total (min)", "Insight"
+    ]],
+    use_container_width=True
+)
