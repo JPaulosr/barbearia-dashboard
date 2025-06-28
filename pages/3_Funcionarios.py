@@ -146,7 +146,9 @@ receita_ano_func = (
     .reset_index()
     .pivot(index="Ano", columns="Funcionário", values="Valor")
     .fillna(0)
+    .sort_index(ascending=False)  # mostra 2025 primeiro
 )
+
 receita_formatada = receita_ano_func.copy()
 for col in receita_formatada.columns:
     receita_formatada[col] = receita_formatada[col].apply(
