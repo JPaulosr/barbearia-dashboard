@@ -71,58 +71,77 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
         status = ("🔴 Muito atrasado", "Muito atrasado")
 
     frequencia_clientes.append({
-        "Status": status[0],
         "Cliente": cliente,
         "Último Atendimento": ultimo_atendimento.date(),
         "Qtd Atendimentos": len(datas),
         "Frequência Média (dias)": round(media_freq, 1),
         "Dias Desde Último": dias_desde_ultimo,
+        "Status": status[0],
         "Status_Label": status[1]
     })
 
 freq_df = pd.DataFrame(frequencia_clientes)
 
-# === FILTRO POR TEXTO
-col1, col2, col3 = st.columns([2, 1, 1])
+# === FILTRO INTERATIVO
+col_filtros, col_tabela, col_graficos = st.columns([1.2, 2.5, 2])
 
-with col1:
-    nome_busca = st.text_input("🔍 Buscar cliente pelo nome").strip().lower()
+with col_filtros:
+    st.markdown("### 🎯 Filtros")
 
-if nome_busca:
-    freq_df = freq_df[freq_df["Cliente"].str.lower().str.contains(nome_busca)]
+    cliente_opcoes = ["Todos"] + sorted(freq_df["Cliente"].unique().tolist())
+    cliente_selecionado = st.selectbox("👤 Cliente", cliente_opcoes)
 
-# === INDICADORES
-with col2:
-    st.metric("👥 Clientes ativos", freq_df["Cliente"].nunique())
-with col3:
-    st.metric("📆 Clientes exibidos", len(freq_df))
+    if cliente_selecionado != "Todos":
+        freq_df = freq_df[freq_df["Cliente"] == cliente_selecionado]
 
-# === TABELAS POR STATUS
-st.divider()
-st.markdown("## 🔴 Muito Atrasados")
-muito = freq_df[freq_df["Status_Label"] == "Muito atrasado"].drop(columns=["Status_Label"])
-st.dataframe(muito, use_container_width=True)
+    status_prioridade = {"Muito atrasado": 0, "Pouco atrasado": 1, "Em dia": 2}
+    freq_df["OrdemStatus"] = freq_df["Status_Label"].map(status_prioridade)
+    freq_df = freq_df.sort_values(["OrdemStatus", "Dias Desde Último"], ascending=[True, False])
 
-st.markdown("## 🟠 Pouco Atrasados")
-pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"].drop(columns=["Status_Label"])
-st.dataframe(pouco, use_container_width=True)
+with col_tabela:
+    st.markdown("### 📋 Tabela de Frequência")
+    st.dataframe(freq_df.drop(columns=["Status_Label", "OrdemStatus"]), use_container_width=True)
 
-st.markdown("## 🟢 Em Dia")
-emdia = freq_df[freq_df["Status_Label"] == "Em dia"].drop(columns=["Status_Label"])
-st.dataframe(emdia, use_container_width=True)
+with col_graficos:
+    st.markdown("### 🧮 Indicadores")
+    total = freq_df["Cliente"].nunique()
+    em_dia = freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente"].nunique()
+    pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique()
+    muito = freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique()
 
-# === GRÁFICO FINAL (TOP 20 AUSENTES)
+    st.metric("👥 Clientes ativos", total)
+    st.metric("🟢 Em dia", em_dia)
+    st.metric("🟠 Pouco atrasado", pouco)
+    st.metric("🔴 Muito atrasado", muito)
+
+# === GRÁFICO TOP 20 ATRASADOS
 st.divider()
 st.subheader("📊 Top 20 Clientes com mais dias sem vir")
-top_grafico = freq_df.sort_values("Dias Desde Último", ascending=False).head(20)
+top_grafico = freq_df.head(20)
 fig = px.bar(
     top_grafico,
     x="Cliente",
     y="Dias Desde Último",
     color="Status_Label",
-    text="Dias Desde Último",
-    labels={"Dias Desde Último": "Dias de ausência", "Status_Label": "Status"}
+    labels={"Dias Desde Último": "Dias de ausência", "Status_Label": "Status"},
+    text="Dias Desde Último"
 )
 fig.update_layout(xaxis_tickangle=-45, height=500)
 fig.update_traces(textposition="outside")
 st.plotly_chart(fig, use_container_width=True)
+
+# === TOP 5 FREQUÊNCIA MÉDIA
+st.divider()
+st.subheader("🏆 Ranking por Frequência Média")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### ✅ Top 5 Clientes com Melhor Frequência")
+    melhores = freq_df.sort_values("Frequência Média (dias)").head(5)
+    st.dataframe(melhores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
+
+with col2:
+    st.markdown("### ⚠️ Top 5 Clientes com Pior Frequência")
+    piores = freq_df.sort_values("Frequência Média (dias)", ascending=False).head(5)
+    st.dataframe(piores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
