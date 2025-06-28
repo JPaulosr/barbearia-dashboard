@@ -9,17 +9,13 @@ st.set_page_config(layout="wide")
 st.title("⏱️ Tempos por Atendimento")
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
-
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
@@ -40,7 +36,6 @@ def carregar_dados():
 df = carregar_dados()
 
 # === Calcular tempos ===
-
 df_hora = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"], how="any").copy()
 df_hora["Espera (min)"] = (df_hora["Hora Início"] - df_hora["Hora Chegada"]).dt.total_seconds() / 60
 df_hora["Atendimento (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Início"]).dt.total_seconds() / 60
@@ -48,7 +43,6 @@ df_hora["Tempo Total (min)"] = (df_hora["Hora Saída"] - df_hora["Hora Chegada"]
 df_hora = df_hora.round({"Espera (min)": 1, "Atendimento (min)": 1, "Tempo Total (min)": 1})
 
 # === Insights por atendimento ===
-
 def gerar_insight(row):
     if row["Tempo Total (min)"] >= 70:
         return "🔥 Muito Demorado"
@@ -62,7 +56,6 @@ def gerar_insight(row):
 df_hora["Insight"] = df_hora.apply(gerar_insight, axis=1)
 
 # === Filtros ===
-
 col1, col2, col3 = st.columns(3)
 clientes = sorted(df_hora["Cliente"].dropna().unique().tolist())
 funcionarios = sorted(df_hora["Funcionário"].dropna().unique().tolist())
@@ -80,7 +73,6 @@ if insight_sel != "Todos":
     df_filtrado = df_filtrado[df_filtrado["Insight"] == insight_sel]
 
 # === Ordenação personalizada ===
-
 criterios = {
     "Tempo Total (maior)": "Tempo Total (min)",
     "Tempo Total (menor)": "Tempo Total (min)",
@@ -93,17 +85,14 @@ asc = True if "menor" in criterio_sel else False
 df_ordenado = df_filtrado.sort_values(by=criterios[criterio_sel], ascending=asc)
 
 # === Tabela simples ===
-
 st.subheader("📌 Atendimentos Recentes")
 st.dataframe(df_ordenado[["Cliente", "Espera (min)", "Atendimento (min)", "Tempo Total (min)"]], use_container_width=True)
 
 # === Tabela completa ===
-
 st.subheader("📋 Tabela de Atendimentos com Insights")
 st.dataframe(df_ordenado[["Data", "Cliente", "Funcionário", "Espera (min)", "Atendimento (min)", "Tempo Total (min)", "Insight"]], use_container_width=True)
 
 # === Gráfico com tempo total por cliente ===
-
 st.subheader("📊 Tempo Total por Cliente")
 clientes_grafico = df_ordenado.groupby("Cliente")["Tempo Total (min)"].mean().sort_values(ascending=False).head(10).reset_index()
 fig = px.bar(clientes_grafico, x="Cliente", y="Tempo Total (min)", text_auto=True, color="Tempo Total (min)")
@@ -111,7 +100,6 @@ fig.update_layout(height=400)
 st.plotly_chart(fig, use_container_width=True)
 
 # === Indicadores ===
-
 st.subheader("📈 Métricas Gerais")
 col1, col2, col3 = st.columns(3)
 col1.metric("Média Espera", f"{df_ordenado['Espera (min)'].mean():.1f} min")
