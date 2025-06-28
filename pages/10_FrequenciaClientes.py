@@ -110,7 +110,7 @@ st.markdown("## 🟢 Em Dia")
 emdia = freq_df[freq_df["Status_Label"] == "Em dia"].drop(columns=["Status_Label"])
 st.dataframe(emdia, use_container_width=True)
 
-# === GRÁFICO FINAL
+# === GRÁFICO: TOP 20 CLIENTES AUSENTES
 st.divider()
 st.subheader("📊 Top 20 Clientes com mais dias sem vir")
 top_grafico = freq_df.sort_values("Dias Desde Último", ascending=False).head(20)
@@ -140,3 +140,27 @@ with col6:
     st.markdown("### ⚠️ Top 5 Clientes com Pior Frequência")
     piores = freq_df.sort_values("Frequência Média (dias)", ascending=False).head(5)
     st.dataframe(piores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
+
+# === NOVO GRÁFICO: TOP 10 POR QUANTIDADE DE ATENDIMENTOS
+st.divider()
+st.subheader("💪 Top 10 Clientes por Quantidade de Atendimentos")
+
+top_atendimentos = freq_df.sort_values("Qtd Atendimentos", ascending=False).head(10)
+
+fig2 = px.bar(
+    top_atendimentos,
+    x="Cliente",
+    y="Qtd Atendimentos",
+    text="Qtd Atendimentos",
+    color_discrete_sequence=["#36a2eb"]
+)
+
+fig2.update_traces(textposition="outside")
+fig2.update_layout(
+    xaxis_tickangle=-45,
+    height=500,
+    yaxis_title="Atendimentos",
+    xaxis_title="Cliente"
+)
+
+st.plotly_chart(fig2, use_container_width=True)
