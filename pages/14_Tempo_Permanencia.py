@@ -56,20 +56,35 @@ with col2:
 
 st.subheader("📈 Comparativo Visual")
 top20 = df.sort_values("Tempo Total (min)", ascending=False).head(20)
-fig = px.bar(
-    top20,
-    x="Cliente",
-    y=["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)"],
-    title="Top 20 Clientes por Tempo Total (Lado a Lado)",
-    barmode="group",
-    labels={
-        "value": "Minutos",
-        "variable": "Etapa",
-        "Cliente": "Cliente"
-    },
-    text_auto=True
+
+# Converter os dados para long format e adicionar coluna formatada
+df_long = top20.melt(
+    id_vars=["Cliente"], 
+    value_vars=["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)"],
+    var_name="Etapa", 
+    value_name="Minutos"
 )
-fig.update_traces(texttemplate='%{text:.0f} min', textposition='outside')
+
+def min_para_texto(minutos):
+    if pd.isnull(minutos): return ""
+    h = int(minutos // 60)
+    m = int(minutos % 60)
+    return f"{h}h {m}min"
+
+df_long["Tempo Formatado"] = df_long["Minutos"].apply(min_para_texto)
+
+fig = px.bar(
+    df_long,
+    x="Cliente",
+    y="Minutos",
+    color="Etapa",
+    barmode="group",
+    text="Tempo Formatado",
+    title="Top 20 Clientes por Tempo Total (Lado a Lado)",
+    labels={"Minutos": "Minutos", "Cliente": "Cliente"}
+)
+
+fig.update_traces(textposition="outside")
 fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
 st.plotly_chart(fig, use_container_width=True)
 
