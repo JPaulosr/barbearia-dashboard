@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 
-st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️")
+st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
 st.title("⏱️ Tempos por Atendimento")
 
 # Função para carregar os dados diretamente do Google Sheets com cache
@@ -12,9 +12,9 @@ def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
     df = pd.read_csv(url)
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
-    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce').dt.time
-    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce').dt.time
-    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce').dt.time
+    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
+    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
+    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
     return df
 
 # Carregar dados
@@ -23,16 +23,18 @@ df = carregar_dados_google_sheets()
 # Agrupar por Cliente + Data para evitar duplicações de combos
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
+    "Hora Chegada": "min",
     "Hora Início": "min",
     "Hora Saída": "max",
     "Funcionário": "first",
     "Tipo": lambda x: ', '.join(sorted(set(x))),
 }).reset_index()
 
+# Calcular duração do atendimento
 def calcular_duracao(row):
     try:
-        inicio = datetime.combine(datetime.today(), row["Hora Início"])
-        fim = datetime.combine(datetime.today(), row["Hora Saída"])
+        inicio = row["Hora Início"]
+        fim = row["Hora Saída"]
         return (fim - inicio).total_seconds() / 60  # minutos
     except:
         return None
@@ -75,3 +77,7 @@ dias_apertados = df_tempo.groupby("Data")["Duração (min)"].mean().reset_index(
 dias_apertados = dias_apertados.sort_values("Duração (min)", ascending=False).head(10)
 fig_dias = px.bar(dias_apertados, x="Data", y="Duração (min)", title="Top 10 Dias Mais Apertados")
 st.plotly_chart(fig_dias, use_container_width=True)
+
+# Exibir dados de base (opcional)
+with st.expander("📋 Visualizar dados consolidados"):
+    st.dataframe(df_tempo)
