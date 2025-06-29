@@ -40,6 +40,8 @@ def calcular_duracao(row):
         return None
 
 combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
+combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(
+    lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"])
 
 st.subheader("🏆 Rankings de Tempo por Atendimento")
@@ -48,18 +50,18 @@ col1, col2 = st.columns(2)
 with col1:
     top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
     st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Duração (min)"]])
+    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Duração formatada"]])
 
 with col2:
     top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
     st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Duração (min)"]])
+    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Duração formatada"]])
 
 # Gráfico: Tempo médio por tipo de serviço (Combo/Simplificado)
 st.subheader("📊 Tempo Médio por Tipo de Serviço")
 if "Tipo" in df_tempo.columns:
     tempo_por_tipo = df_tempo.copy()
-    tempo_por_tipo["Categoria"] = tempo_por_tipo["Tipo"].apply(lambda x: "Combo" if "," in x else x)
+    tempo_por_tipo["Categoria"] = tempo_por_tipo["Tipo"].apply(lambda x: "Combo" if "," in x else "Simples")
     media_tipo = tempo_por_tipo.groupby("Categoria")["Duração (min)"].mean().reset_index()
     fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", title="Tempo Médio por Tipo de Serviço")
     st.plotly_chart(fig_tipo, use_container_width=True)
@@ -68,7 +70,9 @@ if "Tipo" in df_tempo.columns:
 st.subheader("👤 Tempo Médio por Cliente (Top 15)")
 tempo_por_cliente = df_tempo.groupby("Cliente")["Duração (min)"].mean().reset_index()
 top_clientes = tempo_por_cliente.sort_values("Duração (min)", ascending=False).head(15)
-fig_cliente = px.bar(top_clientes, x="Cliente", y="Duração (min)", title="Clientes com Maior Tempo Médio", text_auto=True)
+top_clientes["Duração formatada"] = top_clientes["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+fig_cliente = px.bar(top_clientes, x="Cliente", y="Duração (min)", title="Clientes com Maior Tempo Médio", text="Duração formatada")
+fig_cliente.update_traces(textposition='outside')
 st.plotly_chart(fig_cliente, use_container_width=True)
 
 # Dias mais apertados (tempo médio alto)
