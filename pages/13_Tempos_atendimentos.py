@@ -68,15 +68,14 @@ combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(la
 combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
 combo_grouped["Categoria"] = combo_grouped["Tipo"].apply(lambda x: "Combo" if any("combo" in item.lower() for item in str(x).split(",")) else "Simples")
 
+# Período do dia
+combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
+combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
+
+# Filtrando atendimentos válidos
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 
-st.subheader("📊 Tempo Médio por Tipo de Serviço")
-media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
-media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
-fig_tipo.update_traces(textposition='outside')
-st.plotly_chart(fig_tipo, use_container_width=True)
-
+# Rankings em cima
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 
@@ -89,6 +88,21 @@ with col2:
     top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
     st.markdown("### Mais Lentos")
     st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
+
+# Tempo médio por turno
+tempo_turno = df_tempo.groupby("Período do Dia")["Duração (min)"].mean().reset_index()
+tempo_turno = tempo_turno.sort_values("Período do Dia", key=lambda x: x.map({"Manhã": 1, "Tarde": 2, "Noite": 3}))
+tempo_turno["Duração formatada"] = tempo_turno["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+fig_turno = px.bar(tempo_turno, x="Período do Dia", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Período do Dia")
+fig_turno.update_traces(textposition='outside')
+st.plotly_chart(fig_turno, use_container_width=True)
+
+st.subheader("📊 Tempo Médio por Tipo de Serviço")
+media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
+media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
+fig_tipo.update_traces(textposition='outside')
+st.plotly_chart(fig_tipo, use_container_width=True)
 
 st.subheader("👤 Tempo Médio por Cliente (Top 15)")
 tempo_por_cliente = df_tempo.groupby("Cliente")["Duração (min)"].mean().reset_index()
