@@ -1,104 +1,83 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from utils import carregar_dados_google_sheets
+from datetime import datetime
 
-st.set_page_config("Tempos por Atendimento", layout="wide")
-st.title("⏱️ Tempos por Atendimento")
+st.set_page_config(page_title="Tempos por Atendimento", layout="wide")
+st.title("🕰️ Tempos por Atendimento")
 
-# Carrega os dados
+# FUNÇÃO DE LEITURA DIRETA DO GOOGLE SHEETS
+@st.cache_data
+def carregar_dados_google_sheets():
+    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/export?format=csv&id=1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE&gid=0"
+    df = pd.read_csv(url)
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors="coerce").dt.time
+    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors="coerce").dt.time
+    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors="coerce").dt.time
+    return df
+
 df = carregar_dados_google_sheets()
+data_unicas = df["Data"].dropna().dt.date.unique()
+data_sel = st.sidebar.date_input("Selecione uma data", value=max(data_unicas))
+df_dia = df[df["Data"].dt.date == data_sel].copy()
 
-# Converte colunas de horário
-df['Hora Chegada'] = pd.to_datetime(df['Hora Chegada'], errors='coerce').dt.time
-df['Hora Início'] = pd.to_datetime(df['Hora Início'], errors='coerce').dt.time
-df['Hora Saída'] = pd.to_datetime(df['Hora Saída'], errors='coerce').dt.time
-df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
-
-# Remove linhas sem hora de início
-mask_hora = df['Hora Início'].notna()
-df = df[mask_hora].copy()
-
-# Calcula tempos em minutos
-def calcular_tempo(row):
+# Calcular tempos
+def calcular_tempos(row):
     try:
-        chegada = pd.to_datetime(str(row['Data'].date()) + ' ' + str(row['Hora Chegada']))
-        inicio = pd.to_datetime(str(row['Data'].date()) + ' ' + str(row['Hora Início']))
-        saida = pd.to_datetime(str(row['Data'].date()) + ' ' + str(row['Hora Saída']))
-
-        espera = (inicio - chegada).total_seconds() / 60 if pd.notnull(chegada) else 0
-        atendimento = (saida - inicio).total_seconds() / 60 if pd.notnull(saida) else 0
-        total = (saida - chegada).total_seconds() / 60 if pd.notnull(chegada) and pd.notnull(saida) else 0
+        chegada = datetime.combine(datetime.today(), row['Hora Chegada'])
+        inicio = datetime.combine(datetime.today(), row['Hora Início'])
+        saida = datetime.combine(datetime.today(), row['Hora Saída'])
+        espera = (inicio - chegada).total_seconds() / 60
+        atendimento = (saida - inicio).total_seconds() / 60
+        total = (saida - chegada).total_seconds() / 60
         return pd.Series([espera, atendimento, total])
     except:
-        return pd.Series([0, 0, 0])
+        return pd.Series([None, None, None])
 
-df[['Espera (min)', 'Atendimento (min)', 'Tempo Total (min)']] = df.apply(calcular_tempo, axis=1)
+df_dia[['Espera (min)', 'Atendimento (min)', 'Tempo Total (min)']] = df_dia.apply(calcular_tempos, axis=1)
 
-# Sidebar - Seleciona data
-data_unicas = df['Data'].dt.date.unique()
-data_sel = st.sidebar.date_input("Selecionar data", value=max(data_unicas))
-df_dia = df[df['Data'].dt.date == data_sel]
-
-# ================== Indicadores =====================
-st.subheader(f"📊 Indicadores do dia {data_sel.strftime('%d/%m/%Y')}")
+# INDICADORES
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Clientes atendidos", len(df_dia))
-col2.metric("Média de Espera", round(df_dia['Espera (min)'].mean(), 1) if not df_dia.empty else '-')
-col3.metric("Média Atendimento", round(df_dia['Atendimento (min)'].mean(), 1) if not df_dia.empty else '-')
-col4.metric("Tempo Total Médio", round(df_dia['Tempo Total (min)'].mean(), 1) if not df_dia.empty else '-')
+col1.metric("Clientes atendidos", df_dia['Cliente'].nunique())
+col2.metric("Média de Espera", f"{df_dia['Espera (min)'].mean():.1f} min" if not df_dia['Espera (min)'].isna().all() else '-')
+col3.metric("Média Atendimento", f"{df_dia['Atendimento (min)'].mean():.1f} min" if not df_dia['Atendimento (min)'].isna().all() else '-')
+col4.metric("Tempo Total Médio", f"{df_dia['Tempo Total (min)'].mean():.1f} min" if not df_dia['Tempo Total (min)'].isna().all() else '-')
 
-# ================== Gráfico - Espera por Cliente =====================
-st.markdown("""
-### 🕓 Gráfico - Tempo de Espera por Cliente
-""")
-if not df_dia.empty:
-    fig_espera = px.bar(df_dia, x='Cliente', y='Espera (min)', color='Cliente', title='Tempo de espera por cliente')
-    st.plotly_chart(fig_espera, use_container_width=True)
+# GRÁFICO TEMPO DE ESPERA POR CLIENTE
+st.subheader("🕒 Gráfico - Tempo de Espera por Cliente")
+df_espera = df_dia.dropna(subset=['Espera (min)'])
+if not df_espera.empty:
+    fig = px.bar(df_espera, x='Cliente', y='Espera (min)', color='Funcionario', title='Tempo de Espera por Cliente')
+    st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Nenhum atendimento registrado nesta data.")
 
-# ================== Ranking de Atendimento =====================
-st.markdown("""
-### 🏆 Ranking de Atendimentos
-""")
-col_fast, col_slow = st.columns(2)
-col_fast.write("#### Mais Rápidos")
-col_fast.dataframe(df_dia.sort_values(by='Tempo Total (min)').head(10)[['Cliente', 'Tempo Total (min)', 'Tipo']])
-col_slow.write("#### Mais Lentos")
-col_slow.dataframe(df_dia.sort_values(by='Tempo Total (min)', ascending=False).head(10)[['Cliente', 'Tempo Total (min)', 'Tipo']])
+# RANKINGS
+st.subheader("🏆 Rankings do Dia")
+col5, col6 = st.columns(2)
 
-# ================== Tempo médio por tipo de serviço =====================
-st.markdown("""
-### 📈 Tempo Médio por Tipo de Serviço
-""")
-if 'Tipo' in df_dia.columns:
-    df_tipo = df_dia.groupby('Tipo')[['Espera (min)', 'Atendimento (min)']].mean().reset_index()
-    fig_tipo = px.bar(df_tipo, x='Tipo', y=['Espera (min)', 'Atendimento (min)'], barmode='group', title='Tempo médio por tipo de serviço')
-    st.plotly_chart(fig_tipo, use_container_width=True)
+mais_rapidos = df_dia.sort_values('Tempo Total (min)').dropna(subset=['Tempo Total (min)']).head(5)
+mais_lentos = df_dia.sort_values('Tempo Total (min)', ascending=False).dropna(subset=['Tempo Total (min)']).head(5)
 
-# ================== Dias com maior espera =====================
-st.markdown("""
-### 📅 Dias com Maior Espera Média
-""")
-df_dias = df.groupby(df['Data'].dt.date)['Espera (min)'].mean().reset_index()
-df_dias.columns = ['Data', 'Média de Espera']
-fig_dias = px.line(df_dias, x='Data', y='Média de Espera', title='Evolução da espera média por dia')
-st.plotly_chart(fig_dias, use_container_width=True)
+col5.markdown("**Atendimentos Mais Rápidos**")
+col5.dataframe(mais_rapidos[['Cliente', 'Tempo Total (min)', 'Funcionario']])
 
-# ================== Faixas de Tempo Total =====================
-st.markdown("""
-### ⏳ Distribuição por Faixa de Tempo Total
-""")
-bins = [0, 15, 30, 45, 60, 90, 120, 1000]
-labels = ['0-15min', '15-30min', '30-45min', '45-60min', '1h-1h30', '1h30-2h', '2h+']
-df['Faixa'] = pd.cut(df['Tempo Total (min)'], bins=bins, labels=labels)
-fig_faixas = px.histogram(df, x='Faixa', title='Quantidade de atendimentos por faixa de tempo total')
-st.plotly_chart(fig_faixas, use_container_width=True)
+col6.markdown("**Atendimentos Mais Lentos**")
+col6.dataframe(mais_lentos[['Cliente', 'Tempo Total (min)', 'Funcionario']])
 
-# ================== Tabela Final =====================
-st.markdown("""
-### 📋 Atendimentos do Dia
-""")
-colunas_final = ['Cliente', 'Funcionário', 'Hora Chegada', 'Hora Início', 'Hora Saída', 'Espera (min)', 'Atendimento (min)', 'Tempo Total (min)', 'Tipo']
-st.dataframe(df_dia[colunas_final].sort_values(by='Hora Início'))
+# TEMPO POR TIPO DE SERVIÇO
+st.subheader("📊 Tempo Médio por Tipo de Serviço")
+df_serv = df_dia.dropna(subset=['Tempo Total (min)', 'Tipo'])
+if not df_serv.empty:
+    fig2 = px.box(df_serv, x='Tipo', y='Tempo Total (min)', color='Tipo', title='Distribuição de Tempo por Serviço')
+    st.plotly_chart(fig2, use_container_width=True)
+
+# DIAS MAIS APERTADOS
+st.subheader("🗓️ Dias Mais Apertados (espera acumulada)")
+df_espera_total = df.dropna(subset=['Hora Chegada', 'Hora Início']).copy()
+df_espera_total["Espera (min)"] = df_espera_total.apply(lambda row: (datetime.combine(datetime.today(), row['Hora Início']) - datetime.combine(datetime.today(), row['Hora Chegada'])).total_seconds() / 60, axis=1)
+df_dias = df_espera_total.groupby(df_espera_total["Data"].dt.date)['Espera (min)'].sum().reset_index()
+df_dias = df_dias.sort_values('Espera (min)', ascending=False).head(10)
+fig3 = px.bar(df_dias, x='Data', y='Espera (min)', title='Top 10 Dias com Maior Tempo de Espera')
+st.plotly_chart(fig3, use_container_width=True)
