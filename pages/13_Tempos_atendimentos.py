@@ -1,51 +1,61 @@
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import numpy as np
+import plotly.express as px
 
-st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏰", layout="wide")
+st.set_page_config(page_title="⏱️ Tempos por Atendimento", layout="wide")
+st.title("⏱️ Tempos por Atendimento")
 
-# === Carregar dados do Google Sheets diretamente ===
-url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQst0xHL4p03sxJ8eEdEcJ6FgsokNqkWQSn-rhG-GiDUvTLJyxTxFb8kXUOE0QkboceVa-wMsCrFxH/pub?gid=0&single=true&output=csv"
+# URL da aba "Base de Dados" no formato CSV direto
+url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
+
 df = pd.read_csv(url)
 
-# === Conversões e tratamento de data/hora ===
+# Garantir que colunas de data e hora sejam tratadas corretamente
 df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors="coerce")
-df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors="coerce")
-df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors="coerce")
+for col in ["Hora Chegada", "Hora Início", "Hora Saída"]:
+    df[col] = pd.to_datetime(df[col], errors="coerce").dt.time
 
-# === Sidebar para seleção de data ===
-datas_unicas = df["Data"].dropna().dt.date.unique()
-datas_ordenadas = sorted(datas_unicas)
-data_sel = st.sidebar.date_input("Selecionar data", value=max(datas_ordenadas) if len(datas_ordenadas) > 0 else datetime.today().date())
+# Filtro por data disponível
+datas_unicas = sorted(df["Data"].dropna().unique())
+data_sel = st.sidebar.date_input("Selecione uma data", value=max(datas_unicas)).strftime("%Y-%m-%d")
 
-# === Filtro por data ===
-df_dia = df[df["Data"].dt.date == data_sel].copy()
+df_hora = df[df["Data"].dt.strftime("%Y-%m-%d") == data_sel].copy()
 
-# === Cálculo de tempos ===
-df_dia["Espera (min)"] = (df_dia["Hora Início"] - df_dia["Hora Chegada"]).dt.total_seconds() / 60
-df_dia["Atendimento (min)"] = (df_dia["Hora Saída"] - df_dia["Hora Início"]).dt.total_seconds() / 60
-df_dia["Tempo Total (min)"] = (df_dia["Hora Saída"] - df_dia["Hora Chegada"]).dt.total_seconds() / 60
+st.subheader(f"📅 Registros do dia {data_sel}: {len(df_hora)}")
 
-# === Título ===
-st.title("⏰ Tempos por Atendimento")
+# Calcular tempos (em minutos)
+def calcula_tempos(row):
+    try:
+        chegada = pd.to_datetime(str(row["Hora Chegada"]))
+        inicio = pd.to_datetime(str(row["Hora Início"]))
+        saida = pd.to_datetime(str(row["Hora Saída"]))
+        espera = (inicio - chegada).total_seconds() / 60 if pd.notnull(chegada) and pd.notnull(inicio) else None
+        atendimento = (saida - inicio).total_seconds() / 60 if pd.notnull(inicio) and pd.notnull(saida) else None
+        total = (saida - chegada).total_seconds() / 60 if pd.notnull(chegada) and pd.notnull(saida) else None
+        return pd.Series([espera, atendimento, total])
+    except:
+        return pd.Series([None, None, None])
 
-# === Indicadores ===
+df_hora[["Espera (min)", "Atendimento (min)", "Tempo Total (min)"]] = df_hora.apply(calcula_tempos, axis=1)
+
+# Indicadores
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Clientes atendidos", len(df_dia))
-col2.metric("Média de Espera", f"{df_dia['Espera (min)'].mean():.1f}" if not df_dia.empty else "-")
-col3.metric("Média Atendimento", f"{df_dia['Atendimento (min)'].mean():.1f}" if not df_dia.empty else "-")
-col4.metric("Tempo Total Médio", f"{df_dia['Tempo Total (min)'].mean():.1f}" if not df_dia.empty else "-")
+col1.metric("Clientes atendidos", df_hora["Cliente"].nunique())
+col2.metric("Média de Espera", f"{df_hora['Espera (min)'].mean():.1f}" if df_hora["Espera (min)"].notnull().any() else "-")
+col3.metric("Média Atendimento", f"{df_hora['Atendimento (min)'].mean():.1f}" if df_hora["Atendimento (min)"].notnull().any() else "-")
+col4.metric("Tempo Total Médio", f"{df_hora['Tempo Total (min)'].mean():.1f}" if df_hora["Tempo Total (min)"].notnull().any() else "-")
 
-# === Gráfico ===
+# Gráfico
 st.subheader("🕒 Gráfico - Tempo de Espera por Cliente")
-if not df_dia.empty:
-    st.bar_chart(data=df_dia, x="Cliente", y="Espera (min)")
+if df_hora["Espera (min)"].notnull().any():
+    fig = px.bar(df_hora.sort_values("Espera (min)", ascending=False), x="Cliente", y="Espera (min)", color="Funcionário", text="Espera (min)")
+    st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Nenhum atendimento registrado nesta data.")
 
-# === Tabela ===
+# Tabela completa
 st.subheader("📋 Atendimentos do Dia")
-colunas = ["Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída", "Espera (min)", "Atendimento (min)", "Tempo Total (min)"]
-st.dataframe(df_dia[colunas], use_container_width=True)
+st.dataframe(df_hora[["Cliente", "Funcionário", "Hora Chegada", "Hora Início", "Hora Saída",
+                      "Espera (min)", "Atendimento (min)", "Tempo Total (min)"]], use_container_width=True)
