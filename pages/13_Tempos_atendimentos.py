@@ -96,6 +96,7 @@ with col2:
 contagem_turno = df_tempo["Período do Dia"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).reset_index()
 contagem_turno.columns = ["Período do Dia", "Quantidade"]
 fig_qtd_turno = px.bar(contagem_turno, x="Período do Dia", y="Quantidade", title="Quantidade de Atendimentos por Período do Dia")
+fig_qtd_turno.update_layout(margin=dict(t=60))
 st.plotly_chart(fig_qtd_turno, use_container_width=True)
 
 st.subheader("📊 Tempo Médio por Tipo de Serviço")
@@ -103,6 +104,7 @@ media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index
 media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
 fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
 fig_tipo.update_traces(textposition='outside')
+fig_tipo.update_layout(margin=dict(t=60))
 st.plotly_chart(fig_tipo, use_container_width=True)
 
 st.subheader("👤 Tempo Médio por Cliente (Top 15)")
@@ -111,13 +113,14 @@ top_clientes = tempo_por_cliente.sort_values("Duração (min)", ascending=False)
 top_clientes["Duração formatada"] = top_clientes["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
 fig_cliente = px.bar(top_clientes, x="Cliente", y="Duração (min)", title="Clientes com Maior Tempo Médio", text="Duração formatada")
 fig_cliente.update_traces(textposition='outside')
+fig_cliente.update_layout(margin=dict(t=60))
 st.plotly_chart(fig_cliente, use_container_width=True)
 
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
 dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
 fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
-fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)")
+fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)", margin=dict(t=60))
 st.plotly_chart(fig_dias, use_container_width=True)
 
 st.subheader("📈 Distribuição por Faixa de Duração")
@@ -127,6 +130,7 @@ df_tempo["Faixa"] = pd.cut(df_tempo["Duração (min)"], bins=bins, labels=labels
 faixa_dist = df_tempo["Faixa"].value_counts().sort_index().reset_index()
 faixa_dist.columns = ["Faixa", "Qtd"]
 fig_faixa = px.bar(faixa_dist, x="Faixa", y="Qtd", title="Distribuição por Faixa de Tempo")
+fig_faixa.update_layout(margin=dict(t=60))
 st.plotly_chart(fig_faixa, use_container_width=True)
 
 st.subheader("🚨 Clientes com Espera Acima do Normal")
