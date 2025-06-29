@@ -31,7 +31,6 @@ def carregar_dados():
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
-    df["Data"] = df["Data"].dt.strftime("%d/%m/%Y")
     return df
 
 df = carregar_dados()
@@ -53,13 +52,14 @@ df_despesas = carregar_despesas()
 funcionarios = sorted(df["Funcionário"].dropna().unique().tolist())
 
 # === Filtro por ano ===
-df["Ano"] = pd.to_datetime(df["Data"], format="%d/%m/%Y").dt.year
+df["Ano"] = df["Data"].dt.year
 anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
 ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
 df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)].copy()
+df_func["Data"] = df_func["Data"].dt.strftime("%d/%m/%Y")  # ✅ Corrigir exibição da data
 
 # === Filtro por tipo de serviço ===
 tipos_servico = df_func["Serviço"].dropna().unique().tolist()
