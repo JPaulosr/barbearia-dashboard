@@ -20,7 +20,14 @@ def carregar_dados_google_sheets():
 # Carregar dados
 df = carregar_dados_google_sheets()
 
-df = df.dropna(subset=["Hora Início", "Hora Saída"])
+# Agrupar por Cliente + Data para evitar duplicações de combos
+combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída"]).copy()
+combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
+    "Hora Início": "min",
+    "Hora Saída": "max",
+    "Funcionário": "first",
+    "Tipo": lambda x: ', '.join(sorted(set(x))),
+}).reset_index()
 
 def calcular_duracao(row):
     try:
@@ -30,9 +37,8 @@ def calcular_duracao(row):
     except:
         return None
 
-# Tempo por atendimento (em minutos)
-df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
-df_tempo = df.dropna(subset=["Duração (min)"])
+combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
+df_tempo = combo_grouped.dropna(subset=["Duração (min)"])
 
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
@@ -47,11 +53,13 @@ with col2:
     st.markdown("### Mais Lentos")
     st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Duração (min)"]])
 
-# Gráfico: Tempo médio por tipo de serviço
+# Gráfico: Tempo médio por tipo de serviço (Combo/Simplificado)
 st.subheader("📊 Tempo Médio por Tipo de Serviço")
 if "Tipo" in df_tempo.columns:
-    tempo_por_tipo = df_tempo.groupby("Tipo")["Duração (min)"].mean().reset_index()
-    fig_tipo = px.bar(tempo_por_tipo, x="Tipo", y="Duração (min)", title="Tempo Médio por Tipo de Serviço")
+    tempo_por_tipo = df_tempo.copy()
+    tempo_por_tipo["Categoria"] = tempo_por_tipo["Tipo"].apply(lambda x: "Combo" if "," in x else x)
+    media_tipo = tempo_por_tipo.groupby("Categoria")["Duração (min)"].mean().reset_index()
+    fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", title="Tempo Médio por Tipo de Serviço")
     st.plotly_chart(fig_tipo, use_container_width=True)
 
 # Gráfico: Tempo médio por cliente
