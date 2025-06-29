@@ -20,8 +20,11 @@ def carregar_dados_google_sheets():
 # Carregar dados
 df = carregar_dados_google_sheets()
 
+# Filtrar dados a partir de junho de 2025 e com informações completas
+df = df[(df["Data"] >= "2025-06-01") & df["Cliente"].notna() & df["Hora Início"].notna() & df["Hora Saída"].notna()]
+
 # Agrupar por Cliente + Data para evitar duplicações de combos
-combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída"]).copy()
+combo_grouped = df.copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Hora Chegada": "min",
     "Hora Início": "min",
@@ -33,15 +36,20 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
 # Calcular duração do atendimento
 def calcular_duracao(row):
     try:
-        inicio = row["Hora Início"]
-        fim = row["Hora Saída"]
-        return (fim - inicio).total_seconds() / 60  # minutos
+        return (row["Hora Saída"] - row["Hora Início"]).total_seconds() / 60
+    except:
+        return None
+
+# Calcular tempo de salão
+def calcular_tempo_salao(row):
+    try:
+        return (row["Hora Saída"] - row["Hora Chegada"]).total_seconds() / 60
     except:
         return None
 
 combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
-combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(
-    lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
+combo_grouped["Tempo no Salão (min)"] = combo_grouped.apply(calcular_tempo_salao, axis=1)
+combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 combo_grouped["Espera (min)"] = (combo_grouped["Hora Início"] - combo_grouped["Hora Chegada"]).dt.total_seconds() / 60
 
 # Categorizar combos e simples
