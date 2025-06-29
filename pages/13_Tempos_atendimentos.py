@@ -31,7 +31,7 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
 }).reset_index()
 
 # Extrair somente a data para exibição
-combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%Y-%m-%d")
+combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
 combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
