@@ -89,13 +89,11 @@ with col2:
     st.markdown("### Mais Lentos")
     st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
 
-# Tempo médio por turno
-tempo_turno = df_tempo.groupby("Período do Dia")["Duração (min)"].mean().reset_index()
-tempo_turno = tempo_turno.sort_values("Período do Dia", key=lambda x: x.map({"Manhã": 1, "Tarde": 2, "Noite": 3}))
-tempo_turno["Duração formatada"] = tempo_turno["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_turno = px.bar(tempo_turno, x="Período do Dia", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Período do Dia")
-fig_turno.update_traces(textposition='outside')
-st.plotly_chart(fig_turno, use_container_width=True)
+# Gráfico de quantidade de atendimentos por período
+contagem_turno = df_tempo["Período do Dia"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).reset_index()
+contagem_turno.columns = ["Período do Dia", "Quantidade"]
+fig_qtd_turno = px.bar(contagem_turno, x="Período do Dia", y="Quantidade", title="Quantidade de Atendimentos por Período do Dia")
+st.plotly_chart(fig_qtd_turno, use_container_width=True)
 
 st.subheader("📊 Tempo Médio por Tipo de Serviço")
 media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
