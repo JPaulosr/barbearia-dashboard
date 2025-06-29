@@ -20,7 +20,10 @@ def carregar_dados_google_sheets():
 
 df = carregar_dados_google_sheets()
 
-combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída"]).copy()
+# Mostrar quantos registros válidos foram carregados (debug)
+st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
+
+combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Hora Chegada": "min",
     "Hora Início": "min",
