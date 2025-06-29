@@ -20,6 +20,17 @@ def carregar_dados_google_sheets():
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 
+# Filtros interativos
+st.sidebar.header("🔍 Filtros")
+funcionarios = df["Funcionário"].dropna().unique().tolist()
+funcionario_selecionado = st.sidebar.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
+cliente_busca = st.sidebar.text_input("Filtrar por nome do Cliente")
+
+# Aplicar filtros
+df = df[df["Funcionário"].isin(funcionario_selecionado)]
+if cliente_busca:
+    df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
+
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Hora Chegada": "min",
@@ -83,15 +94,7 @@ st.plotly_chart(fig_cliente, use_container_width=True)
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
 dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
-fig_dias = px.bar(
-    dias_apertados,
-    x="Data",
-    y="Espera (min)",
-    text=dias_apertados["Espera (min)"].apply(lambda x: f"{x:.1f} min"),
-    title="Top 10 Dias com Maior Tempo de Espera",
-    labels={"Espera (min)": "Espera (min)", "Data": "Data"}
-)
-fig_dias.update_traces(textposition="outside")
+fig_dias = px.line(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
 st.plotly_chart(fig_dias, use_container_width=True)
 
 st.subheader("📈 Distribuição por Faixa de Duração")
