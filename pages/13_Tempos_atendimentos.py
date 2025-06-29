@@ -52,6 +52,12 @@ combo_grouped["Categoria"] = combo_grouped["Tipo"].apply(lambda x: "Combo" if ",
 # Remover linhas sem duração
 combo_grouped = combo_grouped.dropna(subset=["Duração (min)"])
 
+# Filtro por funcionário
+funcionarios = combo_grouped["Funcionário"].dropna().unique().tolist()
+funcionario_selecionado = st.selectbox("Selecione o funcionário:", options=["Todos"] + funcionarios)
+if funcionario_selecionado != "Todos":
+    combo_grouped = combo_grouped[combo_grouped["Funcionário"] == funcionario_selecionado]
+
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 
@@ -93,8 +99,11 @@ st.plotly_chart(fig_dias, use_container_width=True)
 # Distribuição por faixa de duração
 st.subheader("⏳ Distribuição por Faixa de Duração")
 bins = [0, 15, 30, 45, 60, 90, 120, 180]
-labels = ["Até 15min", "Até 30min", "Até 45min", "Até 1h", "Até 1h30", "Até 2h", "> 2h"]
-combo_grouped["Faixa"] = pd.cut(combo_grouped["Duração (min)"], bins=bins + [combo_grouped["Duração (min)"].max()], labels=labels, include_lowest=True)
+max_tempo = combo_grouped["Duração (min)"].max()
+if max_tempo > max(bins):
+    bins.append(max_tempo + 1)
+labels = ["Até 15min", "Até 30min", "Até 45min", "Até 1h", "Até 1h30", "Até 2h", "Até 3h", "> 3h"]
+combo_grouped["Faixa"] = pd.cut(combo_grouped["Duração (min)"], bins=bins, labels=labels, include_lowest=True)
 faixa_counts = combo_grouped["Faixa"].value_counts().sort_index()
 fig_faixa = px.bar(x=faixa_counts.index, y=faixa_counts.values, labels={"x": "Faixa de Duração", "y": "Quantidade"}, title="Distribuição de Duração dos Atendimentos")
 st.plotly_chart(fig_faixa, use_container_width=True)
@@ -105,6 +114,13 @@ limite = st.slider("Tempo limite de espera (min)", min_value=5, max_value=60, va
 esperas_longas = combo_grouped[combo_grouped["Espera (min)"] > limite]
 st.warning(f"{len(esperas_longas)} clientes esperaram mais de {limite} minutos")
 st.dataframe(esperas_longas[["Data", "Cliente", "Funcionário", "Espera (min)", "Duração formatada"]], use_container_width=True)
+
+# Ranking de espera acumulada por cliente
+st.subheader("📛 Ranking de Clientes com Mais Espera Acumulada")
+espera_cliente = combo_grouped.groupby("Cliente")["Espera (min)"].sum().reset_index()
+top_espera = espera_cliente.sort_values("Espera (min)", ascending=False).head(10)
+fig_espera = px.bar(top_espera, x="Cliente", y="Espera (min)", title="Top 10 Clientes que Mais Esperaram")
+st.plotly_chart(fig_espera, use_container_width=True)
 
 # Insights do dia
 st.subheader("🔍 Insights do Dia")
