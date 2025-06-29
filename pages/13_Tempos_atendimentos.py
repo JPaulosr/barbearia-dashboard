@@ -50,6 +50,10 @@ def calcular_duracao(row):
         return None
 
 combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
+
+# Debug temporário
+st.markdown(f"<small><i>Registros com duração calculada: {combo_grouped['Duração (min)'].notnull().sum()}</i></small>", unsafe_allow_html=True)
+st.write(combo_grouped.head())
 combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(
     lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
