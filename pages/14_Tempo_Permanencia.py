@@ -20,36 +20,58 @@ def carregar_dados():
 df = carregar_dados()
 df = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"])
 
-# Cálculos de tempo
+# Cálculos de tempo (em minutos)
 for col_name, start_col, end_col in [
-    ("Tempo Espera (h)", "Hora Chegada", "Hora Início"),
-    ("Tempo Atendimento (h)", "Hora Início", "Hora Saída"),
-    ("Tempo Pós (h)", "Hora Saída", "Hora Saída do Salão"),
-    ("Tempo Total (h)", "Hora Chegada", "Hora Saída do Salão")
+    ("Tempo Espera (min)", "Hora Chegada", "Hora Início"),
+    ("Tempo Atendimento (min)", "Hora Início", "Hora Saída"),
+    ("Tempo Pós (min)", "Hora Saída", "Hora Saída do Salão"),
+    ("Tempo Total (min)", "Hora Chegada", "Hora Saída do Salão")
 ]:
-    df[col_name] = (df[end_col] - df[start_col]).dt.total_seconds() / 3600
-    df[col_name] = df[col_name].round(2)
+    df[col_name] = (df[end_col] - df[start_col]).dt.total_seconds() / 60
+    df[col_name] = df[col_name].round(0)
+
+# Conversão para formato hh h mm min
+def formatar_tempo(minutos):
+    if pd.isnull(minutos): return ""
+    h = int(minutos // 60)
+    m = int(minutos % 60)
+    return f"{h}h {m}min"
+
+for col in ["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)", "Tempo Total (min)"]:
+    df[col.replace("(min)", "formatado")] = df[col].apply(formatar_tempo)
 
 st.subheader("📊 Distribuição dos Tempos por Cliente")
 col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("### Top 10 Permanências Pós-Atendimento")
-    top_pos = df.sort_values("Tempo Pós (h)", ascending=False).head(10)
-    st.dataframe(top_pos[["Data", "Cliente", "Funcionário", "Tempo Pós (h)", "Tempo Total (h)"]], use_container_width=True)
+    top_pos = df.sort_values("Tempo Pós (min)", ascending=False).head(10)
+    st.dataframe(top_pos[["Data", "Cliente", "Funcionário", "Tempo Pós formatado", "Tempo Total formatado"]], use_container_width=True)
 
 with col2:
     st.markdown("### Top 10 Permanência Total")
-    top_total = df.sort_values("Tempo Total (h)", ascending=False).head(10)
-    st.dataframe(top_total[["Data", "Cliente", "Funcionário", "Tempo Total (h)"]], use_container_width=True)
+    top_total = df.sort_values("Tempo Total (min)", ascending=False).head(10)
+    st.dataframe(top_total[["Data", "Cliente", "Funcionário", "Tempo Total formatado"]], use_container_width=True)
 
 st.subheader("📈 Comparativo Visual")
-fig = px.bar(df.sort_values("Tempo Total (h)", ascending=False).head(20),
-             x="Cliente", 
-             y=["Tempo Espera (h)", "Tempo Atendimento (h)", "Tempo Pós (h)"],
-             title="Top 20 Clientes por Tempo Total (Lado a Lado)",
-             barmode="group")
+fig = px.bar(
+    df.sort_values("Tempo Total (min)", ascending=False).head(20),
+    x="Cliente",
+    y=["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)"],
+    title="Top 20 Clientes por Tempo Total (Lado a Lado)",
+    barmode="group",
+    labels={
+        "value": "Minutos",
+        "variable": "Etapa",
+        "Cliente": "Cliente"
+    }
+)
 st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("📋 Visualizar base completa")
-st.dataframe(df[["Data", "Cliente", "Funcionário", "Tempo Espera (h)", "Tempo Atendimento (h)", "Tempo Pós (h)", "Tempo Total (h)"]], use_container_width=True)
+st.dataframe(
+    df[["Data", "Cliente", "Funcionário",
+        "Tempo Espera formatado", "Tempo Atendimento formatado",
+        "Tempo Pós formatado", "Tempo Total formatado"]],
+    use_container_width=True
+)
