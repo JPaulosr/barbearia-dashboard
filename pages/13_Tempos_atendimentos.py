@@ -50,7 +50,7 @@ combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
 combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(
     lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
-combo_grouped["Categoria"] = combo_grouped["Tipo"].apply(lambda x: "Combo" if any("combo" in item.strip().lower() for item in str(x).split(",")) else "Simples").strip() in ["combo", "combo+barba", "combo+sombrancelha"] or "," in x for palavra in str(x).split(",")) else "Simples")
+combo_grouped["Categoria"] = combo_grouped["Tipo"].apply(lambda x: "Combo" if any("combo" in item.strip().lower() for item in str(x).split(",")) else "Simples").lower() for item in str(x).split(",")) else "Simples").strip() in ["combo", "combo+barba", "combo+sombrancelha"] or "," in x for palavra in str(x).split(",")) else "Simples")
 
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 
