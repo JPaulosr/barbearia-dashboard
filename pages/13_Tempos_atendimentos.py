@@ -20,16 +20,23 @@ def carregar_dados_google_sheets():
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 
-# Filtros interativos
-st.sidebar.header("🔍 Filtros")
+# Filtros interativos na parte superior
+col_f1, col_f2, col_f3 = st.columns(3)
+
 funcionarios = df["Funcionário"].dropna().unique().tolist()
-funcionario_selecionado = st.sidebar.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
-cliente_busca = st.sidebar.text_input("Filtrar por nome do Cliente")
+with col_f1:
+    funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
+with col_f2:
+    cliente_busca = st.text_input("Buscar Cliente")
+with col_f3:
+    periodo = st.date_input("Período", [], help="Selecione o intervalo de datas")
 
 # Aplicar filtros
 df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if cliente_busca:
     df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
+if len(periodo) == 2:
+    df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
