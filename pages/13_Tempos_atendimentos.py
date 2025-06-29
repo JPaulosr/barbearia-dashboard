@@ -44,30 +44,30 @@ combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(
     lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"])
 
+# Adicionar Categoria Combo/Simpes com base na quantidade de serviços únicos
+df_tempo["Categoria"] = df_tempo["Tipo"].apply(lambda x: "Combo" if "," in x else "Simples")
+
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 
 with col1:
     top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
     st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Duração formatada"]], use_container_width=True)
+    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
 
 with col2:
     top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
     st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Duração formatada"]], use_container_width=True)
+    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
 
 # Gráfico: Tempo médio por tipo de serviço (Combo/Simplificado)
 st.subheader("📊 Tempo Médio por Tipo de Serviço")
-if "Tipo" in df_tempo.columns:
-    tempo_por_tipo = df_tempo.copy()
-    tempo_por_tipo["Categoria"] = tempo_por_tipo["Tipo"].apply(lambda x: "Combo" if "," in x else "Simples")
-    media_tipo = tempo_por_tipo.groupby("Categoria")["Duração (min)"].mean().reset_index()
-    media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-    fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada",
-                      title="Tempo Médio por Tipo de Serviço")
-    fig_tipo.update_traces(textposition='outside')
-    st.plotly_chart(fig_tipo, use_container_width=True)
+media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
+media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada",
+                  title="Tempo Médio por Tipo de Serviço")
+fig_tipo.update_traces(textposition='outside')
+st.plotly_chart(fig_tipo, use_container_width=True)
 
 # Gráfico: Tempo médio por cliente
 st.subheader("👤 Tempo Médio por Cliente (Top 15)")
