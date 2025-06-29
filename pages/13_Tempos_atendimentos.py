@@ -97,3 +97,4 @@ st.plotly_chart(fig_turno, use_container_width=True)
 
 # Os gráficos e análises restantes continuam aqui (omitidos para foco)
 # ...
+1111111111111111111111111111111111111111111111111111111111
