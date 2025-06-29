@@ -7,7 +7,6 @@ st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layo
 st.title("⏱️ Tempos por Atendimento")
 
 @st.cache_data
-
 def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
     df = pd.read_csv(url)
@@ -84,7 +83,15 @@ st.plotly_chart(fig_cliente, use_container_width=True)
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
 dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
-fig_dias = px.line(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
+fig_dias = px.bar(
+    dias_apertados,
+    x="Data",
+    y="Espera (min)",
+    text=dias_apertados["Espera (min)"].apply(lambda x: f"{x:.1f} min"),
+    title="Top 10 Dias com Maior Tempo de Espera",
+    labels={"Espera (min)": "Espera (min)", "Data": "Data"}
+)
+fig_dias.update_traces(textposition="outside")
 st.plotly_chart(fig_dias, use_container_width=True)
 
 st.subheader("📈 Distribuição por Faixa de Duração")
