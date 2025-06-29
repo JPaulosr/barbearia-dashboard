@@ -95,6 +95,7 @@ st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
 dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
 fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
+fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)")
 st.plotly_chart(fig_dias, use_container_width=True)
 
 st.subheader("📈 Distribuição por Faixa de Duração")
