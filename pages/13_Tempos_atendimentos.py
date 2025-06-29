@@ -63,6 +63,13 @@ combo_grouped["Categoria"] = combo_grouped["Tipo"].apply(lambda x: "Combo" if an
 
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 
+st.subheader("📊 Tempo Médio por Tipo de Serviço")
+media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
+media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
+fig_tipo.update_traces(textposition='outside')
+st.plotly_chart(fig_tipo, use_container_width=True)
+
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 
@@ -76,13 +83,6 @@ with col2:
     st.markdown("### Mais Lentos")
     st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
 
-st.subheader("📊 Tempo Médio por Tipo de Serviço")
-media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
-media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
-fig_tipo.update_traces(textposition='outside')
-st.plotly_chart(fig_tipo, use_container_width=True)
-
 st.subheader("👤 Tempo Médio por Cliente (Top 15)")
 tempo_por_cliente = df_tempo.groupby("Cliente")["Duração (min)"].mean().reset_index()
 top_clientes = tempo_por_cliente.sort_values("Duração (min)", ascending=False).head(15)
@@ -94,7 +94,7 @@ st.plotly_chart(fig_cliente, use_container_width=True)
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
 dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
-fig_dias = px.line(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
+fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
 st.plotly_chart(fig_dias, use_container_width=True)
 
 st.subheader("📈 Distribuição por Faixa de Duração")
