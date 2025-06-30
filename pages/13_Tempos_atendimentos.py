@@ -24,3 +24,24 @@ def carregar_dados_google_sheets():
 
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
+
+# Calcula tempos apenas se tiver dados válidos
+df = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída"]).copy()
+
+df["Tempo Espera (min)"] = (df["Hora Início"] - df["Hora Chegada"]).dt.total_seconds() / 60
+df["Tempo Atendimento (min)"] = (df["Hora Saída"] - df["Hora Início"]).dt.total_seconds() / 60
+df["Tempo Total (min)"] = (df["Hora Saída"] - df["Hora Chegada"]).dt.total_seconds() / 60
+
+# Métricas
+col1, col2, col3 = st.columns(3)
+col1.metric("⏳ Espera Média", f"{df['Tempo Espera (min)'].mean():.1f} min")
+col2.metric("✂️ Atendimento Médio", f"{df['Tempo Atendimento (min)'].mean():.1f} min")
+col3.metric("🕒 Tempo Total Médio", f"{df['Tempo Total (min)'].mean():.1f} min")
+
+# Gráfico
+fig = px.box(df, x="Serviço", y="Tempo Atendimento (min)", points="all", title="Duração por Tipo de Serviço")
+st.plotly_chart(fig, use_container_width=True)
+
+# Dados brutos
+with st.expander("📋 Ver dados detalhados"):
+    st.dataframe(df[["Data", "Cliente", "Serviço", "Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Total (min)"]])
