@@ -6,11 +6,10 @@ import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
-# Define o local para exibir meses em português
-
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 
@@ -43,12 +42,15 @@ cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_di
 
 df_cliente = df[df["Cliente"] == cliente]
 
+# 📅 Histórico com horário completo
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-df_cliente_formatado = df_cliente.copy()
-df_cliente_formatado["Data"] = df_cliente_formatado["Data"].dt.strftime("%d/%m/%Y")
-st.dataframe(df_cliente_formatado.sort_values("Data", ascending=False)[["Data", "Serviço"]], use_container_width=True)
+df_exibicao = df_cliente[["Data", "Serviço"]].sort_values("Data", ascending=False).copy()
+df_exibicao["Data"] = df_exibicao["Data"].dt.strftime("%d/%m/%Y %H:%M")
+st.dataframe(df_exibicao, use_container_width=True)
 
+# 📊 Receita mensal
 st.subheader("📊 Receita mensal")
+df_cliente["Mês_Ano"] = df_cliente["Data"].dt.strftime("%B/%Y").str.capitalize()
 receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
 fig_receita = px.bar(
     receita_mensal,
@@ -58,13 +60,13 @@ fig_receita = px.bar(
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
 )
 fig_receita.update_traces(textposition="inside")
-fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
+fig_receita.update_layout(height=400, margin=dict(t=50))
 st.plotly_chart(fig_receita, use_container_width=True)
 
+# 📊 Receita por Serviço e Produto
 st.subheader("📊 Receita por Serviço e Produto")
 df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
 receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
-receita_geral = receita_geral.sort_values("Valor", ascending=False)
 fig_receita_tipos = px.bar(
     receita_geral,
     x="Serviço",
@@ -75,15 +77,17 @@ fig_receita_tipos = px.bar(
     barmode="group"
 )
 fig_receita_tipos.update_traces(textposition="outside")
-fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
+fig_receita_tipos.update_layout(height=450, margin=dict(t=80))
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
+# 📊 Atendimentos por Funcionário
 st.subheader("📊 Atendimentos por Funcionário")
 atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
 atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
 atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
+# 📋 Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
 resumo = df_cliente.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
@@ -98,6 +102,7 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
+# 📈 Frequência + Insights
 st.subheader("📈 Frequência de Atendimento")
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente[df_cliente["Data"] < data_corte].copy()
@@ -112,26 +117,21 @@ else:
     media_freq = sum(diffs) / len(diffs)
     ultimo_atendimento = datas[-1]
     dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
-
-    if dias_desde_ultimo <= media_freq:
-        status = "🟢 Em dia"
-    elif dias_desde_ultimo <= media_freq * 1.5:
-        status = "🟠 Pouco atrasado"
-    else:
-        status = "🔴 Muito atrasado"
+    status = "🟢 Em dia" if dias_desde_ultimo <= media_freq else "🟠 Pouco atrasado" if dias_desde_ultimo <= media_freq * 1.5 else "🔴 Muito atrasado"
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
-    col4.metric("📌 Status"
+    col4.metric("📌 Status", status)
 
-# Insights
-st.subheader("💡 Insights do Cliente")", status)
-
-    st.markdown("### 💡 Insights do Cliente")
-    st.markdown(f'''- Este cliente já teve **{resumo_final["Total Atendimentos"].values[0]} atendimentos**.
-- O tipo mais comum foi: **{"Combo" if resumo_final["Qtd Combos"].values[0] > resumo_final["Qtd Simples"].values[0] else "Simples"}**.
-- A frequência média é de **{media_freq:.1f} dias**, com o último atendimento há **{dias_desde_ultimo} dias**.
-- Status atual: **{status.split(" ", 1)[1]}**
-''')
+    # Insights adicionais
+    st.subheader("💡 Insights do Cliente")
+    total_atendimentos = resumo.shape[0]
+    tipo_mais_comum = "Simples" if resumo["Qtd_Simples"].sum() >= resumo["Qtd_Combo"].sum() else "Combo"
+    st.markdown(
+        f"- Este cliente já teve **{total_atendimentos} atendimentos**.\n"
+        f"- O tipo mais comum foi: **{tipo_mais_comum}**.\n"
+        f"- A frequência média é de **{media_freq:.1f} dias**, com o último atendimento há **{dias_desde_ultimo} dias**.\n"
+        f"- Status atual: **{status.replace('🟢 ', '').replace('🟠 ', '').replace('🔴 ', '')}**"
+    )
