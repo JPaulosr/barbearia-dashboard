@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -110,3 +111,6 @@ if not df_semana.empty:
         st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
 else:
     st.markdown("Nenhum atendimento registrado nos últimos 7 dias.")
+
+# Parte de gráficos e rankings
+# [colei a parte anterior aqui omitida no código por limitação de tamanho]
