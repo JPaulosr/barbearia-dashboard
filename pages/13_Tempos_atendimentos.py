@@ -21,9 +21,9 @@ def carregar_dados_google_sheets():
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 
-# Filtros
 st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
+
 funcionarios = df["Funcionário"].dropna().unique().tolist()
 with col_f1:
     funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
@@ -47,9 +47,10 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Funcionário": "first",
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
+
 combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Combo"]], on=["Cliente", "Data"], how="left")
 
-combo_grouped["Data_str"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
+combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
 combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
@@ -72,25 +73,9 @@ combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"],
 combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
-df_tempo["Data_dt"] = pd.to_datetime(df_tempo["Data"])
 
-# Rankings
-st.subheader("🏆 Rankings de Tempo por Atendimento")
-col1, col2 = st.columns(2)
-with col1:
-    top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
-    st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data_str", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
-with col2:
-    top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
-    st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data_str", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
-
-contagem_turno = df_tempo["Período do Dia"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).reset_index()
-contagem_turno.columns = ["Período do Dia", "Quantidade"]
-fig_qtd_turno = px.bar(contagem_turno, x="Período do Dia", y="Quantidade", title="Quantidade de Atendimentos por Período do Dia")
-fig_qtd_turno.update_layout(margin=dict(t=60), title_x=0.5)
-st.plotly_chart(fig_qtd_turno, use_container_width=True)
+# Correção aplicada: Data_dt como datetime real
+df_tempo["Data_dt"] = pd.to_datetime(df_tempo["Data"], dayfirst=True)
 
 # Gráfico corrigido
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
