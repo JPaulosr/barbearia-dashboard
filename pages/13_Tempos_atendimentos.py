@@ -39,40 +39,63 @@ if cliente_busca:
 if len(periodo) == 2:
     df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
-combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
-combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
+df['Hora Início Preenchida'] = df['Hora Início']
+mask_hora_inicio_nula = df['Hora Início'].isnull() & df['Hora Chegada'].notnull()
+df.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df.loc[mask_hora_inicio_nula, 'Hora Chegada']
+
+# Agrupamento correto sem incluir "Serviço" ou "Tipo" na chave
+combo_grouped = df.dropna(subset=["Hora Início Preenchida", "Hora Saída", "Cliente", "Data", "Funcionário"]).copy()
+combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início Preenchida"]).agg({
     "Hora Chegada": "min",
-    "Hora Início": "min",
     "Hora Saída": "max",
     "Hora Saída do Salão": "max",
-    "Funcionário": "first",
-    "Tipo": lambda x: ', '.join(sorted(set(x)))
-}).reset_index()
+    "Tipo": lambda x: ', '.join(sorted(set(x))),
+    "Serviço": lambda x: ', '.join(sorted(set(x)))
+})
+combo_grouped.reset_index(drop=False, inplace=True)
 
-combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Combo"]], on=["Cliente", "Data"], how="left")
+# Merge com colunas auxiliares
+df_temp = df.copy()
+df_temp['Hora Início Preenchida'] = df_temp['Hora Início']
+df_temp.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df_temp.loc[mask_hora_inicio_nula, 'Hora Chegada']
 
-combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
-combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
-combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
-combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
-combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].dt.strftime("%H:%M")
+combo_grouped = pd.merge(
+    combo_grouped,
+    df_temp[["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Hora Início", "Combo"]],
+    on=["Cliente", "Data", "Funcionário", "Hora Início Preenchida"],
+    how="left",
+    suffixes=('', '_r')
+)
 
+# Calcular duração e espera corretamente
 def calcular_duracao(row):
     try:
-        inicio = pd.to_datetime(row["Hora Início"], format="%H:%M")
-        fim_raw = row["Hora Saída do Salão"] if pd.notnull(row["Hora Saída do Salão"]) and row["Hora Saída do Salão"] != "NaT" else row["Hora Saída"]
-        fim = pd.to_datetime(fim_raw, format="%H:%M")
+        inicio = row["Hora Início"]
+        fim = row["Hora Saída do Salão"]
+        if pd.isnull(fim):
+            fim = row["Hora Saída"]
+        if pd.isnull(fim):
+            return None
         return (fim - inicio).total_seconds() / 60
     except:
         return None
 
 combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
 combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
-combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
+combo_grouped["Espera (min)"] = (combo_grouped["Hora Início"] - combo_grouped["Hora Chegada"]).dt.total_seconds() / 60
 combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if pd.notnull(x) and "+" in str(x) else "Simples")
-combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
-combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
+combo_grouped["Hora Início dt"] = combo_grouped["Hora Início Preenchida"]
+combo_grouped["Período do Dia"] = combo_grouped["Hora Início"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
+# Exibir apenas depois de calcular
+data_formatada = pd.to_datetime(combo_grouped["Data"])
+combo_grouped["Data"] = data_formatada.dt.strftime("%d/%m/%Y")
+combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
+combo_grouped["Hora Início"] = combo_grouped["Hora Início Preenchida"].dt.strftime("%H:%M")
+combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
+combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].dt.strftime("%H:%M")
+
+# Dados consolidados para visualização final
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 
 st.subheader("🏆 Rankings de Tempo por Atendimento")
