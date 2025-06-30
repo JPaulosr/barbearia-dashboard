@@ -124,7 +124,10 @@ else:
     col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
-    col4.metric("📌 Status", status)
+    col4.metric("📌 Status"
+
+# Insights
+st.subheader("💡 Insights do Cliente")", status)
 
     st.markdown("### 💡 Insights do Cliente")
     st.markdown(f'''- Este cliente já teve **{resumo_final["Total Atendimentos"].values[0]} atendimentos**.
