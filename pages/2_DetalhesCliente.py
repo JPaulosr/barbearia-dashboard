@@ -32,15 +32,67 @@ def carregar_dados():
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%B/%Y").str.capitalize()
+
+    # Mapeamento manual para nomes dos meses em português
+    meses_pt = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    }
+
+    df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
+
+    # Ordenar corretamente os meses para o gráfico
+    df["Mês_Ano"] = pd.Categorical(
+        df["Mês_Ano"],
+        categories=sorted(df["Mês_Ano"].unique(), key=lambda x: (int(x.split("/")[1]), list(meses_pt.values()).index(x.split("/")[0]) + 1)),
+        ordered=True
+    )
+
     return df
 
+# === INÍCIO ===
 df = carregar_dados()
 
 # === Filtro de cliente (com fallback da sessão)
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
+
+# === DADOS DO CLIENTE SELECIONADO ===
+dados_cliente = df[df["Cliente"] == cliente].sort_values("Data")
+
+if not dados_cliente.empty:
+    col1, col2, col3, col4 = st.columns(4)
+
+    # VIP
+    vip = "Sim ⭐" if dados_cliente["Valor"].mean() >= 70 else "Não"
+    col1.metric("🥇 Cliente VIP", vip)
+
+    # Mais atendido por
+    funcionario_mais = dados_cliente["Profissional"].mode()[0]
+    col2.metric("🧑‍🎨 Mais atendido por", funcionario_mais)
+
+    # Intervalo entre visitas
+    datas = dados_cliente["Data"].drop_duplicates().sort_values()
+    if len(datas) > 1:
+        intervalo_medio = (datas.diff().dropna().dt.days.mean()).round(1)
+        col3.metric("📅 Intervalo entre visitas", f"{intervalo_medio} dias")
+    else:
+        col3.metric("📅 Intervalo entre visitas", "Indisponível")
+
+    # Ticket médio
+    ticket = dados_cliente["Valor"].mean()
+    col4.metric("💵 Ticket Médio", f"R$ {ticket:,.2f}".replace(".", ","))
+
+    # Receita mensal
+    receita_mensal = dados_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+    fig = px.bar(receita_mensal, x="Mês_Ano", y="Valor", text="Valor", labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"})
+    fig.update_traces(texttemplate="R$ %{text:.2f}", textposition="outside")
+    fig.update_layout(title="📊 Receita mensal", xaxis_title="Mês", yaxis_title="Receita", height=400)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("Nenhum dado encontrado para este cliente.")
 
 # === COMPARAÇÃO ENTRE CLIENTES ===
 with st.expander("🧪 Comparativo entre Clientes", expanded=False):
@@ -64,126 +116,3 @@ with st.expander("🧪 Comparativo entre Clientes", expanded=False):
 
     df_comp = pd.DataFrame([indicadores(cliente_1), indicadores(cliente_2)])
     st.dataframe(df_comp, use_container_width=True)
-
-# Filtra dados do cliente selecionado
-df_cliente = df[df["Cliente"] == cliente]
-
-# 📅 Histórico de atendimentos
-st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-st.dataframe(df_cliente.sort_values("Data", ascending=False).drop(columns=["Data"]).rename(columns={"Data_str": "Data"}), use_container_width=True)
-
-# 📊 Receita mensal
-st.subheader("📊 Receita mensal")
-receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
-fig_receita = px.bar(
-    receita_mensal,
-    x="Mês_Ano",
-    y="Valor",
-    text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
-    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
-)
-fig_receita.update_traces(textposition="inside")
-fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
-st.plotly_chart(fig_receita, use_container_width=True)
-
-# 📊 Receita por Serviço e Produto
-st.subheader("📊 Receita por Serviço e Produto")
-df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
-receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
-receita_geral = receita_geral.sort_values("Valor", ascending=False)
-fig_receita_tipos = px.bar(
-    receita_geral,
-    x="Serviço",
-    y="Valor",
-    color="Tipo",
-    text=receita_geral["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
-    labels={"Valor": "Receita (R$)", "Serviço": "Item"},
-    barmode="group"
-)
-fig_receita_tipos.update_traces(textposition="outside")
-fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
-st.plotly_chart(fig_receita_tipos, use_container_width=True)
-
-# 📊 Atendimentos por Funcionário
-st.subheader("📊 Atendimentos por Funcionário")
-atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
-atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
-atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
-st.dataframe(atendimentos_por_funcionario, use_container_width=True)
-
-# 📋 Resumo de Atendimentos
-st.subheader("📋 Resumo de Atendimentos")
-df_cliente_dt = df.copy()
-df_cliente_dt = df_cliente_dt[df_cliente_dt["Cliente"] == cliente]
-resumo = df_cliente_dt.groupby("Data").agg(
-    Qtd_Serviços=("Serviço", "count"),
-    Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
-).reset_index()
-resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
-resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
-resumo_final = pd.DataFrame({
-    "Total Atendimentos": [resumo.shape[0]],
-    "Qtd Combos": [resumo["Qtd_Combo"].sum()],
-    "Qtd Simples": [resumo["Qtd_Simples"].sum()]
-})
-st.dataframe(resumo_final, use_container_width=True)
-
-# 📈 Frequência do Cliente (corrigida com regra dos combos)
-st.subheader("📈 Frequência de Atendimento")
-
-data_corte = pd.to_datetime("2025-05-11")
-df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
-df_depois = df_cliente_dt[df_cliente_dt["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
-df_freq = pd.concat([df_antes, df_depois]).sort_values("Data")
-datas = df_freq["Data"].tolist()
-
-if len(datas) < 2:
-    st.info("Cliente possui apenas um atendimento. Frequência não aplicável.")
-else:
-    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
-    media_freq = sum(diffs) / len(diffs)
-    ultimo_atendimento = datas[-1]
-    dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
-
-    if dias_desde_ultimo <= media_freq:
-        status = "🟢 Em dia"
-    elif dias_desde_ultimo <= media_freq * 1.5:
-        status = "🟠 Pouco atrasado"
-    else:
-        status = "🔴 Muito atrasado"
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
-    col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
-    col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
-    col4.metric("📌 Status", status)
-
-    # 💡 Insights Adicionais do Cliente
-    st.subheader("💡 Insights Adicionais do Cliente")
-
-    # Gasto médio mensal baseado em meses únicos
-    meses_ativos = df_cliente["Mês_Ano"].nunique()
-    gasto_mensal_medio = df_cliente["Valor"].sum() / meses_ativos if meses_ativos > 0 else 0
-    status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
-
-    # Funcionário mais frequente
-    mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
-
-    # Tempo total no salão
-    tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
-    tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
-
-    # Ticket médio
-    ticket_medio = df_cliente["Valor"].mean()
-
-    # Intervalo médio entre visitas
-    intervalo_medio = media_freq if len(datas) >= 2 else None
-
-    col5, col6, col7 = st.columns(3)
-    col5.metric("🏅 Cliente VIP", status_vip)
-    col6.metric("💇 Mais atendido por", mais_frequente)
-    col7.metric("🕒 Tempo Total no Salão", tempo_total_str)
-
-    col8, col9 = st.columns(2)
-    col8.metric("💸 Ticket Médio", f"R$ {ticket_medio:.2f}".replace(".", ","))
-    col9.metric("📆 Intervalo Médio", f"{intervalo_medio:.1f} dias" if intervalo_medio else "Indisponível")
