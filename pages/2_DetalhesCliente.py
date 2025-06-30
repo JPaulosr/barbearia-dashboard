@@ -5,10 +5,8 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-import locale
 
 # Define o local para exibir meses em português
-locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
