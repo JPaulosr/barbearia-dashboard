@@ -113,13 +113,23 @@ fig_cliente.update_traces(textposition='outside')
 fig_cliente.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_cliente, use_container_width=True)
 
+
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
 dias_apertados = df_tempo.groupby("Data Group")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados["Data"] = dias_apertados["Data Group"].dt.strftime("%d/%m/%Y")
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
-fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
+dias_apertados = dias_apertados.sort_values("Data Group")  # <-- garante ordem cronológica no eixo X
+
+fig_dias = px.bar(
+    dias_apertados,
+    x="Data",
+    y="Espera (min)",
+    title="Top 10 Dias com Maior Tempo de Espera"
+)
+fig_dias.update_xaxes(categoryorder='array', categoryarray=dias_apertados["Data"])
 fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)", margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_dias, use_container_width=True)
+
 
 st.subheader("📈 Distribuição por Faixa de Duração")
 bins = [0, 15, 30, 45, 60, 120, 240]
