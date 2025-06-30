@@ -1,77 +1,97 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import plotly.express as px
 
-st.set_page_config(layout="wide")
-st.title("🗓️ Frequência dos Clientes")
+st.set_page_config(page_title="Tempo de Permanência no Salão", page_icon="🏠", layout="wide")
+st.title("🏠 Tempo de Permanência no Salão")
 
 @st.cache_data
-
 def carregar_dados():
-    df = pd.read_excel("dados_barbearia.xlsx", sheet_name="Base de Dados")
-    df.columns = [str(col).strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df = df.dropna(subset=["Data"])
+    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
+    df = pd.read_csv(url)
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.strftime("%d/%m/%Y")
+    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
+    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
+    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
+    df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
     return df
 
 df = carregar_dados()
+df = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"])
 
-# === Filtro de funcionario ===
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-funcionarios_selecionados = st.multiselect("👨‍💼 Filtrar por funcionário", funcionarios, default=funcionarios)
+# Cálculos de tempo (em minutos)
+for col_name, start_col, end_col in [
+    ("Tempo Espera (min)", "Hora Chegada", "Hora Início"),
+    ("Tempo Atendimento (min)", "Hora Início", "Hora Saída"),
+    ("Tempo Pós (min)", "Hora Saída", "Hora Saída do Salão"),
+    ("Tempo Total (min)", "Hora Chegada", "Hora Saída do Salão")
+]:
+    df[col_name] = (df[end_col] - df[start_col]).dt.total_seconds() / 60
+    df[col_name] = df[col_name].round(0)
 
-if funcionarios_selecionados:
-    df = df[df["Funcionário"].isin(funcionarios_selecionados)]
+# Conversão para formato hh h mm min
+def formatar_tempo(minutos):
+    if pd.isnull(minutos): return ""
+    h = int(minutos // 60)
+    m = int(minutos % 60)
+    if h == 0:
+        return f"0h {m}min"
+    return f"{h}h {m}min"
 
-# === Processar frequência ===
-hoje = pd.to_datetime(datetime.now().date())
-frequencia_clientes = []
+for col in ["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)", "Tempo Total (min)"]:
+    df[col.replace("(min)", "formatado")] = df[col].apply(formatar_tempo)
 
-for cliente, grupo in df.groupby("Cliente"):
-    datas = grupo.sort_values("Data")["Data"].tolist()
-    if len(datas) >= 2:
-        diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
-        freq_media = sum(diffs) / len(diffs)
-    else:
-        freq_media = None
+st.subheader("📊 Distribuição dos Tempos por Cliente")
+col1, col2 = st.columns(2)
 
-    ultima_data = datas[-1]
-    dias_sem_cortar = (hoje - ultima_data).days
+with col1:
+    st.markdown("### Top 10 Permanências Pós-Atendimento")
+    top_pos = df.sort_values("Tempo Pós (min)", ascending=False).head(10)
+    st.dataframe(top_pos[["Data", "Cliente", "Funcionário", "Tempo Pós formatado", "Tempo Total formatado"]], use_container_width=True)
 
-    # Status
-    if freq_media:
-        if dias_sem_cortar <= freq_media:
-            status = "🟢 Em dia"
-        elif dias_sem_cortar <= freq_media + 5:
-            status = "🟠 Pouco atrasado"
-        else:
-            status = "🔴 Atrasado"
-    else:
-        status = "❓ Sem histórico"
+with col2:
+    st.markdown("### Top 10 Permanência Total")
+    top_total = df.sort_values("Tempo Total (min)", ascending=False).head(10)
+    st.dataframe(top_total[["Data", "Cliente", "Funcionário", "Tempo Total formatado"]], use_container_width=True)
 
-    frequencia_clientes.append({
-        "Cliente": cliente,
-        "Data do Último Atendimento": ultima_data.date(),
-        "Dias desde o Último": dias_sem_cortar,
-        "Frequência Média (dias)": round(freq_media, 1) if freq_media else "-",
-        "Status": status
-    })
+st.subheader("📈 Comparativo Visual")
+top20 = df.sort_values("Tempo Total (min)", ascending=False).head(20)
 
-resumo_df = pd.DataFrame(frequencia_clientes)
+# Converter os dados para long format e adicionar coluna formatada
+df_long = top20.melt(
+    id_vars=["Cliente"], 
+    value_vars=["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)"],
+    var_name="Etapa", 
+    value_name="Minutos"
+)
 
-# === Filtro por status ===
-status_opcoes = resumo_df["Status"].unique().tolist()
-status_selecionados = st.multiselect("⚠️ Filtrar por status", status_opcoes, default=status_opcoes)
+def min_para_texto(minutos):
+    if pd.isnull(minutos): return ""
+    h = int(minutos // 60)
+    m = int(minutos % 60)
+    return f"{h}h {m}min"
 
-resumo_df = resumo_df[resumo_df["Status"].isin(status_selecionados)]
+df_long["Tempo Formatado"] = df_long["Minutos"].apply(min_para_texto)
 
-# === Mostrar tabela ===
-st.dataframe(resumo_df.sort_values("Dias desde o Último", ascending=False), use_container_width=True)
+fig = px.bar(
+    df_long,
+    x="Cliente",
+    y="Minutos",
+    color="Etapa",
+    barmode="group",
+    text="Tempo Formatado",
+    title="Top 20 Clientes por Tempo Total (Lado a Lado)",
+    labels={"Minutos": "Minutos", "Cliente": "Cliente"}
+)
 
-# === Exportar CSV ===
-st.download_button(
-    label="📂 Baixar como CSV",
-    data=resumo_df.to_csv(index=False).encode("utf-8"),
-    file_name="frequencia_clientes.csv",
-    mime="text/csv"
+fig.update_traces(textposition="outside")
+fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
+st.plotly_chart(fig, use_container_width=True)
+
+st.subheader("📋 Visualizar base completa")
+st.dataframe(
+    df[["Data", "Cliente", "Funcionário",
+        "Tempo Espera formatado", "Tempo Atendimento formatado",
+        "Tempo Pós formatado", "Tempo Total formatado"]],
+    use_container_width=True
 )
