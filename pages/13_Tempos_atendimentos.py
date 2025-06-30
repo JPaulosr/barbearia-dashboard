@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -20,7 +21,6 @@ def carregar_dados_google_sheets():
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 
-# Filtros interativos na parte superior
 st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
 
@@ -48,14 +48,12 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-# CORREÇÃO: agrupando combos corretamente
 combos_df = df.groupby(["Cliente", "Data"])["Combo"].agg(lambda x: ', '.join(sorted(set(str(v) for v in x if pd.notnull(v))))).reset_index()
 combo_grouped = pd.merge(combo_grouped, combos_df, on=["Cliente", "Data"], how="left")
 
-# Formatação para exibição
 combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"])
-combo_grouped["Data Group"] = combo_grouped["Data"]  # mantém datetime para agrupamento posterior
-combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")  # string para exibição
+combo_grouped["Data Group"] = combo_grouped["Data"]
+combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")
 
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
 combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
@@ -79,8 +77,8 @@ combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"],
 combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
+df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
-# Interface continua igual
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 with col1:
@@ -116,7 +114,8 @@ fig_cliente.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_cliente, use_container_width=True)
 
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
-dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
+dias_apertados = df_tempo.groupby("Data Group")["Espera (min)"].mean().reset_index().dropna()
+dias_apertados["Data"] = dias_apertados["Data Group"].dt.strftime("%d/%m/%Y")
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
 fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
 fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)", margin=dict(t=60), title_x=0.5)
