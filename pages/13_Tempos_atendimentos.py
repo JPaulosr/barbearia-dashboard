@@ -27,4 +27,4 @@ def carregar_dados_google_sheets():
 carregado = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(carregado)}</i></small>", unsafe_allow_html=True)
 
-# (restante do código permanece inalterado)
+# Aqui você pode continuar com o restante da lógica da página
