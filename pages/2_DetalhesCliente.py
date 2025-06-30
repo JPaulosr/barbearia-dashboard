@@ -5,6 +5,7 @@ import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 import datetime
+import locale
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
@@ -32,6 +33,7 @@ def carregar_dados():
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
+    locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
     df["Mês_Ano"] = df["Data"].dt.strftime("%B/%Y").str.capitalize()
     return df
 
