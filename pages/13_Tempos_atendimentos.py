@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -19,6 +18,14 @@ def carregar_dados_google_sheets():
     return df
 
 df = carregar_dados_google_sheets()
+
+# Validação de colunas obrigatórias
+colunas_necessarias = ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão", "Cliente", "Funcionário", "Tipo", "Combo", "Data"]
+faltando = [col for col in colunas_necessarias if col not in df.columns]
+if faltando:
+    st.error(f"As colunas obrigatórias estão faltando: {', '.join(faltando)}")
+    st.stop()
+
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
@@ -31,12 +38,12 @@ with col_f1:
 with col_f2:
     cliente_busca = st.text_input("Buscar Cliente")
 with col_f3:
-    periodo = st.date_input("Período", [], help="Selecione o intervalo de datas")
+    periodo = st.date_input("Período", value=None, help="Selecione o intervalo de datas")
 
 df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if cliente_busca:
     df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
-if len(periodo) == 2:
+if isinstance(periodo, list) and len(periodo) == 2:
     df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
@@ -98,7 +105,8 @@ if not df_semana.empty:
     st.markdown(f"**Semana:** {ultimos_7_dias.strftime('%d/%m')} a {hoje.strftime('%d/%m')}")
     st.markdown(f"**Média da semana:** {int(media_semana)} min")
     st.markdown(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
-    st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
-    st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
+    if not mais_rapido.empty and not mais_lento.empty:
+        st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
+        st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
 else:
     st.markdown("Nenhum atendimento registrado nos últimos 7 dias.")
