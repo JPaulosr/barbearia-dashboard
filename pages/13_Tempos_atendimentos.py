@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -163,9 +164,7 @@ inicio_semana = pd.Timestamp.now().normalize() - pd.to_timedelta(pd.Timestamp.no
 fim_semana = inicio_semana + pd.Timedelta(days=6)
 
 df_semana = df_tempo[
-    (df_tempo["Data"] >= (hoje - timedelta(days=6))) & 
-    (df_tempo["Data"] <= hoje)
-]) >= inicio_semana) &
+    (pd.to_datetime(df_tempo["Data Group"]) >= inicio_semana) &
     (pd.to_datetime(df_tempo["Data Group"]) <= fim_semana)
 ]
 
