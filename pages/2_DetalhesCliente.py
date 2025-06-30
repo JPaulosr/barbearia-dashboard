@@ -50,6 +50,41 @@ clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
+# === DADOS DO CLIENTE SELECIONADO ===
+dados_cliente = df[df["Cliente"] == cliente].sort_values("Data")
+
+if not dados_cliente.empty:
+    col1, col2, col3, col4 = st.columns(4)
+
+    # VIP
+    vip = "Sim ⭐" if dados_cliente["Valor"].mean() >= 70 else "Não"
+    col1.metric("🥇 Cliente VIP", vip)
+
+    # Mais atendido por
+    funcionario_mais = dados_cliente["Profissional"].mode()[0]
+    col2.metric("🧑‍🎨 Mais atendido por", funcionario_mais)
+
+    # Intervalo entre visitas
+    datas = dados_cliente["Data"].drop_duplicates().sort_values()
+    if len(datas) > 1:
+        intervalo_medio = (datas.diff().dropna().dt.days.mean()).round(1)
+        col3.metric("📅 Intervalo entre visitas", f"{intervalo_medio} dias")
+    else:
+        col3.metric("📅 Intervalo entre visitas", "Indisponível")
+
+    # Ticket médio
+    ticket = dados_cliente["Valor"].mean()
+    col4.metric("💵 Ticket Médio", f"R$ {ticket:,.2f}".replace(".", ","))
+
+    # Receita mensal
+    receita_mensal = dados_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+    fig = px.bar(receita_mensal, x="Mês_Ano", y="Valor", text="Valor", labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"})
+    fig.update_traces(texttemplate="R$ %{text:.2f}", textposition="outside")
+    fig.update_layout(title="📊 Receita mensal", xaxis_title="Mês", yaxis_title="Receita", height=400)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("Nenhum dado encontrado para este cliente.")
+
 # === COMPARAÇÃO ENTRE CLIENTES ===
 with st.expander("🧪 Comparativo entre Clientes", expanded=False):
     col_c1, col_c2 = st.columns(2)
