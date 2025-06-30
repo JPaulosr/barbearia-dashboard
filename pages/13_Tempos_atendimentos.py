@@ -38,6 +38,7 @@ if cliente_busca:
 if len(periodo) == 2:
     df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
+# Agrupamento de combos (1 atendimento por Cliente + Data, mantendo dados horários agregados)
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Hora Chegada": "min",
@@ -45,16 +46,11 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Hora Saída": "max",
     "Hora Saída do Salão": "max",
     "Funcionário": "first",
-    "Tipo": lambda x: ', '.join(sorted(set(x)))
+    "Tipo": lambda x: ', '.join(sorted(set(x))),
+    "Combo": "first"
 }).reset_index()
 
-combos_df = df.groupby(["Cliente", "Data"])["Combo"].agg(lambda x: ', '.join(sorted(set(str(v) for v in x if pd.notnull(v))))).reset_index()
-combo_grouped = pd.merge(combo_grouped, combos_df, on=["Cliente", "Data"], how="left")
-
-combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"])
-combo_grouped["Data Group"] = combo_grouped["Data"]
-combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")
-
+combo_grouped["Data_str"] = combo_grouped["Data"].apply(lambda x: x.strftime("%d/%m/%Y"))
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
 combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
@@ -72,29 +68,22 @@ def calcular_duracao(row):
 combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
 combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
-combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if "+" in str(x) or "," in str(x) else "Simples")
+combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if pd.notnull(x) and "+" in str(x) else "Simples")
 combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
 combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
-df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 with col1:
-    top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
     st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
+    top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
+    st.dataframe(top_mais_rapidos[["Data_str", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
 with col2:
-    top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
     st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
-
-contagem_turno = df_tempo["Período do Dia"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).reset_index()
-contagem_turno.columns = ["Período do Dia", "Quantidade"]
-fig_qtd_turno = px.bar(contagem_turno, x="Período do Dia", y="Quantidade", title="Quantidade de Atendimentos por Período do Dia")
-fig_qtd_turno.update_layout(margin=dict(t=60), title_x=0.5)
-st.plotly_chart(fig_qtd_turno, use_container_width=True)
+    top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
+    st.dataframe(top_mais_lentos[["Data_str", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
 
 st.subheader("📊 Tempo Médio por Tipo de Serviço")
 media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
@@ -114,8 +103,7 @@ fig_cliente.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_cliente, use_container_width=True)
 
 st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
-dias_apertados = df_tempo.groupby("Data Group")["Espera (min)"].mean().reset_index().dropna()
-dias_apertados["Data"] = dias_apertados["Data Group"].dt.strftime("%d/%m/%Y")
+dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
 dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
 fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
 fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)", margin=dict(t=60), title_x=0.5)
@@ -134,19 +122,17 @@ st.plotly_chart(fig_faixa, use_container_width=True)
 st.subheader("🚨 Clientes com Espera Acima do Normal")
 alvo = st.slider("Defina o tempo limite de espera (min):", 5, 60, 20)
 atrasados = df_tempo[df_tempo["Espera (min)"] > alvo]
-st.dataframe(atrasados[["Data", "Cliente", "Funcionário", "Espera (min)", "Duração formatada"]], use_container_width=True)
+st.dataframe(atrasados[["Data_str", "Cliente", "Funcionário", "Espera (min)", "Duração formatada"]], use_container_width=True)
 
 st.subheader("🔍 Insights do Dia")
 data_hoje = pd.Timestamp.now().normalize().date()
-df_hoje = df_tempo[df_tempo["Data"] == data_hoje.strftime("%d/%m/%Y")]
-
+df_hoje = df_tempo[df_tempo["Data"] == data_hoje]
 if not df_hoje.empty:
     media_hoje = df_hoje["Duração (min)"].mean()
-    media_mes = df_tempo[pd.to_datetime(df_tempo["Data"], dayfirst=True).dt.month == datetime.now().month]["Duração (min)"].mean()
+    media_mes = df_tempo[pd.to_datetime(df_tempo["Data"]).dt.month == datetime.now().month]["Duração (min)"].mean()
     total_minutos = df_hoje["Duração (min)"].sum()
     mais_rapido = df_hoje.nsmallest(1, "Duração (min)")
     mais_lento = df_hoje.nlargest(1, "Duração (min)")
-
     st.markdown(f"**Média hoje:** {int(media_hoje)} min | **Média do mês:** {int(media_mes)} min")
     st.markdown(f"**Total de minutos trabalhados hoje:** {int(total_minutos)} min")
     st.markdown(f"**Mais rápido do dia:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
