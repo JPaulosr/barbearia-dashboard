@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
 st.title("⏱️ Tempos por Atendimento")
@@ -20,9 +20,11 @@ def carregar_dados_google_sheets():
 
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
+st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
-# Filtros
+st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
+
 funcionarios = df["Funcionário"].dropna().unique().tolist()
 with col_f1:
     funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
@@ -78,10 +80,25 @@ combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.appl
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
-# Correção aqui: últimos 7 dias
-hoje = datetime.now().date()
-ultimos_7_dias = hoje - timedelta(days=6)
-df_semana = df_tempo[(df_tempo["Data Group"].dt.date >= ultimos_7_dias) & (df_tempo["Data Group"].dt.date <= hoje)]
+st.subheader("🔍 Insights da Semana")
+hoje = pd.Timestamp.now().normalize()
+ultimos_7_dias = hoje - pd.Timedelta(days=6)
 
-# Os blocos de visualização (rankings, gráficos etc.) ficam após isso
-st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
+df_semana = df_tempo[
+    (df_tempo["Data Group"].dt.date >= ultimos_7_dias.date()) &
+    (df_tempo["Data Group"].dt.date <= hoje.date())
+]
+
+if not df_semana.empty:
+    media_semana = df_semana["Duração (min)"].mean()
+    total_minutos = df_semana["Duração (min)"].sum()
+    mais_rapido = df_semana.nsmallest(1, "Duração (min)")
+    mais_lento = df_semana.nlargest(1, "Duração (min)")
+
+    st.markdown(f"**Semana:** {ultimos_7_dias.strftime('%d/%m')} a {hoje.strftime('%d/%m')}")
+    st.markdown(f"**Média da semana:** {int(media_semana)} min")
+    st.markdown(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
+    st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
+    st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
+else:
+    st.markdown("Nenhum atendimento registrado nos últimos 7 dias.")
