@@ -51,7 +51,10 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora 
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Funcionário", "Hora Início", "Combo"]], on=["Cliente", "Data", "Funcionário", "Hora Início Preenchida"], how="left")
+df_temp = df.copy()
+df_temp['Hora Início Preenchida'] = df_temp['Hora Início']
+df_temp.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df_temp.loc[mask_hora_inicio_nula, 'Hora Chegada']
+combo_grouped = pd.merge(combo_grouped, df_temp[["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Hora Início", "Combo"]], on=["Cliente", "Data", "Funcionário", "Hora Início Preenchida"], how="left")
 
 # Calcular duração e espera corretamente
 def calcular_duracao(row):
