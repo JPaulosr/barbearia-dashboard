@@ -26,14 +26,21 @@ def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
+
+    # Padroniza os nomes das colunas
+    df.columns = [str(col).strip().title() for col in df.columns]
+
+    # Renomeia para uso interno padrão
+    df.rename(columns={"Funcionário": "Profissional"}, inplace=True)
+
+    # Conversão de datas
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
 
-    # Mapeamento manual para nomes dos meses em português
+    # Nomes dos meses em português
     meses_pt = {
         1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
         5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
@@ -42,7 +49,7 @@ def carregar_dados():
 
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
-    # Ordenar corretamente os meses para o gráfico
+    # Ordenar corretamente os meses
     df["Mês_Ano"] = pd.Categorical(
         df["Mês_Ano"],
         categories=sorted(df["Mês_Ano"].unique(), key=lambda x: (int(x.split("/")[1]), list(meses_pt.values()).index(x.split("/")[0]) + 1)),
@@ -54,12 +61,12 @@ def carregar_dados():
 # === INÍCIO ===
 df = carregar_dados()
 
-# === Filtro de cliente (com fallback da sessão)
+# === Filtro de cliente ===
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-# === DADOS DO CLIENTE SELECIONADO ===
+# === DADOS DO CLIENTE ===
 dados_cliente = df[df["Cliente"] == cliente].sort_values("Data")
 
 if not dados_cliente.empty:
@@ -70,7 +77,10 @@ if not dados_cliente.empty:
     col1.metric("🥇 Cliente VIP", vip)
 
     # Mais atendido por
-    funcionario_mais = dados_cliente["Profissional"].mode()[0]
+    if "Profissional" in dados_cliente.columns and not dados_cliente["Profissional"].dropna().empty:
+        funcionario_mais = dados_cliente["Profissional"].mode()[0]
+    else:
+        funcionario_mais = "Indisponível"
     col2.metric("🧑‍🎨 Mais atendido por", funcionario_mais)
 
     # Intervalo entre visitas
@@ -91,10 +101,11 @@ if not dados_cliente.empty:
     fig.update_traces(texttemplate="R$ %{text:.2f}", textposition="outside")
     fig.update_layout(title="📊 Receita mensal", xaxis_title="Mês", yaxis_title="Receita", height=400)
     st.plotly_chart(fig, use_container_width=True)
+
 else:
     st.warning("Nenhum dado encontrado para este cliente.")
 
-# === COMPARAÇÃO ENTRE CLIENTES ===
+# === COMPARATIVO ENTRE CLIENTES ===
 with st.expander("🧪 Comparativo entre Clientes", expanded=False):
     col_c1, col_c2 = st.columns(2)
     cliente_1 = col_c1.selectbox("Cliente 1", clientes_disponiveis, key="c1")
