@@ -42,8 +42,7 @@ if len(periodo) == 2:
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início"]).agg({
     "Hora Chegada": "min",
-    "Hora Início": "min",
-    "Hora Saída": "max",
+        "Hora Saída": "max",
     "Hora Saída do Salão": "max",
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
