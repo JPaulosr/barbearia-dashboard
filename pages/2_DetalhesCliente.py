@@ -43,8 +43,8 @@ cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_di
 # Filtra dados do cliente
 df_cliente = df[df["Cliente"] == cliente]
 
-# 🗕️ Histórico de atendimentos
-st.subheader(f" Histórico de atendimentos - {cliente}")
+# 📅 Histórico de atendimentos
+st.subheader(f"📅 Histórico de atendimentos - {cliente}")
 st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
 # 📊 Receita mensal
@@ -101,8 +101,9 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# 📈 Frequência do Cliente
+# 📈 Frequência do Cliente (corrigida com regra dos combos)
 st.subheader("📈 Frequência de Atendimento")
+
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente[df_cliente["Data"] < data_corte].copy()
 df_depois = df_cliente[df_cliente["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
@@ -125,21 +126,27 @@ else:
         status = "🔴 Muito atrasado"
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🗓️ Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
+    col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
     col4.metric("📌 Status", status)
 
-    # 💡 Insights adicionais do cliente
+    # 💡 Insights Adicionais do Cliente
     st.subheader("💡 Insights Adicionais do Cliente")
-    gasto_medio = df_cliente["Valor"].mean()
-    gasto_medio_str = f"R$ {gasto_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    status_vip = "Sim ⭐" if gasto_medio >= 30 else "Não"
+
+    # Gasto médio mensal baseado em meses únicos
+    meses_ativos = df_cliente["Mês_Ano"].nunique()
+    gasto_mensal_medio = df_cliente["Valor"].sum() / meses_ativos if meses_ativos > 0 else 0
+    status_vip = "Sim ⭐" if gasto_mensal_medio >= 90 else "Não"
+
+    # Funcionário mais frequente
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
+
+    # Tempo total no salão
     tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
     tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
 
     col5, col6, col7 = st.columns(3)
-    col5.metric("🌾 Cliente VIP", status_vip)
+    col5.metric("🏅 Cliente VIP", status_vip)
     col6.metric("💇 Mais atendido por", mais_frequente)
     col7.metric("🕒 Tempo Total no Salão", tempo_total_str)
