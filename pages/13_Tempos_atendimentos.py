@@ -1,156 +1,142 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+import gspread
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
-st.title("⏱️ Tempos por Atendimento")
+st.set_page_config(layout="wide")
+st.title("📆 Frequência dos Clientes")
+
+# === CONFIG GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+BASE_ABA = "Base de Dados"
+STATUS_ABA = "clientes_status"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
 
 @st.cache_data
-def carregar_dados_google_sheets():
-    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url)
-    df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.date
-    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
-    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
-    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
-    df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
+def carregar_dados():
+    planilha = conectar_sheets()
+    aba = planilha.worksheet(BASE_ABA)
+    df = get_as_dataframe(aba).dropna(how="all")
+    df.columns = [str(col).strip() for col in df.columns]
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
     return df
 
-df = carregar_dados_google_sheets()
-st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
-
-# Filtros interativos na parte superior
-col_f1, col_f2, col_f3 = st.columns(3)
-
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-with col_f1:
-    funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
-with col_f2:
-    cliente_busca = st.text_input("Buscar Cliente")
-with col_f3:
-    periodo = st.date_input("Período", [], help="Selecione o intervalo de datas")
-
-# Aplicar filtros
-df = df[df["Funcionário"].isin(funcionario_selecionado)]
-if cliente_busca:
-    df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
-if len(periodo) == 2:
-    df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
-
-combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
-combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
-    "Hora Chegada": "min",
-    "Hora Início": "min",
-    "Hora Saída": "max",
-    "Hora Saída do Salão": "max",
-    "Funcionário": "first",
-    "Tipo": lambda x: ', '.join(sorted(set(x)))
-}).reset_index()
-
-# Incorporar coluna Combo para identificar combos reais
-combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Combo"]], on=["Cliente", "Data"], how="left")
-
-combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
-combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
-combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
-combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
-combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].dt.strftime("%H:%M")
-
-def calcular_duracao(row):
+@st.cache_data
+def carregar_status():
     try:
-        inicio = pd.to_datetime(row["Hora Início"], format="%H:%M")
-        fim_raw = row["Hora Saída do Salão"] if pd.notnull(row["Hora Saída do Salão"]) and row["Hora Saída do Salão"] != "NaT" else row["Hora Saída"]
-        fim = pd.to_datetime(fim_raw, format="%H:%M")
-        return (fim - inicio).total_seconds() / 60
+        planilha = conectar_sheets()
+        aba_status = planilha.worksheet(STATUS_ABA)
+        status = get_as_dataframe(aba_status).dropna(how="all")
+        status.columns = [str(col).strip() for col in status.columns]
+        return status[["Cliente", "Status"]]
     except:
-        return None
+        return pd.DataFrame(columns=["Cliente", "Status"])
 
-combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
-combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
-combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
-combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if pd.notnull(x) and "+" in str(x) else "Simples")
+# === PRÉ-PROCESSAMENTO
+df = carregar_dados()
+df_status = carregar_status()
+clientes_validos = df_status[~df_status["Status"].isin(["Inativo", "Ignorado"])]["Cliente"].unique().tolist()
+df = df[df["Cliente"].isin(clientes_validos)]
+atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
-# Período do dia
-combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
-combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
+# === CÁLCULO DE FREQUÊNCIA
+frequencia_clientes = []
+hoje = pd.Timestamp.today().normalize()
 
-# Filtrando atendimentos válidos
-df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
+for cliente, grupo in atendimentos.groupby("Cliente"):
+    datas = grupo.sort_values("Data")["Data"].tolist()
+    if len(datas) < 2:
+        continue
 
-# Rankings em cima
-st.subheader("🏆 Rankings de Tempo por Atendimento")
-col1, col2 = st.columns(2)
+    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
+    media_freq = sum(diffs) / len(diffs)
+    ultimo_atendimento = datas[-1]
+    dias_desde_ultimo = (hoje - ultimo_atendimento).days
 
-with col1:
-    top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
-    st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
+    if dias_desde_ultimo <= media_freq:
+        status = ("🟢 Em dia", "Em dia")
+    elif dias_desde_ultimo <= media_freq * 1.5:
+        status = ("🟠 Pouco atrasado", "Pouco atrasado")
+    else:
+        status = ("🔴 Muito atrasado", "Muito atrasado")
 
-with col2:
-    top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
-    st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
+    frequencia_clientes.append({
+        "Status": status[0],
+        "Cliente": cliente,
+        "Último Atendimento": ultimo_atendimento.date(),
+        "Qtd Atendimentos": len(datas),
+        "Frequência Média (dias)": round(media_freq, 1),
+        "Dias Desde Último": dias_desde_ultimo,
+        "Status_Label": status[1]
+    })
 
-# Gráfico de quantidade de atendimentos por período
-contagem_turno = df_tempo["Período do Dia"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).reset_index()
-contagem_turno.columns = ["Período do Dia", "Quantidade"]
-fig_qtd_turno = px.bar(contagem_turno, x="Período do Dia", y="Quantidade", title="Quantidade de Atendimentos por Período do Dia")
-st.plotly_chart(fig_qtd_turno, use_container_width=True)
+freq_df = pd.DataFrame(frequencia_clientes)
 
-st.subheader("📊 Tempo Médio por Tipo de Serviço")
-media_tipo = df_tempo.groupby("Categoria")["Duração (min)"].mean().reset_index()
-media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
-fig_tipo.update_traces(textposition='outside')
-st.plotly_chart(fig_tipo, use_container_width=True)
+# === FILTRO POR TEXTO
+st.markdown("### 🎯 Filtro de Cliente")
+nome_busca = st.text_input("🔍 Digite parte do nome").strip().lower()
+if nome_busca:
+    freq_df = freq_df[freq_df["Cliente"].str.lower().str.contains(nome_busca)]
 
-st.subheader("👤 Tempo Médio por Cliente (Top 15)")
-tempo_por_cliente = df_tempo.groupby("Cliente")["Duração (min)"].mean().reset_index()
-top_clientes = tempo_por_cliente.sort_values("Duração (min)", ascending=False).head(15)
-top_clientes["Duração formatada"] = top_clientes["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_cliente = px.bar(top_clientes, x="Cliente", y="Duração (min)", title="Clientes com Maior Tempo Médio", text="Duração formatada")
-fig_cliente.update_traces(textposition='outside')
-st.plotly_chart(fig_cliente, use_container_width=True)
+# === INDICADORES
+st.markdown("### 📊 Indicadores")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("👥 Clientes ativos", freq_df["Cliente"].nunique())
+col2.metric("🟢 Em dia", freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente"].nunique())
+col3.metric("🟠 Pouco atrasado", freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique())
+col4.metric("🔴 Muito atrasado", freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique())
 
-st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
-dias_apertados = df_tempo.groupby("Data")["Espera (min)"].mean().reset_index().dropna()
-dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
-fig_dias = px.bar(dias_apertados, x="Data", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
-fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)")
-st.plotly_chart(fig_dias, use_container_width=True)
+# === TABELAS POR STATUS
+st.divider()
+st.markdown("## 🔴 Muito Atrasados")
+muito = freq_df[freq_df["Status_Label"] == "Muito atrasado"].drop(columns=["Status_Label"])
+st.dataframe(muito, use_container_width=True)
 
-st.subheader("📈 Distribuição por Faixa de Duração")
-bins = [0, 15, 30, 45, 60, 120, 240]
-labels = ["Até 15min", "Até 30min", "Até 45min", "Até 1h", "Até 2h", ">2h"]
-df_tempo["Faixa"] = pd.cut(df_tempo["Duração (min)"], bins=bins, labels=labels, include_lowest=True)
-faixa_dist = df_tempo["Faixa"].value_counts().sort_index().reset_index()
-faixa_dist.columns = ["Faixa", "Qtd"]
-fig_faixa = px.bar(faixa_dist, x="Faixa", y="Qtd", title="Distribuição por Faixa de Tempo")
-st.plotly_chart(fig_faixa, use_container_width=True)
+st.markdown("## 🟠 Pouco Atrasados")
+pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"].drop(columns=["Status_Label"])
+st.dataframe(pouco, use_container_width=True)
 
-st.subheader("🚨 Clientes com Espera Acima do Normal")
-alvo = st.slider("Defina o tempo limite de espera (min):", 5, 60, 20)
-atrasados = df_tempo[df_tempo["Espera (min)"] > alvo]
-st.dataframe(atrasados[["Data", "Cliente", "Funcionário", "Espera (min)", "Duração formatada"]], use_container_width=True)
+st.markdown("## 🟢 Em Dia")
+emdia = freq_df[freq_df["Status_Label"] == "Em dia"].drop(columns=["Status_Label"])
+st.dataframe(emdia, use_container_width=True)
 
-st.subheader("🔍 Insights do Dia")
-data_hoje = pd.Timestamp.now().normalize().date()
-df_hoje = df_tempo[df_tempo["Data"] == data_hoje.strftime("%d/%m/%Y")]
+# === GRÁFICO FINAL
+st.divider()
+st.subheader("📊 Top 20 Clientes com mais dias sem vir")
+top_grafico = freq_df.sort_values("Dias Desde Último", ascending=False).head(20)
+fig = px.bar(
+    top_grafico,
+    x="Cliente",
+    y="Dias Desde Último",
+    color="Status_Label",
+    text="Dias Desde Último",
+    labels={"Dias Desde Último": "Dias de ausência", "Status_Label": "Status"}
+)
+fig.update_layout(xaxis_tickangle=-45, height=500)
+fig.update_traces(textposition="outside")
+st.plotly_chart(fig, use_container_width=True)
 
-if not df_hoje.empty:
-    media_hoje = df_hoje["Duração (min)"].mean()
-    media_mes = df_tempo[pd.to_datetime(df_tempo["Data"], dayfirst=True).dt.month == datetime.now().month]["Duração (min)"].mean()
-    total_minutos = df_hoje["Duração (min)"].sum()
-    mais_rapido = df_hoje.nsmallest(1, "Duração (min)")
-    mais_lento = df_hoje.nlargest(1, "Duração (min)")
+# === RANKING DE FREQUÊNCIA
+st.divider()
+st.subheader("🏆 Ranking por Frequência Média")
+col5, col6 = st.columns(2)
 
-    st.markdown(f"**Média hoje:** {int(media_hoje)} min | **Média do mês:** {int(media_mes)} min")
-    st.markdown(f"**Total de minutos trabalhados hoje:** {int(total_minutos)} min")
-    st.markdown(f"**Mais rápido do dia:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
-    st.markdown(f"**Mais lento do dia:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
-else:
-    st.markdown("Nenhum atendimento registrado para hoje.")
+with col5:
+    st.markdown("### ✅ Top 5 Clientes com Melhor Frequência")
+    melhores = freq_df.sort_values("Frequência Média (dias)").head(5)
+    st.dataframe(melhores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
 
-with st.expander("📋 Visualizar dados consolidados"):
-    st.dataframe(df_tempo, use_container_width=True)
+with col6:
+    st.markdown("### ⚠️ Top 5 Clientes com Pior Frequência")
+    piores = freq_df.sort_values("Frequência Média (dias)", ascending=False).head(5)
+    st.dataframe(piores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
