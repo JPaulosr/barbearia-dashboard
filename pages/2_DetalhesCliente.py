@@ -44,7 +44,7 @@ cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_di
 df_cliente = df[df["Cliente"] == cliente]
 
 # 🗕️ Histórico de atendimentos
-st.subheader(f"🗕️ Histórico de atendimentos - {cliente}")
+st.subheader(f" Histórico de atendimentos - {cliente}")
 st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
 # 📊 Receita mensal
