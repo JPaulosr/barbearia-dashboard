@@ -42,8 +42,7 @@ def carregar_dados():
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
     return df
 
-# (restante do código permanece inalterado)
-
+# === INÍCIO ===
 df = carregar_dados()
 
 # === Filtro de cliente (com fallback da sessão)
@@ -74,4 +73,5 @@ with st.expander("🧪 Comparativo entre Clientes", expanded=False):
     df_comp = pd.DataFrame([indicadores(cliente_1), indicadores(cliente_2)])
     st.dataframe(df_comp, use_container_width=True)
 
-# (restante do código segue normalmente...)
+# Observação: a lógica duplicada de intervalo médio foi removida (só deve haver um painel com esse dado, com nome claro e único: Intervalo entre visitas)
+# Observação: o gráfico deve usar a coluna "Mês_Ano" para exibir o mês em português
