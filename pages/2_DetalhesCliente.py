@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -31,26 +30,25 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%B/%Y").str.capitalize()
+    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")
     return df
 
 df = carregar_dados()
 
+# === Filtro de cliente (com fallback da sessão)
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
+# Filtra dados do cliente
 df_cliente = df[df["Cliente"] == cliente]
 
-# 📅 Histórico com horário completo
+# 📅 Histórico de atendimentos
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-df_exibicao = df_cliente[["Data", "Serviço"]].sort_values("Data", ascending=False).copy()
-df_exibicao["Data"] = df_exibicao["Data"].dt.strftime("%d/%m/%Y %H:%M")
-st.dataframe(df_exibicao, use_container_width=True)
+st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
 
 # 📊 Receita mensal
 st.subheader("📊 Receita mensal")
-df_cliente["Mês_Ano"] = df_cliente["Data"].dt.strftime("%B/%Y").str.capitalize()
 receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
 fig_receita = px.bar(
     receita_mensal,
@@ -60,13 +58,14 @@ fig_receita = px.bar(
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
 )
 fig_receita.update_traces(textposition="inside")
-fig_receita.update_layout(height=400, margin=dict(t=50))
+fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita, use_container_width=True)
 
 # 📊 Receita por Serviço e Produto
 st.subheader("📊 Receita por Serviço e Produto")
 df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
 receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
+receita_geral = receita_geral.sort_values("Valor", ascending=False)
 fig_receita_tipos = px.bar(
     receita_geral,
     x="Serviço",
@@ -77,7 +76,7 @@ fig_receita_tipos = px.bar(
     barmode="group"
 )
 fig_receita_tipos.update_traces(textposition="outside")
-fig_receita_tipos.update_layout(height=450, margin=dict(t=80))
+fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
 # 📊 Atendimentos por Funcionário
@@ -102,8 +101,9 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# 📈 Frequência + Insights
+# 📈 Frequência do Cliente (corrigida com regra dos combos)
 st.subheader("📈 Frequência de Atendimento")
+
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente[df_cliente["Data"] < data_corte].copy()
 df_depois = df_cliente[df_cliente["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
@@ -117,21 +117,16 @@ else:
     media_freq = sum(diffs) / len(diffs)
     ultimo_atendimento = datas[-1]
     dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
-    status = "🟢 Em dia" if dias_desde_ultimo <= media_freq else "🟠 Pouco atrasado" if dias_desde_ultimo <= media_freq * 1.5 else "🔴 Muito atrasado"
+
+    if dias_desde_ultimo <= media_freq:
+        status = "🟢 Em dia"
+    elif dias_desde_ultimo <= media_freq * 1.5:
+        status = "🟠 Pouco atrasado"
+    else:
+        status = "🔴 Muito atrasado"
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
     col4.metric("📌 Status", status)
-
-    # Insights adicionais
-    st.subheader("💡 Insights do Cliente")
-    total_atendimentos = resumo.shape[0]
-    tipo_mais_comum = "Simples" if resumo["Qtd_Simples"].sum() >= resumo["Qtd_Combo"].sum() else "Combo"
-    st.markdown(
-        f"- Este cliente já teve **{total_atendimentos} atendimentos**.\n"
-        f"- O tipo mais comum foi: **{tipo_mais_comum}**.\n"
-        f"- A frequência média é de **{media_freq:.1f} dias**, com o último atendimento há **{dias_desde_ultimo} dias**.\n"
-        f"- Status atual: **{status.replace('🟢 ', '').replace('🟠 ', '').replace('🔴 ', '')}**"
-    )
