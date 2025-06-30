@@ -4,6 +4,7 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
+import locale
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
@@ -31,7 +32,8 @@ def carregar_dados():
     df["Data"] = df["Data"].dt.strftime("%d/%m/%Y")  # Ajuste: remover hora
     df["Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.year
     df["Mês"] = pd.to_datetime(df["Data"], dayfirst=True).dt.month
-    df["Mês_Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.strftime("%b/%Y")
+    locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
+    df["Mês_Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.strftime("%B/%Y").str.capitalize()
     return df
 
 df = carregar_dados()
@@ -141,7 +143,7 @@ else:
     # Gasto médio mensal baseado em meses únicos
     meses_ativos = df_cliente["Mês_Ano"].nunique()
     gasto_mensal_medio = df_cliente["Valor"].sum() / meses_ativos if meses_ativos > 0 else 0
-    status_vip = "Sim ⭐" if gasto_mensal_medio >= 90 else "Não"
+    status_vip = "Sim ⭐" if gasto_mensal_medio >= 85 else "Não"
 
     # Funcionário mais frequente
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
