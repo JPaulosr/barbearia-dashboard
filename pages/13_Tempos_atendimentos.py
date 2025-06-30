@@ -68,9 +68,6 @@ combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.appl
 # Final df
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 
-# --- BLOCO ORIGINALS DO PAINEL COMPLETO SÃO MANTIDOS ABAIXO ---
-# (Você pode colar aqui todos os blocos restantes que já existiam, como rankings, gráficos etc.)
-
 # NOVAS MÉTRICAS
 st.subheader("📌 Novas Métricas de Tempo")
 
