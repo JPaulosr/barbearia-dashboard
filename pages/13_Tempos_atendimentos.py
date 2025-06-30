@@ -40,16 +40,15 @@ if len(periodo) == 2:
     df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
-combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
+combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início"]).agg({
     "Hora Chegada": "min",
     "Hora Início": "min",
     "Hora Saída": "max",
     "Hora Saída do Salão": "max",
-    "Funcionário": "first",
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Combo"]], on=["Cliente", "Data"], how="left")
+combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Funcionário", "Hora Início", "Combo"]], on=["Cliente", "Data", "Funcionário", "Hora Início"], how="left")
 
 # Calcular duração e espera corretamente
 def calcular_duracao(row):
