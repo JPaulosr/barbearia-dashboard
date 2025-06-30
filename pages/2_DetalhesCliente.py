@@ -142,7 +142,7 @@ else:
     # Gasto médio mensal baseado em meses únicos
     meses_ativos = df_cliente["Mês_Ano"].nunique()
     gasto_mensal_medio = df_cliente["Valor"].sum() / meses_ativos if meses_ativos > 0 else 0
-    status_vip = "Sim ⭐" if gasto_mensal_medio >= 85 else "Não"
+    status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
 
     # Funcionário mais frequente
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
