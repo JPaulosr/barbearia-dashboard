@@ -28,9 +28,10 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year
-    df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")
+    df["Data"] = df["Data"].dt.strftime("%d/%m/%Y")  # Ajuste: remover hora
+    df["Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.year
+    df["Mês"] = pd.to_datetime(df["Data"], dayfirst=True).dt.month
+    df["Mês_Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.strftime("%b/%Y")
     return df
 
 df = carregar_dados()
@@ -88,7 +89,10 @@ st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 # 📋 Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
-resumo = df_cliente.groupby("Data").agg(
+df_cliente_dt = df.copy()
+df_cliente_dt["Data"] = pd.to_datetime(df_cliente_dt["Data"], dayfirst=True)
+df_cliente_dt = df_cliente_dt[df_cliente_dt["Cliente"] == cliente]
+resumo = df_cliente_dt.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
     Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
 ).reset_index()
@@ -105,8 +109,8 @@ st.dataframe(resumo_final, use_container_width=True)
 st.subheader("📈 Frequência de Atendimento")
 
 data_corte = pd.to_datetime("2025-05-11")
-df_antes = df_cliente[df_cliente["Data"] < data_corte].copy()
-df_depois = df_cliente[df_cliente["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
+df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
+df_depois = df_cliente_dt[df_cliente_dt["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
 df_freq = pd.concat([df_antes, df_depois]).sort_values("Data")
 datas = df_freq["Data"].tolist()
 
