@@ -39,15 +39,19 @@ if cliente_busca:
 if len(periodo) == 2:
     df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
-combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
-combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início"]).agg({
+df['Hora Início Preenchida'] = df['Hora Início']
+mask_hora_inicio_nula = df['Hora Início'].isnull() & df['Hora Chegada'].notnull()
+df.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df.loc[mask_hora_inicio_nula, 'Hora Chegada']
+
+combo_grouped = df.dropna(subset=["Hora Início Preenchida", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
+combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início Preenchida"]).agg({
     "Hora Chegada": "min",
     "Hora Saída": "max",
     "Hora Saída do Salão": "max",
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Funcionário", "Hora Início", "Combo"]], on=["Cliente", "Data", "Funcionário", "Hora Início"], how="left")
+combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Funcionário", "Hora Início", "Combo"]], on=["Cliente", "Data", "Funcionário", "Hora Início Preenchida"], how="left")
 
 # Calcular duração e espera corretamente
 def calcular_duracao(row):
@@ -66,14 +70,14 @@ combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
 combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 combo_grouped["Espera (min)"] = (combo_grouped["Hora Início"] - combo_grouped["Hora Chegada"]).dt.total_seconds() / 60
 combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if pd.notnull(x) and "+" in str(x) else "Simples")
-combo_grouped["Hora Início dt"] = combo_grouped["Hora Início"]
+combo_grouped["Hora Início dt"] = combo_grouped["Hora Início Preenchida"]
 combo_grouped["Período do Dia"] = combo_grouped["Hora Início"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
 # Exibir apenas depois de calcular
 data_formatada = pd.to_datetime(combo_grouped["Data"])
 combo_grouped["Data"] = data_formatada.dt.strftime("%d/%m/%Y")
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
-combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
+combo_grouped["Hora Início"] = combo_grouped["Hora Início Preenchida"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].dt.strftime("%H:%M")
 
