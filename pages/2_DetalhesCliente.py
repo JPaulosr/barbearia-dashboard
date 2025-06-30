@@ -134,7 +134,7 @@ else:
     st.subheader("💡 Insights Adicionais do Cliente")
     gasto_medio = df_cliente["Valor"].mean()
     gasto_medio_str = f"R$ {gasto_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    status_vip = "Sim ⭐" if gasto_medio >= 70 else "Não"
+    status_vip = "Sim ⭐" if gasto_medio >= 30 else "Não"
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
     tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
     tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
