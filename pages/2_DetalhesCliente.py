@@ -1,14 +1,18 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
+import locale
+
+# Define o local para exibir meses em português
+locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 
@@ -30,24 +34,22 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%b/%Y")
+    df["Mês_Ano"] = df["Data"].dt.strftime("%B/%Y").str.capitalize()
     return df
 
 df = carregar_dados()
 
-# === Filtro de cliente (com fallback da sessão)
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-# Filtra dados do cliente
 df_cliente = df[df["Cliente"] == cliente]
 
-# 📅 Histórico de atendimentos
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
+df_cliente_formatado = df_cliente.copy()
+df_cliente_formatado["Data"] = df_cliente_formatado["Data"].dt.strftime("%d/%m/%Y")
+st.dataframe(df_cliente_formatado.sort_values("Data", ascending=False)[["Data", "Serviço"]], use_container_width=True)
 
-# 📊 Receita mensal
 st.subheader("📊 Receita mensal")
 receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
 fig_receita = px.bar(
@@ -61,7 +63,6 @@ fig_receita.update_traces(textposition="inside")
 fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 📊 Receita por Serviço e Produto
 st.subheader("📊 Receita por Serviço e Produto")
 df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
 receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
@@ -79,14 +80,12 @@ fig_receita_tipos.update_traces(textposition="outside")
 fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-# 📊 Atendimentos por Funcionário
 st.subheader("📊 Atendimentos por Funcionário")
 atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
 atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
 atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
-# 📋 Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
 resumo = df_cliente.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
@@ -101,9 +100,7 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# 📈 Frequência do Cliente (corrigida com regra dos combos)
 st.subheader("📈 Frequência de Atendimento")
-
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente[df_cliente["Data"] < data_corte].copy()
 df_depois = df_cliente[df_cliente["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
@@ -130,3 +127,10 @@ else:
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
     col4.metric("📌 Status", status)
+
+    st.markdown("### 💡 Insights do Cliente")
+    st.markdown(f'''- Este cliente já teve **{resumo_final["Total Atendimentos"].values[0]} atendimentos**.
+- O tipo mais comum foi: **{"Combo" if resumo_final["Qtd Combos"].values[0] > resumo_final["Qtd Simples"].values[0] else "Simples"}**.
+- A frequência média é de **{media_freq:.1f} dias**, com o último atendimento há **{dias_desde_ultimo} dias**.
+- Status atual: **{status.split(" ", 1)[1]}**
+''')
