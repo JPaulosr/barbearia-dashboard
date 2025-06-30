@@ -4,7 +4,6 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-from babel.dates import format_date
 import datetime
 
 st.set_page_config(layout="wide")
@@ -33,7 +32,7 @@ def carregar_dados():
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].apply(lambda x: format_date(x, "LLLL/yyyy", locale="pt_BR").capitalize())
+    df["Mês_Ano"] = df["Data"].dt.strftime("%B/%Y").str.capitalize()
     return df
 
 df = carregar_dados()
@@ -43,7 +42,30 @@ clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-# Filtra dados do cliente
+# === COMPARAÇÃO ENTRE CLIENTES ===
+with st.expander("🧪 Comparativo entre Clientes", expanded=False):
+    col_c1, col_c2 = st.columns(2)
+    cliente_1 = col_c1.selectbox("Cliente 1", clientes_disponiveis, key="c1")
+    cliente_2 = col_c2.selectbox("Cliente 2", clientes_disponiveis, index=1, key="c2")
+
+    def indicadores(cliente_nome):
+        dados = df[df["Cliente"] == cliente_nome].copy()
+        meses = dados["Mês_Ano"].nunique()
+        gasto_total = dados["Valor"].sum()
+        ticket_medio = gasto_total / len(dados) if len(dados) > 0 else 0
+        gasto_mensal = gasto_total / meses if meses > 0 else 0
+        return {
+            "Cliente": cliente_nome,
+            "Atendimentos": len(dados),
+            "Ticket Médio": round(ticket_medio, 2),
+            "Gasto Total": round(gasto_total, 2),
+            "Gasto Mensal Médio": round(gasto_mensal, 2),
+        }
+
+    df_comp = pd.DataFrame([indicadores(cliente_1), indicadores(cliente_2)])
+    st.dataframe(df_comp, use_container_width=True)
+
+# Filtra dados do cliente selecionado
 df_cliente = df[df["Cliente"] == cliente]
 
 # 📅 Histórico de atendimentos
@@ -151,7 +173,17 @@ else:
     tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
     tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
 
+    # Ticket médio
+    ticket_medio = df_cliente["Valor"].mean()
+
+    # Intervalo médio entre visitas
+    intervalo_medio = media_freq if len(datas) >= 2 else None
+
     col5, col6, col7 = st.columns(3)
     col5.metric("🏅 Cliente VIP", status_vip)
     col6.metric("💇 Mais atendido por", mais_frequente)
     col7.metric("🕒 Tempo Total no Salão", tempo_total_str)
+
+    col8, col9 = st.columns(2)
+    col8.metric("💸 Ticket Médio", f"R$ {ticket_medio:.2f}".replace(".", ","))
+    col9.metric("📆 Intervalo Médio", f"{intervalo_medio:.1f} dias" if intervalo_medio else "Indisponível")
