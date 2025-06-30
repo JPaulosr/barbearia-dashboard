@@ -130,6 +130,16 @@ fig_dias.update_xaxes(categoryorder='array', categoryarray=dias_apertados["Data"
 fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)", margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_dias, use_container_width=True)
 
+st.subheader("🕒 Dias com Maior Tempo Médio de Atendimento (Tempo Total)")
+dias_lentos = df_tempo.groupby("Data Group")["Duração (min)"].mean().reset_index().dropna()
+dias_lentos["Data"] = dias_lentos["Data Group"].dt.strftime("%d/%m/%Y")
+dias_lentos = dias_lentos.sort_values("Duração (min)", ascending=False).head(10)
+fig_dias_lentos = px.bar(dias_lentos, x="Data", y="Duração (min)", title="Top 10 Dias com Maior Tempo Total Médio")
+fig_dias_lentos.update_traces(text=dias_lentos["Duração (min)"].round(1), textposition='outside')
+fig_dias_lentos.update_layout(xaxis_title="Data", yaxis_title="Duração (min)", margin=dict(t=60), title_x=0.5)
+st.plotly_chart(fig_dias_lentos, use_container_width=True)
+
+
 
 st.subheader("📈 Distribuição por Faixa de Duração")
 bins = [0, 15, 30, 45, 60, 120, 240]
@@ -146,7 +156,32 @@ alvo = st.slider("Defina o tempo limite de espera (min):", 5, 60, 20)
 atrasados = df_tempo[df_tempo["Espera (min)"] > alvo]
 st.dataframe(atrasados[["Data", "Cliente", "Funcionário", "Espera (min)", "Duração formatada"]], use_container_width=True)
 
-st.subheader("🔍 Insights do Dia")
+
+st.subheader("🔍 Insights da Semana")
+
+# Determina o início da semana atual
+inicio_semana = pd.Timestamp.now().normalize() - pd.to_timedelta(pd.Timestamp.now().weekday(), unit='D')
+fim_semana = inicio_semana + pd.Timedelta(days=6)
+
+df_semana = df_tempo[
+    (pd.to_datetime(df_tempo["Data Group"]) >= inicio_semana) &
+    (pd.to_datetime(df_tempo["Data Group"]) <= fim_semana)
+]
+
+if not df_semana.empty:
+    media_semana = df_semana["Duração (min)"].mean()
+    total_minutos = df_semana["Duração (min)"].sum()
+    mais_rapido = df_semana.nsmallest(1, "Duração (min)")
+    mais_lento = df_semana.nlargest(1, "Duração (min)")
+
+    st.markdown(f"**Semana:** {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}")
+    st.markdown(f"**Média da semana:** {int(media_semana)} min")
+    st.markdown(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
+    st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
+    st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
+else:
+    st.markdown("Nenhum atendimento registrado nesta semana.")
+
 data_hoje = pd.Timestamp.now().normalize().date()
 df_hoje = df_tempo[df_tempo["Data"] == data_hoje.strftime("%d/%m/%Y")]
 
