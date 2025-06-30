@@ -51,12 +51,13 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora 
     "Hora Saída do Salão": "max",
     "Tipo": lambda x: ', '.join(sorted(set(x))),
     "Serviço": lambda x: ', '.join(sorted(set(x)))
-}).reset_index()
+}).reset_index(drop=True)
 
 # Merge com colunas auxiliares
 df_temp = df.copy()
 df_temp['Hora Início Preenchida'] = df_temp['Hora Início']
 df_temp.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df_temp.loc[mask_hora_inicio_nula, 'Hora Chegada']
+
 combo_grouped = pd.merge(
     combo_grouped,
     df_temp[["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Hora Início", "Combo"]],
