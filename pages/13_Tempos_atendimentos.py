@@ -51,7 +51,7 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora 
     "Hora Saída do Salão": "max",
     "Tipo": lambda x: ', '.join(sorted(set(x))),
     "Serviço": lambda x: ', '.join(sorted(set(x)))
-}).reset_index(drop=True)
+}).reset_index()
 
 # Merge com colunas auxiliares
 df_temp = df.copy()
