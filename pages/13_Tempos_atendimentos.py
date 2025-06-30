@@ -43,23 +43,24 @@ df['Hora Início Preenchida'] = df['Hora Início']
 mask_hora_inicio_nula = df['Hora Início'].isnull() & df['Hora Chegada'].notnull()
 df.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df.loc[mask_hora_inicio_nula, 'Hora Chegada']
 
-# Adicionando "Serviço" como chave no agrupamento
-combo_grouped = df.dropna(subset=["Hora Início Preenchida", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo", "Serviço"]).copy()
-combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Tipo", "Serviço"]).agg({
+# Agrupamento correto sem incluir "Serviço" ou "Tipo" na chave
+combo_grouped = df.dropna(subset=["Hora Início Preenchida", "Hora Saída", "Cliente", "Data", "Funcionário"]).copy()
+combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início Preenchida"]).agg({
     "Hora Chegada": "min",
     "Hora Saída": "max",
     "Hora Saída do Salão": "max",
-    "Tipo": lambda x: ', '.join(sorted(set(x)))
+    "Tipo": lambda x: ', '.join(sorted(set(x))),
+    "Serviço": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-# Ajuste no merge para incluir "Serviço"
+# Merge com colunas auxiliares
 df_temp = df.copy()
 df_temp['Hora Início Preenchida'] = df_temp['Hora Início']
 df_temp.loc[mask_hora_inicio_nula, 'Hora Início Preenchida'] = df_temp.loc[mask_hora_inicio_nula, 'Hora Chegada']
 combo_grouped = pd.merge(
     combo_grouped,
-    df_temp[["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Tipo", "Serviço", "Hora Início", "Combo"]],
-    on=["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Tipo", "Serviço"],
+    df_temp[["Cliente", "Data", "Funcionário", "Hora Início Preenchida", "Hora Início", "Combo"]],
+    on=["Cliente", "Data", "Funcionário", "Hora Início Preenchida"],
     how="left"
 )
 
