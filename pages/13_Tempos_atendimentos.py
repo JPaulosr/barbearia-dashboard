@@ -42,7 +42,7 @@ if len(periodo) == 2:
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data", "Funcionário", "Hora Início"]).agg({
     "Hora Chegada": "min",
-        "Hora Saída": "max",
+    "Hora Saída": "max",
     "Hora Saída do Salão": "max",
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
@@ -53,7 +53,11 @@ combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Funcionário", "
 def calcular_duracao(row):
     try:
         inicio = row["Hora Início"]
-        fim = row["Hora Saída do Salão"] if pd.notnull(row["Hora Saída do Salão"]) else row["Hora Saída"]
+        fim = row["Hora Saída do Salão"]
+        if pd.isnull(fim):
+            fim = row["Hora Saída"]
+        if pd.isnull(fim):
+            return None
         return (fim - inicio).total_seconds() / 60
     except:
         return None
