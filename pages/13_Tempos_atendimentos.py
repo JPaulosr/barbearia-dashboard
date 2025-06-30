@@ -20,6 +20,7 @@ def carregar_dados_google_sheets():
 
 df = carregar_dados_google_sheets()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
+st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
 st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
@@ -48,9 +49,13 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-combo_grouped = pd.merge(combo_grouped, df[["Cliente", "Data", "Combo"]], on=["Cliente", "Data"], how="left")
+combos_df = df.groupby(["Cliente", "Data"])["Combo"].agg(lambda x: ', '.join(sorted(set(str(v) for v in x if pd.notnull(v))))).reset_index()
+combo_grouped = pd.merge(combo_grouped, combos_df, on=["Cliente", "Data"], how="left")
 
-combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
+combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"])
+combo_grouped["Data Group"] = combo_grouped["Data"]
+combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")
+
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
 combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
@@ -68,19 +73,32 @@ def calcular_duracao(row):
 combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
 combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
 combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
-combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if pd.notnull(x) and "+" in str(x) else "Simples")
+combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if "+" in str(x) or "," in str(x) else "Simples")
 combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
 combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
+df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
-# Correção aplicada: Data_dt como datetime real
-df_tempo["Data_dt"] = pd.to_datetime(df_tempo["Data"], dayfirst=True)
+st.subheader("🔍 Insights da Semana")
+hoje = pd.Timestamp.now().normalize()
+ultimos_7_dias = hoje - pd.Timedelta(days=6)
 
-# Gráfico corrigido
-st.subheader("📅 Dias com Maior Tempo Médio de Atendimento")
-dias_apertados = df_tempo.groupby("Data_dt")["Espera (min)"].mean().reset_index().dropna()
-dias_apertados = dias_apertados.sort_values("Espera (min)", ascending=False).head(10)
-fig_dias = px.bar(dias_apertados, x="Data_dt", y="Espera (min)", title="Top 10 Dias com Maior Tempo de Espera")
-fig_dias.update_layout(xaxis_title="Data", yaxis_title="Espera (min)", margin=dict(t=60), title_x=0.5)
-st.plotly_chart(fig_dias, use_container_width=True)
+df_semana = df_tempo[
+    (df_tempo["Data Group"].dt.date >= ultimos_7_dias.date()) &
+    (df_tempo["Data Group"].dt.date <= hoje.date())
+]
+
+if not df_semana.empty:
+    media_semana = df_semana["Duração (min)"].mean()
+    total_minutos = df_semana["Duração (min)"].sum()
+    mais_rapido = df_semana.nsmallest(1, "Duração (min)")
+    mais_lento = df_semana.nlargest(1, "Duração (min)")
+
+    st.markdown(f"**Semana:** {ultimos_7_dias.strftime('%d/%m')} a {hoje.strftime('%d/%m')}")
+    st.markdown(f"**Média da semana:** {int(media_semana)} min")
+    st.markdown(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
+    st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
+    st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
+else:
+    st.markdown("Nenhum atendimento registrado nos últimos 7 dias.")
