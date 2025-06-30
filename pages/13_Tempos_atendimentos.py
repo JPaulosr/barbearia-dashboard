@@ -52,7 +52,11 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
 combos_df = df.groupby(["Cliente", "Data"])["Combo"].agg(lambda x: ', '.join(sorted(set(str(v) for v in x if pd.notnull(v))))).reset_index()
 combo_grouped = pd.merge(combo_grouped, combos_df, on=["Cliente", "Data"], how="left")
 
-combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"]).dt.strftime("%d/%m/%Y")
+# Formatação para exibição
+combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"])
+combo_grouped["Data Group"] = combo_grouped["Data"]  # mantém datetime para agrupamento posterior
+combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")  # string para exibição
+
 combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
 combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
 combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
