@@ -4,7 +4,8 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-import locale
+from babel.dates import format_date
+import datetime
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
@@ -29,11 +30,10 @@ def carregar_dados():
     df.columns = [str(col).strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Data"] = df["Data"].dt.strftime("%d/%m/%Y")  # Ajuste: remover hora
-    df["Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.year
-    df["Mês"] = pd.to_datetime(df["Data"], dayfirst=True).dt.month
-    locale.setlocale(locale.LC_TIME, "pt_BR.UTF-8")
-    df["Mês_Ano"] = pd.to_datetime(df["Data"], dayfirst=True).dt.strftime("%B/%Y").str.capitalize()
+    df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
+    df["Ano"] = df["Data"].dt.year
+    df["Mês"] = df["Data"].dt.month
+    df["Mês_Ano"] = df["Data"].apply(lambda x: format_date(x, "LLLL/yyyy", locale="pt_BR").capitalize())
     return df
 
 df = carregar_dados()
@@ -48,7 +48,7 @@ df_cliente = df[df["Cliente"] == cliente]
 
 # 📅 Histórico de atendimentos
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-st.dataframe(df_cliente.sort_values("Data", ascending=False), use_container_width=True)
+st.dataframe(df_cliente.sort_values("Data", ascending=False).drop(columns=["Data"]).rename(columns={"Data_str": "Data"}), use_container_width=True)
 
 # 📊 Receita mensal
 st.subheader("📊 Receita mensal")
@@ -92,7 +92,6 @@ st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 # 📋 Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
 df_cliente_dt = df.copy()
-df_cliente_dt["Data"] = pd.to_datetime(df_cliente_dt["Data"], dayfirst=True)
 df_cliente_dt = df_cliente_dt[df_cliente_dt["Cliente"] == cliente]
 resumo = df_cliente_dt.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
