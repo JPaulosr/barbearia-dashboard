@@ -85,6 +85,27 @@ combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.appl
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
+# 🔢 Tempo Médio por Funcionário
+st.subheader("👥 Tempo Médio por Funcionário")
+media_funcionario = df_tempo.groupby("Funcionário")["Duração (min)"].mean().reset_index()
+media_funcionario["Duração formatada"] = media_funcionario["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+fig_func = px.bar(media_funcionario, x="Funcionário", y="Duração (min)", title="Tempo Médio por Funcionário", text="Duração formatada")
+fig_func.update_traces(textposition='outside')
+fig_func.update_layout(margin=dict(t=60), title_x=0.5)
+st.plotly_chart(fig_func, use_container_width=True)
+
+# ⏱️ Comparativo: Duração vs Espera
+st.subheader("⏱️ Comparativo: Duração vs Espera")
+comparativo = df_tempo.groupby("Cliente")[["Duração (min)", "Espera (min)"]].mean().dropna().reset_index()
+fig_comparativo = px.scatter(
+    comparativo, x="Espera (min)", y="Duração (min)", text="Cliente",
+    title="Comparativo entre Espera e Duração por Cliente",
+    labels={"Espera (min)": "Tempo de Espera Médio", "Duração (min)": "Duração Média"}
+)
+fig_comparativo.update_traces(textposition='top center')
+fig_comparativo.update_layout(margin=dict(t=60), title_x=0.5)
+st.plotly_chart(fig_comparativo, use_container_width=True)
+
 def calcular_ociosidade(df):
     df_ordenado = df.sort_values(by=["Funcionário", "Data Group", "Hora Início dt"]).copy()
     df_ordenado["Próximo Início"] = df_ordenado.groupby(["Funcionário", "Data Group"])["Hora Início dt"].shift(-1)
