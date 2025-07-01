@@ -19,7 +19,6 @@ def carregar_dados_google_sheets():
 
 df = carregar_dados_google_sheets()
 
-# Validação de colunas obrigatórias
 colunas_necessarias = ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão", "Cliente", "Funcionário", "Tipo", "Combo", "Data"]
 faltando = [col for col in colunas_necessarias if col not in df.columns]
 if faltando:
@@ -31,7 +30,6 @@ st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
 st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
-
 funcionarios = df["Funcionário"].dropna().unique().tolist()
 with col_f1:
     funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
@@ -71,8 +69,7 @@ combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].
 def calcular_duracao(row):
     try:
         inicio = pd.to_datetime(row["Hora Início"], format="%H:%M")
-        fim_raw = row["Hora Saída do Salão"] if pd.notnull(row["Hora Saída do Salão"]) and row["Hora Saída do Salão"] != "NaT" else row["Hora Saída"]
-        fim = pd.to_datetime(fim_raw, format="%H:%M")
+        fim = pd.to_datetime(row["Hora Saída"], format="%H:%M")
         return (fim - inicio).total_seconds() / 60
     except:
         return None
@@ -105,25 +102,21 @@ if not df_semana.empty:
     st.markdown(f"**Semana:** {ultimos_7_dias.strftime('%d/%m')} a {hoje.strftime('%d/%m')}")
     st.markdown(f"**Média da semana:** {int(media_semana)} min")
     st.markdown(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
-    if not mais_rapido.empty and not mais_lento.empty:
-        st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
-        st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
+    st.markdown(f"**Mais rápido da semana:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
+    st.markdown(f"**Mais lento da semana:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
 else:
     st.markdown("Nenhum atendimento registrado nos últimos 7 dias.")
-
-# Parte de gráficos e rankings
-# [colei a parte anterior aqui omitida no código por limitação de tamanho]
 
 st.subheader("🏆 Rankings de Tempo por Atendimento")
 col1, col2 = st.columns(2)
 with col1:
     top_mais_rapidos = df_tempo.nsmallest(10, "Duração (min)")
     st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
+    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada", "Espera (min)"]], use_container_width=True)
 with col2:
     top_mais_lentos = df_tempo.nlargest(10, "Duração (min)")
     st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Duração formatada"]], use_container_width=True)
+    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada", "Espera (min)"]], use_container_width=True)
 
 contagem_turno = df_tempo["Período do Dia"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).reset_index()
 contagem_turno.columns = ["Período do Dia", "Quantidade"]
