@@ -56,9 +56,34 @@ funcionarios.sort()
 anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
 ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
+# === Filtros adicionais ===
+col_filtros = st.columns(3)
+
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
 df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)].copy()
+
+# Filtro por mês
+meses_disponiveis = df_func["Data"].dt.month.unique()
+meses_disponiveis.sort()
+mes_filtro = col_filtros[0].selectbox("📆 Filtrar por mês", options=["Todos"] + list(meses_disponiveis))
+if mes_filtro != "Todos":
+    df_func = df_func[df_func["Data"].dt.month == mes_filtro]
+
+# Filtro por dia
+dias_disponiveis = df_func["Data"].dt.day.unique()
+dias_disponiveis.sort()
+dia_filtro = col_filtros[1].selectbox("📅 Filtrar por dia", options=["Todos"] + list(dias_disponiveis))
+if dia_filtro != "Todos":
+    df_func = df_func[df_func["Data"].dt.day == dia_filtro]
+
+# Filtro por semana
+df_func["Semana"] = df_func["Data"].dt.isocalendar().week
+semanas_disponiveis = df_func["Semana"].unique()
+semanas_disponiveis.sort()
+semana_filtro = col_filtros[2].selectbox("🗓️ Filtrar por semana", options=["Todas"] + list(semanas_disponiveis))
+if semana_filtro != "Todas":
+    df_func = df_func[df_func["Semana"] == semana_filtro]
 
 # === Filtro por tipo de serviço ===
 tipos_servico = df_func["Serviço"].dropna().unique().tolist()
