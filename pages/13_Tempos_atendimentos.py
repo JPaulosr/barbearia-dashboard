@@ -10,8 +10,7 @@ st.title("💰 Produtividade por Funcionário (R$/hora)")
 def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
     df = pd.read_csv(url)
-    df.columns = df.columns.str.strip()  # remove espaços
-    st.write("🧾 Colunas da planilha:", df.columns.tolist())
+    df.columns = df.columns.str.strip()
     df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.date
     df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
     df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
@@ -40,20 +39,31 @@ if df.empty:
     st.warning("⚠️ Nenhum atendimento encontrado no período ou funcionário selecionado.")
     st.stop()
 
+# Opção de excluir registros incompletos
+excluir = st.checkbox("❌ Excluir registros com dados incompletos (sem valor ou duração)?", value=True)
+
 df["Hora Início str"] = df["Hora Início"].dt.strftime("%H:%M")
 df["Hora Saída str"] = df["Hora Saída"].dt.strftime("%H:%M")
 df["Hora Início dt"] = pd.to_datetime(df["Hora Início str"], format="%H:%M", errors='coerce')
 df["Hora Saída dt"] = pd.to_datetime(df["Hora Saída str"], format="%H:%M", errors='coerce')
 df["Duração (min)"] = (df["Hora Saída dt"] - df["Hora Início dt"]).dt.total_seconds() / 60
 
-# Verificação de valores ausentes
-st.write("🔍 Valores ausentes nas colunas críticas:")
+# Diagnóstico
+st.markdown("🔍 Valores ausentes nas colunas críticas:")
 st.write(df[["Valor Total", "Duração (min)", "Funcionário"]].isna().sum())
 
-df = df.dropna(subset=["Duração (min)", "Valor Total"])
+# Exibir registros incompletos
+df_incompleto = df[df[["Valor Total", "Duração (min)", "Funcionário"]].isna().any(axis=1)]
+if not df_incompleto.empty:
+    with st.expander("👀 Ver registros com dados incompletos"):
+        st.dataframe(df_incompleto)
+
+# Remoção de incompletos, se marcado
+if excluir:
+    df = df.dropna(subset=["Duração (min)", "Valor Total"])
 
 if df.empty:
-    st.warning("⚠️ Todos os registros possuem dados incompletos para cálculo.")
+    st.warning("⚠️ Todos os registros foram excluídos por falta de dados suficientes.")
     st.stop()
 
 df = df.sort_values(by=["Funcionário", "Data", "Hora Início dt"]).copy()
