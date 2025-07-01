@@ -71,7 +71,8 @@ combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].
 def calcular_duracao(row):
     try:
         inicio = pd.to_datetime(row["Hora Início"], format="%H:%M")
-        fim = pd.to_datetime(row["Hora Saída"], format="%H:%M")
+        fim_raw = row["Hora Saída"] if pd.notnull(row["Hora Saída"]) and row["Hora Saída"] != "NaT" else row["Hora Saída do Salão"]
+        fim = pd.to_datetime(fim_raw, format="%H:%M")
         return (fim - inicio).total_seconds() / 60
     except:
         return None
