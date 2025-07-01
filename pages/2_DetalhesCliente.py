@@ -32,7 +32,14 @@ def carregar_dados():
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Mês_Ano"] = df["Data"].dt.strftime("%B/%Y").str.capitalize()
+
+    # Meses em português
+    meses_pt = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    }
+    df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
     return df
 
 df = carregar_dados()
@@ -113,8 +120,7 @@ st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 # 📋 Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
-df_cliente_dt = df.copy()
-df_cliente_dt = df_cliente_dt[df_cliente_dt["Cliente"] == cliente]
+df_cliente_dt = df[df["Cliente"] == cliente].copy()
 resumo = df_cliente_dt.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
     Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
@@ -128,9 +134,8 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# 📈 Frequência do Cliente (corrigida com regra dos combos)
+# 📈 Frequência de Atendimento
 st.subheader("📈 Frequência de Atendimento")
-
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
 df_depois = df_cliente_dt[df_cliente_dt["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
@@ -161,22 +166,13 @@ else:
     # 💡 Insights Adicionais do Cliente
     st.subheader("💡 Insights Adicionais do Cliente")
 
-    # Gasto médio mensal baseado em meses únicos
     meses_ativos = df_cliente["Mês_Ano"].nunique()
     gasto_mensal_medio = df_cliente["Valor"].sum() / meses_ativos if meses_ativos > 0 else 0
     status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
-
-    # Funcionário mais frequente
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
-
-    # Tempo total no salão
     tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
     tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
-
-    # Ticket médio
     ticket_medio = df_cliente["Valor"].mean()
-
-    # Intervalo médio entre visitas
     intervalo_medio = media_freq if len(datas) >= 2 else None
 
     col5, col6, col7 = st.columns(3)
