@@ -85,6 +85,7 @@ combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.appl
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
+# 🔄 Comparativo: Tempo Trabalhado vs Ocioso
 def calcular_ociosidade(df):
     df_ordenado = df.sort_values(by=["Funcionário", "Data Group", "Hora Início dt"]).copy()
     df_ordenado["Próximo Início"] = df_ordenado.groupby(["Funcionário", "Data Group"])["Hora Início dt"].shift(-1)
@@ -95,21 +96,26 @@ def calcular_ociosidade(df):
 
 df_ocioso = calcular_ociosidade(df_tempo)
 
-# 🔄 Comparativo: Tempo Trabalhado vs Ocioso
 st.subheader("📊 Tempo Trabalhado x Tempo Ocioso")
 tempo_trabalhado = df_ocioso.groupby("Funcionário")["Duração (min)"].sum()
 tempo_ocioso = df_ocioso.groupby("Funcionário")["Ociosidade (min)"].sum()
 
+receita_total = df[df["Valor Total"].notna()].groupby("Funcionário")["Valor Total"].sum()
+
+# Tabela final com produtividade
 df_comp = pd.DataFrame({
     "Trabalhado (min)": tempo_trabalhado,
-    "Ocioso (min)": tempo_ocioso
+    "Ocioso (min)": tempo_ocioso,
+    "Receita (R$)": receita_total
 })
 df_comp["Total (min)"] = df_comp["Trabalhado (min)"] + df_comp["Ocioso (min)"]
 df_comp["% Ocioso"] = (df_comp["Ocioso (min)"] / df_comp["Total (min)"] * 100).round(1)
+df_comp["R$/h útil"] = (df_comp["Receita (R$)"] / (df_comp["Trabalhado (min)"] / 60)).round(2)
+df_comp["R$/h total"] = (df_comp["Receita (R$)"] / (df_comp["Total (min)"] / 60)).round(2)
 df_comp["Trabalhado (h)"] = df_comp["Trabalhado (min)"].apply(lambda x: f"{int(x//60)}h {int(x%60)}min")
 df_comp["Ocioso (h)"] = df_comp["Ocioso (min)"].apply(lambda x: f"{int(x//60)}h {int(x%60)}min")
 
-st.dataframe(df_comp[["Trabalhado (h)", "Ocioso (h)", "% Ocioso"]], use_container_width=True)
+st.dataframe(df_comp[["Trabalhado (h)", "Ocioso (h)", "% Ocioso", "R$/h útil", "R$/h total"]], use_container_width=True)
 
 fig_bar = px.bar(df_comp.reset_index().melt(id_vars="Funcionário", value_vars=["Trabalhado (min)", "Ocioso (min)"]),
                  x="Funcionário", y="value", color="variable", barmode="group", title="Comparativo de Tempo por Funcionário")
