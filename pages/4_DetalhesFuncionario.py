@@ -177,10 +177,12 @@ if funcionario_escolhido.lower() == "vinicius":
 
     comparativo_vinicius = pd.DataFrame({
         "Tipo de Receita": [
+            "Receita Bruta de Vinicius",
             "Receita de Vinicius (comissão real)",
             "Valor que ficou para o salão"
         ],
         "Valor": [
+            bruto,
             receita_liquida,
             receita_salao
         ]
