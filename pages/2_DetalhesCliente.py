@@ -93,7 +93,10 @@ fig_receita.update_traces(textposition="inside")
 fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita, use_container_width=True)
 
-# 📊 Receita por Serviço e Produto
+# === Corrige tipo da coluna de duração se existir
+df_cliente["Duração (min)"] = pd.to_numeric(df_cliente.get("Duração (min)"), errors="coerce")
+
+# === Receita por Serviço e Produto
 st.subheader("📊 Receita por Serviço e Produto")
 df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
 receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
@@ -111,16 +114,17 @@ fig_receita_tipos.update_traces(textposition="outside")
 fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
 st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-# 📊 Atendimentos por Funcionário
+# === Atendimentos por Funcionário
 st.subheader("📊 Atendimentos por Funcionário")
 atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
 atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
 atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
-# 📋 Resumo de Atendimentos
+# === Resumo de Atendimentos
 st.subheader("📋 Resumo de Atendimentos")
-df_cliente_dt = df[df["Cliente"] == cliente].copy()
+df_cliente_dt = df.copy()
+df_cliente_dt = df_cliente_dt[df_cliente_dt["Cliente"] == cliente]
 resumo = df_cliente_dt.groupby("Data").agg(
     Qtd_Serviços=("Serviço", "count"),
     Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
@@ -134,7 +138,7 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# 📈 Frequência de Atendimento
+# === Frequência do Cliente
 st.subheader("📈 Frequência de Atendimento")
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
@@ -163,15 +167,18 @@ else:
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
     col4.metric("📌 Status", status)
 
-    # 💡 Insights Adicionais do Cliente
+    # === Insights Adicionais do Cliente
     st.subheader("💡 Insights Adicionais do Cliente")
 
     meses_ativos = df_cliente["Mês_Ano"].nunique()
     gasto_mensal_medio = df_cliente["Valor"].sum() / meses_ativos if meses_ativos > 0 else 0
     status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
+
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
+
     tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
-    tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
+    tempo_total_str = f"{int(tempo_total)} minutos" if pd.notna(tempo_total) else "Indisponível"
+
     ticket_medio = df_cliente["Valor"].mean()
     intervalo_medio = media_freq if len(datas) >= 2 else None
 
