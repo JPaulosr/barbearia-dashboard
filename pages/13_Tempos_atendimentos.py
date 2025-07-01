@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Produtividade por Funcionário", page_icon="💰", layout="wide")
+st.set_page_config(page_title="Produtividade por Hora", page_icon="💰", layout="wide")
 st.title("💰 Produtividade por Funcionário (R$/hora)")
 
 @st.cache_data
@@ -15,11 +15,12 @@ def carregar_dados_google_sheets():
     df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
     df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
     df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
-    df["Valor Total"] = pd.to_numeric(df["Valor"], errors='coerce')  # <-- corrigido aqui
+    df["Valor Total"] = pd.to_numeric(df["Valor Total"], errors='coerce')
     return df
 
 df = carregar_dados_google_sheets()
 
+# Filtros
 st.markdown("### 🎛️ Filtros")
 col1, col2 = st.columns(2)
 funcionarios = df["Funcionário"].dropna().unique().tolist()
@@ -34,6 +35,7 @@ df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if isinstance(periodo, list) and len(periodo) == 2:
     df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
+# Agrupamento por atendimento para calcular tempo
 df["Hora Início str"] = df["Hora Início"].dt.strftime("%H:%M")
 df["Hora Saída str"] = df["Hora Saída"].dt.strftime("%H:%M")
 df["Hora Início dt"] = pd.to_datetime(df["Hora Início str"], format="%H:%M", errors='coerce')
@@ -41,11 +43,13 @@ df["Hora Saída dt"] = pd.to_datetime(df["Hora Saída str"], format="%H:%M", err
 df["Duração (min)"] = (df["Hora Saída dt"] - df["Hora Início dt"]).dt.total_seconds() / 60
 df = df.dropna(subset=["Duração (min)", "Valor Total"])
 
+# Calcular tempo ocioso
 df = df.sort_values(by=["Funcionário", "Data", "Hora Início dt"]).copy()
 df["Próximo Início"] = df.groupby(["Funcionário", "Data"])["Hora Início dt"].shift(-1)
 df["Ociosidade (min)"] = (df["Próximo Início"] - df["Hora Saída dt"]).dt.total_seconds() / 60
 df["Ociosidade (min)"] = df["Ociosidade (min)"].apply(lambda x: x if x and x > 0 else 0)
 
+# Agrupar por funcionário
 df_group = df.groupby("Funcionário").agg({
     "Valor Total": "sum",
     "Duração (min)": "sum",
@@ -57,6 +61,7 @@ df_group["R$/h útil"] = (df_group["Valor Total"] / (df_group["Duração (min)"]
 df_group["R$/h total"] = (df_group["Valor Total"] / (df_group["Tempo Total (min)"] / 60)).round(2)
 df_group["% Ociosidade"] = (df_group["Ociosidade (min)"] / df_group["Tempo Total (min)"] * 100).round(1)
 
+# Alertas
 def alerta_produtividade(row):
     if row["R$/h total"] < 30:
         return "⚠️ Baixa Produtividade"
@@ -67,9 +72,11 @@ def alerta_produtividade(row):
 
 df_group["Alerta"] = df_group.apply(alerta_produtividade, axis=1)
 
+# Exibir tabela
 st.subheader("📋 Produtividade por Funcionário")
 st.dataframe(df_group[["Funcionário", "Valor Total", "R$/h útil", "R$/h total", "% Ociosidade", "Alerta"]], use_container_width=True)
 
+# Gráfico comparativo
 fig = px.bar(df_group, x="Funcionário", y=["R$/h útil", "R$/h total"], barmode="group",
              title="Comparativo de Receita por Hora (Útil vs Total)")
 fig.update_layout(margin=dict(t=60), title_x=0.5)
