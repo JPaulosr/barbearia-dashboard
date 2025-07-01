@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
 st.title("⏱️ Tempos por Atendimento")
@@ -26,7 +26,6 @@ if faltando:
     st.stop()
 
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
-st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
 st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
@@ -36,7 +35,9 @@ with col_f1:
 with col_f2:
     cliente_busca = st.text_input("Buscar Cliente")
 with col_f3:
-    periodo = st.date_input("Período", value=None, help="Selecione o intervalo de datas")
+    hoje = datetime.today().date()
+    inicio_default = hoje - timedelta(days=30)
+    periodo = st.date_input("Período", value=[inicio_default, hoje], help="Selecione o intervalo de datas")
 
 df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if cliente_busca:
@@ -84,7 +85,6 @@ combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.appl
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
-# --- Cálculo do Tempo Ocioso ---
 def calcular_ociosidade(df):
     df_ordenado = df.sort_values(by=["Funcionário", "Data Group", "Hora Início dt"]).copy()
     df_ordenado["Próximo Início"] = df_ordenado.groupby(["Funcionário", "Data Group"])["Hora Início dt"].shift(-1)
@@ -95,8 +95,7 @@ def calcular_ociosidade(df):
 
 df_ocioso = calcular_ociosidade(df_tempo)
 
-# Tempo Ocioso por Funcionário
-st.subheader("🧍 Tempo Ocioso por Funcionário (Total no Período Filtrado)")
+st.subheader("🧍 Tempo Ocioso Total por Funcionário (Atendimentos Finalizados)")
 ociosidade_por_funcionario = df_ocioso.groupby("Funcionário")["Ociosidade (min)"].sum().reset_index()
 ociosidade_por_funcionario["Tempo formatado"] = ociosidade_por_funcionario["Ociosidade (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
 fig_ocio = px.bar(ociosidade_por_funcionario, x="Funcionário", y="Ociosidade (min)", text="Tempo formatado", title="Total de Tempo Ocioso por Funcionário")
@@ -104,11 +103,16 @@ fig_ocio.update_traces(textposition="outside")
 fig_ocio.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_ocio, use_container_width=True)
 
-# Dias com mais ociosidade
-st.subheader("📅 Dias com Maior Tempo Ocioso")
+st.subheader("📅 Dias com Mais Tempo Ocioso (Somando os Funcionários)")
 ociosidade_por_dia = df_ocioso.groupby("Data Group")["Ociosidade (min)"].sum().reset_index()
 ociosidade_por_dia["Data"] = ociosidade_por_dia["Data Group"].dt.strftime("%d/%m/%Y")
 top_dias_ociosos = ociosidade_por_dia.sort_values("Ociosidade (min)", ascending=False).head(10)
 fig_ocio_dia = px.bar(top_dias_ociosos, x="Data", y="Ociosidade (min)", title="Top 10 Dias com Maior Tempo Ocioso")
 fig_ocio_dia.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_ocio_dia, use_container_width=True)
+
+st.subheader("📋 Tabela Detalhada: Tempo Ocioso por Funcionário e Dia")
+tabela_detalhada = df_ocioso.groupby(["Data Group", "Funcionário"])["Ociosidade (min)"].sum().reset_index()
+tabela_detalhada["Data"] = tabela_detalhada["Data Group"].dt.strftime("%d/%m/%Y")
+tabela_detalhada["Tempo formatado"] = tabela_detalhada["Ociosidade (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
+st.dataframe(tabela_detalhada[["Data", "Funcionário", "Tempo formatado"]], use_container_width=True)
