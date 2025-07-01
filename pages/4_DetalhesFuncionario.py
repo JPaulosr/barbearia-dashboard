@@ -172,12 +172,21 @@ if funcionario_escolhido.lower() == "vinicius":
         (df_despesas["Ano"] == ano_escolhido)
     ]["Valor"].sum()
 
+    receita_liquida = comissao_real
+    receita_salao = bruto - comissao_real
+
     comparativo_vinicius = pd.DataFrame({
-        "Tipo de Receita": ["Bruta (100%)", "Comissão paga (real)"],
-        "Valor": [bruto, comissao_real]
+        "Tipo de Receita": [
+            "Receita de Vinicius (comissão real)",
+            "Valor que ficou para o salão"
+        ],
+        "Valor": [
+            receita_liquida,
+            receita_salao
+        ]
     })
     comparativo_vinicius["Valor Formatado"] = comparativo_vinicius["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    st.subheader("💸 Receita Bruta vs Comissão (Vinicius)")
+    st.subheader("💸 Receita Real do Vinicius e Lucro para o Salão")
     st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
 
 elif funcionario_escolhido.lower() == "jpaulo":
