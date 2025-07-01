@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -67,18 +66,60 @@ tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
 if tipo_selecionado:
     df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
+# === Insights do Funcionário ===
+st.subheader("📌 Insights do Funcionário")
+
+# KPIs
+col1, col2, col3, col4 = st.columns(4)
+total_atendimentos = df_func.shape[0]
+clientes_unicos = df_func["Cliente"].nunique()
+total_receita = df_func["Valor"].sum()
+ticket_medio_geral = df_func["Valor"].mean()
+
+col1.metric("🔢 Total de atendimentos", total_atendimentos)
+col2.metric("👥 Clientes únicos", clientes_unicos)
+col3.metric("💰 Receita total", f"R$ {total_receita:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col4.metric("🎫 Ticket médio", f"R$ {ticket_medio_geral:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+# Dia mais cheio
+dia_mais_cheio = df_func.groupby(df_func["Data"].dt.date).size().reset_index(name="Atendimentos").sort_values("Atendimentos", ascending=False).head(1)
+if not dia_mais_cheio.empty:
+    data_cheia = pd.to_datetime(dia_mais_cheio.iloc[0, 0]).strftime("%d/%m/%Y")
+    qtd_atend = int(dia_mais_cheio.iloc[0, 1])
+    st.info(f"📅 Dia com mais atendimentos: **{data_cheia}** com **{qtd_atend} atendimentos**")
+
+# Gráfico: Distribuição por dia da semana
+st.markdown("### 📆 Atendimentos por dia da semana")
+dias_semana = {0: "Seg", 1: "Ter", 2: "Qua", 3: "Qui", 4: "Sex", 5: "Sáb", 6: "Dom"}
+df_func["DiaSemana"] = df_func["Data"].dt.dayofweek.map(dias_semana)
+grafico_semana = df_func.groupby("DiaSemana").size().reset_index(name="Qtd Atendimentos")
+fig_dias = px.bar(grafico_semana, x="DiaSemana", y="Qtd Atendimentos", text_auto=True, template="plotly_white")
+st.plotly_chart(fig_dias, use_container_width=True)
+
+# Média de atendimentos por dia do mês
+st.markdown("### 🗓️ Média de atendimentos por dia do mês")
+df_func["Dia"] = df_func["Data"].dt.day
+media_por_dia = df_func.groupby("Dia").size().reset_index(name="Média por dia")
+fig_dia_mes = px.line(media_por_dia, x="Dia", y="Média por dia", markers=True, template="plotly_white")
+st.plotly_chart(fig_dia_mes, use_container_width=True)
+
+# Comparativo com outros funcionários
+st.markdown("### ⚖️ Comparativo com a média dos outros funcionários")
+todos_func_mesmo_ano = df[df["Ano"] == ano_escolhido].copy()
+media_geral = todos_func_mesmo_ano.groupby("Funcionário")["Valor"].mean().reset_index(name="Ticket Médio")
+media_geral["Ticket Médio Formatado"] = media_geral["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+st.dataframe(media_geral[["Funcionário", "Ticket Médio Formatado"]].sort_values("Ticket Médio", ascending=False), use_container_width=True)
+
 # === Histórico de atendimentos ===
 st.subheader("🗕️ Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
 # === Receita mensal ===
 st.subheader("📊 Receita Mensal por Mês e Ano")
-
 meses_pt = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
     7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
-
 df_func["MesNum"] = df_func["Data"].dt.month
 df_func["MesNome"] = df_func["MesNum"].map(meses_pt) + df_func["Data"].dt.strftime(" %Y")
 receita_jp = df_func.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
@@ -121,7 +162,7 @@ else:
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True)
 
-# === Receita Bruta x Comissão
+# === Receita Bruta vs Comissão ===
 if funcionario_escolhido.lower() == "vinicius":
     bruto = df_func["Valor"].sum()
     comissao_real = df_despesas[
@@ -154,7 +195,7 @@ elif funcionario_escolhido.lower() == "jpaulo":
     st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
-# === Ticket Médio por Mês
+# === Ticket Médio por Mês ===
 st.subheader("📉 Ticket Médio por Mês")
 data_referencia = pd.to_datetime("2025-05-11")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
