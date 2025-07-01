@@ -42,4 +42,55 @@ def carregar_dados():
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
     return df
 
-# o restante do código permanece inalterado
+df = carregar_dados()
+
+# === Filtro de cliente (com fallback da sessão)
+clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
+cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
+
+# === COMPARAÇÃO ENTRE CLIENTES ===
+with st.expander("🧪 Comparativo entre Clientes", expanded=False):
+    col_c1, col_c2 = st.columns(2)
+    cliente_1 = col_c1.selectbox("Cliente 1", clientes_disponiveis, key="c1")
+    cliente_2 = col_c2.selectbox("Cliente 2", clientes_disponiveis, index=1, key="c2")
+
+    def indicadores(cliente_nome):
+        dados = df[df["Cliente"] == cliente_nome].copy()
+        meses = dados["Mês_Ano"].nunique()
+        gasto_total = dados["Valor"].sum()
+        ticket_medio = gasto_total / len(dados) if len(dados) > 0 else 0
+        gasto_mensal = gasto_total / meses if meses > 0 else 0
+        return {
+            "Cliente": cliente_nome,
+            "Atendimentos": len(dados),
+            "Ticket Médio": round(ticket_medio, 2),
+            "Gasto Total": round(gasto_total, 2),
+            "Gasto Mensal Médio": round(gasto_mensal, 2),
+        }
+
+    df_comp = pd.DataFrame([indicadores(cliente_1), indicadores(cliente_2)])
+    st.dataframe(df_comp, use_container_width=True)
+
+# Filtra dados do cliente selecionado
+df_cliente = df[df["Cliente"] == cliente]
+
+# 📅 Histórico de atendimentos
+st.subheader(f"📅 Histórico de atendimentos - {cliente}")
+st.dataframe(df_cliente.sort_values("Data", ascending=False).drop(columns=["Data"]).rename(columns={"Data_str": "Data"}), use_container_width=True)
+
+# 📊 Receita mensal
+st.subheader("📊 Receita mensal")
+receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+fig_receita = px.bar(
+    receita_mensal,
+    x="Mês_Ano",
+    y="Valor",
+    text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
+)
+fig_receita.update_traces(textposition="inside")
+fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
+st.plotly_chart(fig_receita, use_container_width=True)
+
+# O restante permanece inalterado...
