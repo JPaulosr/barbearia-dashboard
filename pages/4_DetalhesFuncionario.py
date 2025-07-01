@@ -181,19 +181,39 @@ if funcionario_escolhido.lower() == "vinicius":
     st.dataframe(comparativo_vinicius[["Tipo de Receita", "Valor Formatado"]], use_container_width=True)
 
 elif funcionario_escolhido.lower() == "jpaulo":
-    valor_jp = df_func["Valor"].sum()
-    comissao_real_vinicius = df_despesas[
+    receita_jpaulo = df_func["Valor"].sum()
+
+    receita_vinicius_total = df[
+        (df["Funcionário"] == "Vinicius") &
+        (df["Ano"] == ano_escolhido)
+    ]["Valor"].sum()
+
+    comissao_paga = df_despesas[
         (df_despesas["Prestador"] == "Vinicius") &
         (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
         (df_despesas["Ano"] == ano_escolhido)
     ]["Valor"].sum()
 
+    receita_liquida_vinicius = receita_vinicius_total - comissao_paga
+    receita_total_salao = receita_jpaulo + receita_liquida_vinicius
+
     receita_total = pd.DataFrame({
-        "Origem": ["Receita Bruta JPaulo", "Recebido de Vinicius (comissão real)", "Total"],
-        "Valor": [valor_jp, comissao_real_vinicius, valor_jp + comissao_real_vinicius]
+        "Origem": [
+            "Receita JPaulo",
+            "Receita Vinicius (líquida)",
+            "Comissão paga ao Vinicius (despesa)",
+            "Total receita do salão"
+        ],
+        "Valor": [
+            receita_jpaulo,
+            receita_liquida_vinicius,
+            comissao_paga,
+            receita_total_salao
+        ]
     })
+
     receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    st.subheader("💰 Receita JPaulo: Própria + Comissão do Vinicius")
+    st.subheader("💰 Receita do Salão (JPaulo como dono)")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
 # === Ticket Médio por Mês ===
