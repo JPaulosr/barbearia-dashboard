@@ -95,24 +95,23 @@ def calcular_ociosidade(df):
 
 df_ocioso = calcular_ociosidade(df_tempo)
 
-st.subheader("🧍 Tempo Ocioso Total por Funcionário (Atendimentos Finalizados)")
-ociosidade_por_funcionario = df_ocioso.groupby("Funcionário")["Ociosidade (min)"].sum().reset_index()
-ociosidade_por_funcionario["Tempo formatado"] = ociosidade_por_funcionario["Ociosidade (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_ocio = px.bar(ociosidade_por_funcionario, x="Funcionário", y="Ociosidade (min)", text="Tempo formatado", title="Total de Tempo Ocioso por Funcionário")
-fig_ocio.update_traces(textposition="outside")
-fig_ocio.update_layout(margin=dict(t=60), title_x=0.5)
-st.plotly_chart(fig_ocio, use_container_width=True)
+# 🔄 Comparativo: Tempo Trabalhado vs Ocioso
+st.subheader("📊 Tempo Trabalhado x Tempo Ocioso")
+tempo_trabalhado = df_ocioso.groupby("Funcionário")["Duração (min)"].sum()
+tempo_ocioso = df_ocioso.groupby("Funcionário")["Ociosidade (min)"].sum()
 
-st.subheader("📅 Dias com Mais Tempo Ocioso (Somando os Funcionários)")
-ociosidade_por_dia = df_ocioso.groupby("Data Group")["Ociosidade (min)"].sum().reset_index()
-ociosidade_por_dia["Data"] = ociosidade_por_dia["Data Group"].dt.strftime("%d/%m/%Y")
-top_dias_ociosos = ociosidade_por_dia.sort_values("Ociosidade (min)", ascending=False).head(10)
-fig_ocio_dia = px.bar(top_dias_ociosos, x="Data", y="Ociosidade (min)", title="Top 10 Dias com Maior Tempo Ocioso")
-fig_ocio_dia.update_layout(margin=dict(t=60), title_x=0.5)
-st.plotly_chart(fig_ocio_dia, use_container_width=True)
+df_comp = pd.DataFrame({
+    "Trabalhado (min)": tempo_trabalhado,
+    "Ocioso (min)": tempo_ocioso
+})
+df_comp["Total (min)"] = df_comp["Trabalhado (min)"] + df_comp["Ocioso (min)"]
+df_comp["% Ocioso"] = (df_comp["Ocioso (min)"] / df_comp["Total (min)"] * 100).round(1)
+df_comp["Trabalhado (h)"] = df_comp["Trabalhado (min)"].apply(lambda x: f"{int(x//60)}h {int(x%60)}min")
+df_comp["Ocioso (h)"] = df_comp["Ocioso (min)"].apply(lambda x: f"{int(x//60)}h {int(x%60)}min")
 
-st.subheader("📋 Tabela Detalhada: Tempo Ocioso por Funcionário e Dia")
-tabela_detalhada = df_ocioso.groupby(["Data Group", "Funcionário"])["Ociosidade (min)"].sum().reset_index()
-tabela_detalhada["Data"] = tabela_detalhada["Data Group"].dt.strftime("%d/%m/%Y")
-tabela_detalhada["Tempo formatado"] = tabela_detalhada["Ociosidade (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-st.dataframe(tabela_detalhada[["Data", "Funcionário", "Tempo formatado"]], use_container_width=True)
+st.dataframe(df_comp[["Trabalhado (h)", "Ocioso (h)", "% Ocioso"]], use_container_width=True)
+
+fig_bar = px.bar(df_comp.reset_index().melt(id_vars="Funcionário", value_vars=["Trabalhado (min)", "Ocioso (min)"]),
+                 x="Funcionário", y="value", color="variable", barmode="group", title="Comparativo de Tempo por Funcionário")
+fig_bar.update_layout(margin=dict(t=60), title_x=0.5)
+st.plotly_chart(fig_bar, use_container_width=True)
