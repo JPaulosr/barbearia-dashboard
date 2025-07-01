@@ -43,8 +43,19 @@ def carregar_dados():
     df["Ordem_Mês"] = pd.to_datetime("01/" + df["Mês_Ano"], format="%d/%B/%Y", errors="coerce")
     return df
 
-# o restante do código original segue abaixo, com todos os blocos presentes, e a receita mensal ordenada por "Ordem_Mês"
-# basta no bloco de receita mensal incluir:
-# receita_mensal = receita_mensal.merge(df_cliente[["Mês_Ano", "Ordem_Mês"]].drop_duplicates(), on="Mês_Ano", how="left")
-# receita_mensal = receita_mensal.sort_values("Ordem_Mês")
-# e manter o resto da lógica normalmente
+# === Receita mensal ===
+df_cliente = df[df["Cliente"] == cliente]
+receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+receita_mensal = receita_mensal.merge(df_cliente[["Mês_Ano", "Ordem_Mês"]].drop_duplicates(), on="Mês_Ano", how="left")
+receita_mensal = receita_mensal.sort_values("Ordem_Mês")
+
+fig_receita = px.bar(
+    receita_mensal,
+    x="Mês_Ano",
+    y="Valor",
+    text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
+)
+fig_receita.update_traces(textposition="inside")
+fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
+st.plotly_chart(fig_receita, use_container_width=True)
