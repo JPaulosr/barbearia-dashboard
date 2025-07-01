@@ -118,7 +118,7 @@ if not dia_mais_cheio.empty:
 st.markdown("### 📆 Atendimentos por dia da semana")
 dias_semana = {0: "Seg", 1: "Ter", 2: "Qua", 3: "Qui", 4: "Sex", 5: "Sáb", 6: "Dom"}
 df_func["DiaSemana"] = df_func["Data"].dt.dayofweek.map(dias_semana)
-grafico_semana = df_func.groupby("DiaSemana").size().reset_index(name="Qtd Atendimentos")
+grafico_semana = df_func.groupby("DiaSemana").size().reset_index(name="Qtd Atendimentos").sort_values("DiaSemana", key=lambda x: x.map({"Seg":0, "Ter":1, "Qua":2, "Qui":3, "Sex":4, "Sáb":5, "Dom":6}))
 fig_dias = px.bar(grafico_semana, x="DiaSemana", y="Qtd Atendimentos", text_auto=True, template="plotly_white")
 st.plotly_chart(fig_dias, use_container_width=True)
 
