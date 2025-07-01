@@ -1,5 +1,10 @@
+# -*- coding: utf-8 -*-
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from datetime import datetime, timedelta
 
-# 🔄 Comparativo: Tempo Trabalhado vs Tempo Ocioso
+# 🔄 Comparativo: Tempo Trabalhado vs Ocioso
 st.subheader("Tempo Trabalhado x Tempo Ocioso")
 
 def calcular_ociosidade(df):
