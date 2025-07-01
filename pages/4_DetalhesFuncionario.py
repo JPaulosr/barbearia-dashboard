@@ -108,7 +108,8 @@ st.markdown("### ⚖️ Comparativo com a média dos outros funcionários")
 todos_func_mesmo_ano = df[df["Ano"] == ano_escolhido].copy()
 media_geral = todos_func_mesmo_ano.groupby("Funcionário")["Valor"].mean().reset_index(name="Ticket Médio")
 media_geral["Ticket Médio Formatado"] = media_geral["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.dataframe(media_geral[["Funcionário", "Ticket Médio Formatado"]].sort_values("Ticket Médio", ascending=False), use_container_width=True)
+media_ordenada = media_geral.sort_values("Ticket Médio", ascending=False)
+st.dataframe(media_ordenada[["Funcionário", "Ticket Médio Formatado"]], use_container_width=True)
 
 # === Histórico de atendimentos ===
 st.subheader("🗕️ Histórico de Atendimentos")
