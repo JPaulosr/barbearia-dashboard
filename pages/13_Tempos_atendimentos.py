@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
-# Bloco adicional para: Tempo Trabalhado x Tempo Ocioso
-st.subheader("Tempo Trabalhado x Tempo Ocioso")
+
+# 🔄 Comparativo: Tempo Trabalhado vs Ocioso
+st.subheader("📊 Tempo Trabalhado x Tempo Ocioso")
 
 def calcular_ociosidade(df):
     df_ordenado = df.sort_values(by=["Funcionário", "Data Group", "Hora Início dt"]).copy()
