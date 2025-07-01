@@ -79,7 +79,8 @@ if dia_filtro != "Todos":
 
 # Filtro por semana
 df_func["Semana"] = df_func["Data"].dt.isocalendar().week
-semanas_disponiveis = df_func["Semana"].unique()
+semanas_disponiveis = df_func["Semana"].unique().tolist()
+# semanas_disponiveis já convertido para lista acima, agora pode ordenar
 semanas_disponiveis.sort()
 semana_filtro = col_filtros[2].selectbox("🗓️ Filtrar por semana", options=["Todas"] + list(semanas_disponiveis))
 if semana_filtro != "Todas":
