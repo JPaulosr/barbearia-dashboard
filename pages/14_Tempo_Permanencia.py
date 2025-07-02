@@ -17,7 +17,7 @@ def carregar_dados():
     df["Funcionário"] = df["Funcionário"].fillna("")
     df["Cliente"] = df["Cliente"].fillna("")
 
-    # Duração em minutos
+    # Duração do atendimento em minutos
     df["Duração (min)"] = (df["Hora Saída"] - df["Hora Início"]).dt.total_seconds() / 60
     df["Duração (min)"] = df["Duração (min)"].round(0)
 
@@ -46,15 +46,14 @@ with col_cliente:
 with col_data:
     data_input = st.date_input("Selecionar um dia da semana", value=datetime.today())
 
-# ✅ CONVERSÃO SEGURA DE DATA
+# ✅ CONVERSÃO DA DATA E CÁLCULO DO INTERVALO SEMANAL
 data_input = pd.to_datetime(data_input).date()
-
-# 🗓️ SEMANA: segunda a domingo da data escolhida
 inicio_semana = datetime.combine(data_input - timedelta(days=data_input.weekday()), time.min)
 fim_semana = inicio_semana + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
-# 🔍 APLICAR FILTROS
+# 🔍 APLICAÇÃO DOS FILTROS
 df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+
 df_filtrado = df[
     (df["Funcionário"].isin(funcionarios_selecionados)) &
     (df["Data"] >= inicio_semana) &
@@ -63,6 +62,18 @@ df_filtrado = df[
 
 if cliente_input:
     df_filtrado = df_filtrado[df_filtrado["Cliente"].str.contains(cliente_input, case=False, na=False)]
+
+# ✅ DEBUG: Diagnóstico completo
+st.markdown("### 🧪 Diagnóstico de dados (debug)")
+
+st.write(f"📌 Total de registros carregados: `{df.shape[0]}`")
+st.write(f"🗓️ Semana selecionada: `{inicio_semana.strftime('%d/%m/%Y')}` a `{fim_semana.strftime('%d/%m/%Y')}`")
+st.write(f"🔍 Registros após filtros aplicados: `{df_filtrado.shape[0]}`")
+
+if df_filtrado.empty:
+    st.warning("⚠️ Nenhum dado encontrado após aplicar os filtros. Verifique a semana ou se a aba do Google Sheets está com filtro.")
+else:
+    st.dataframe(df_filtrado.head(10), use_container_width=True)
 
 # 📊 INSIGHTS
 st.markdown("### 🔍 Insights da Semana")
@@ -74,11 +85,11 @@ if not df_filtrado.empty:
 
     st.write(f"**Semana:** {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}")
     st.write(f"**Média da semana:** {round(media_semana)} min")
-    st.write(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
-    st.write(f"**Mais rápido da semana:** {mais_rapido['Cliente']} ({int(mais_rapido['Duração (min)'])} min)")
-    st.write(f"**Mais lento da semana:** {mais_lento['Cliente']} ({int(mais_lento['Duração (min)'])} min)")
+    st.write(f"**Total de minutos trabalhados:** {int(total_minutos)} min")
+    st.write(f"**Mais rápido:** {mais_rapido['Cliente']} ({int(mais_rapido['Duração (min)'])} min)")
+    st.write(f"**Mais lento:** {mais_lento['Cliente']} ({int(mais_lento['Duração (min)'])} min)")
 else:
-    st.warning("Nenhum dado encontrado para os filtros selecionados.")
+    st.info("Nenhum atendimento registrado nos últimos 7 dias.")
 
 # 🏆 RANKINGS
 st.markdown("### 🏆 Rankings de Tempo por Atendimento")
@@ -94,8 +105,8 @@ with col_r2:
     top_lentos = df_filtrado.sort_values("Duração (min)", ascending=False).head(10)
     st.dataframe(top_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada"]], use_container_width=True)
 
-# 📈 GRÁFICO DISTRIBUTIVO
-st.markdown("### 📈 Distribuição por Cliente")
+# 📈 GRÁFICO
+st.markdown("### 📈 Top 20 Clientes por Tempo")
 if not df_filtrado.empty:
     top20 = df_filtrado.sort_values("Duração (min)", ascending=False).head(20)
 
@@ -105,7 +116,7 @@ if not df_filtrado.empty:
         y="Duração (min)",
         color="Funcionário",
         text="Duração formatada",
-        title="Top 20 Clientes com Maior Tempo de Atendimento",
+        title=f"Top 20 Clientes - Semana {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}",
         labels={"Duração (min)": "Minutos"}
     )
 
@@ -113,9 +124,9 @@ if not df_filtrado.empty:
     fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Nenhum dado para exibir no gráfico.")
+    st.info("Nenhum dado suficiente para exibir o gráfico.")
 
-# 📋 BASE COMPLETA FILTRADA
+# 📋 BASE FILTRADA
 st.markdown("### 📋 Base Filtrada")
 st.dataframe(df_filtrado[[
     "Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada"
