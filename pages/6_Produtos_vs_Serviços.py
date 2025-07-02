@@ -18,9 +18,14 @@ def carregar_dados():
 
 df_base, df_despesas = carregar_dados()
 
+# === FILTROS ===
+df_base["Ano"] = df_base["Data"].dt.year
+df_despesas["Ano"] = df_despesas["Data"].dt.year
+anos_disponiveis = sorted(df_base["Ano"].dropna().unique())
+ano_selecionado = st.selectbox("📅 Escolha o Ano", anos_disponiveis, index=len(anos_disponiveis)-1)
+
 # Filtrar apenas os registros de produtos
-df_produtos = df_base[df_base["Tipo"] == "Produto"].copy()
-df_produtos["Ano"] = df_produtos["Data"].dt.year
+df_produtos = df_base[(df_base["Tipo"] == "Produto") & (df_base["Ano"] == ano_selecionado)].copy()
 df_produtos["Mês"] = df_produtos["Data"].dt.month
 
 # Receita bruta total com produtos
@@ -28,8 +33,11 @@ receita_total = df_produtos["Valor"].sum()
 
 # Filtrar despesas relacionadas a produtos
 palavras_chave = ["produto", "barbeador", "pomada", "gel", "cera", "pó"]
-df_despesas_prod = df_despesas[df_despesas["Descrição"].str.lower().str.contains('|'.join(palavras_chave))].copy()
-custo_total = df_despesas_prod["Valor (R$)"] .sum()
+df_despesas_prod = df_despesas[
+    (df_despesas["Ano"] == ano_selecionado) &
+    (df_despesas["Descrição"].str.lower().str.contains('|'.join(palavras_chave)))
+].copy()
+custo_total = df_despesas_prod["Valor (R$)"].sum()
 
 lucro_bruto = receita_total - custo_total
 margem = lucro_bruto / receita_total * 100 if receita_total > 0 else 0
@@ -60,7 +68,18 @@ top_produtos = df_produtos["Serviço"].value_counts().reset_index()
 top_produtos.columns = ["Produto", "Quantidade"]
 top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor"].sum())
 top_produtos = top_produtos.sort_values("Receita", ascending=False)
+
+# Cálculo de % de receita e classificação ABC
+top_produtos["% Receita"] = (top_produtos["Receita"] / receita_total * 100).round(1)
+top_produtos["Classificação"] = pd.qcut(top_produtos["% Receita"], q=[0, .8, .95, 1], labels=["C", "B", "A"])
+
 st.dataframe(top_produtos, use_container_width=True)
+
+# === PIZZA DE RECEITA POR PRODUTO ===
+st.subheader("🥧 Receita por Produto (Top 10)")
+fig_pizza = px.pie(top_produtos.head(10), names="Produto", values="Receita", title="Distribuição da Receita por Produto")
+fig_pizza.update_traces(textposition='inside', textinfo='percent+label')
+st.plotly_chart(fig_pizza, use_container_width=True)
 
 # === CLIENTES QUE COMPRARAM MAIS PRODUTOS ===
 st.subheader("👤 Clientes que Mais Compram Produtos")
@@ -78,3 +97,4 @@ st.plotly_chart(fig2, use_container_width=True)
 
 with st.expander("🔍 Ver dados brutos"):
     st.dataframe(df_produtos, use_container_width=True)
+    st.dataframe(df_despesas_prod, use_container_width=True)
