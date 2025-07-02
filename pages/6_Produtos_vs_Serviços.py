@@ -6,11 +6,14 @@ st.set_page_config(layout="wide")
 st.title("🧴 Produtos - Análise Financeira")
 
 @st.cache_data
-
 def carregar_dados():
     url_base = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv"
     df_base = pd.read_csv(url_base + "&sheet=Base%20de%20Dados")
     df_despesas = pd.read_csv(url_base + "&sheet=Despesas")
+
+    # Limpeza preventiva
+    df_base.columns = df_base.columns.str.strip()
+    df_despesas.columns = df_despesas.columns.str.strip()
 
     df_base["Data"] = pd.to_datetime(df_base["Data"], errors='coerce')
     df_despesas["Data"] = pd.to_datetime(df_despesas["Data"], errors='coerce')
@@ -42,12 +45,12 @@ if mes_selecionado != "Todos":
     df_despesas_prod = df_despesas_prod[df_despesas_prod["Data"].dt.month == mes_num]
 
 # Receita bruta total com produtos
-receita_total = df_produtos["Valor (R$)"].sum()
+receita_total = df_produtos["Valor"].sum()
 
 # Filtrar despesas relacionadas a produtos
 palavras_chave = ["produto", "barbeador", "pomada", "gel", "cera", "pó"]
 df_despesas_prod = df_despesas_prod[df_despesas_prod["Descrição"].str.lower().str.contains('|'.join(palavras_chave))].copy()
-custo_total = df_despesas_prod["Valor (R$)"].sum()
+custo_total = df_despesas_prod["Valor"].sum()
 
 lucro_bruto = receita_total - custo_total
 margem = lucro_bruto / receita_total * 100 if receita_total > 0 else 0
@@ -62,10 +65,11 @@ col4.metric("Margem Bruta", f"{margem:.1f}%")
 
 # === EVOLUÇÃO MENSAL ===
 st.subheader("📈 Evolução Mensal")
-df_mensal = df_produtos.groupby(df_produtos["Data"].dt.to_period("M")).agg({"Valor (R$)": "sum"}).reset_index()
+df_mensal = df_produtos.groupby(df_produtos["Data"].dt.to_period("M")).agg({"Valor": "sum"}).reset_index()
 df_mensal["Data"] = df_mensal["Data"].dt.to_timestamp()
-df_mensal = df_mensal.rename(columns={"Valor (R$)": "Receita"})
-df_mensal["Custo"] = df_despesas_prod.groupby(df_despesas_prod["Data"].dt.to_period("M"))["Valor (R$)"].sum().reset_index(drop=True)
+df_mensal = df_mensal.rename(columns={"Valor": "Receita"})
+
+df_mensal["Custo"] = df_despesas_prod.groupby(df_despesas_prod["Data"].dt.to_period("M"))["Valor"].sum().reset_index(drop=True)
 df_mensal["Lucro"] = df_mensal["Receita"] - df_mensal["Custo"]
 
 fig = px.bar(df_mensal, x="Data", y=["Receita", "Custo", "Lucro"], barmode="group",
@@ -77,7 +81,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader("🏆 Produtos Mais Vendidos")
 top_produtos = df_produtos["Serviço"].value_counts().reset_index()
 top_produtos.columns = ["Produto", "Quantidade"]
-top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor (R$)"].sum())
+top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor"].sum())
 top_produtos = top_produtos.sort_values("Receita", ascending=False)
 
 top_produtos["% Receita"] = (top_produtos["Receita"] / receita_total * 100).round(1)
@@ -93,7 +97,7 @@ st.plotly_chart(fig_pizza, use_container_width=True)
 
 # === CLIENTES QUE COMPRARAM MAIS PRODUTOS ===
 st.subheader("👤 Clientes que Mais Compram Produtos")
-clientes = df_produtos.groupby("Cliente").agg({"Valor (R$)": "sum", "Serviço": "count"}).reset_index()
+clientes = df_produtos.groupby("Cliente").agg({"Valor": "sum", "Serviço": "count"}).reset_index()
 clientes.columns = ["Cliente", "Total gasto", "Qtd produtos"]
 clientes = clientes.sort_values("Total gasto", ascending=False).head(15)
 st.dataframe(clientes, use_container_width=True)
