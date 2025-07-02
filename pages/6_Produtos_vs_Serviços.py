@@ -11,10 +11,11 @@ def carregar_dados():
     df_base = pd.read_csv(url_base + "&sheet=Base%20de%20Dados")
     df_despesas = pd.read_csv(url_base + "&sheet=Despesas")
 
-    # Limpeza preventiva
+    # Limpeza de colunas
     df_base.columns = df_base.columns.str.strip()
     df_despesas.columns = df_despesas.columns.str.strip()
 
+    # Conversão de datas
     df_base["Data"] = pd.to_datetime(df_base["Data"], errors='coerce')
     df_despesas["Data"] = pd.to_datetime(df_despesas["Data"], errors='coerce')
     return df_base, df_despesas
@@ -43,6 +44,18 @@ if mes_selecionado != "Todos":
 df_despesas_prod = df_despesas[(df_despesas["Ano"] == ano_selecionado)].copy()
 if mes_selecionado != "Todos":
     df_despesas_prod = df_despesas_prod[df_despesas_prod["Data"].dt.month == mes_num]
+
+# === CONVERSÃO DE VALORES ===
+def converter_para_float(valor):
+    if isinstance(valor, str):
+        valor = valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
+    try:
+        return float(valor)
+    except:
+        return 0.0
+
+df_produtos["Valor"] = df_produtos["Valor"].apply(converter_para_float)
+df_despesas_prod["Valor"] = df_despesas_prod["Valor"].apply(converter_para_float)
 
 # Receita bruta total com produtos
 receita_total = df_produtos["Valor"].sum()
