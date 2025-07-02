@@ -43,7 +43,6 @@ df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if cliente_busca:
     df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
 
-# Filtra pelo período selecionado
 if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
     data_inicio, data_fim = periodo
     df = df[(df["Data"] >= data_inicio) & (df["Data"] <= data_fim)]
@@ -90,7 +89,6 @@ combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.appl
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
 
-# Atualiza o cálculo de hoje e últimos 7 dias baseado no filtro
 hoje_dt = pd.to_datetime(data_fim) if 'data_fim' in locals() else pd.Timestamp.now().normalize()
 inicio_semana = hoje_dt - pd.Timedelta(days=6)
 if 'data_inicio' in locals() and inicio_semana < pd.to_datetime(data_inicio):
