@@ -1,133 +1,97 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta, time
 
-st.set_page_config(page_title="Tempos de Atendimento", page_icon="⏱️", layout="wide")
-st.title("⏱️ Tempos de Atendimento")
+st.set_page_config(page_title="Tempo de Permanência no Salão", page_icon="🏠", layout="wide")
+st.title("🏠 Tempo de Permanência no Salão")
 
 @st.cache_data
 def carregar_dados():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
     df = pd.read_csv(url)
-
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors="coerce")
-    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors="coerce")
-    df["Funcionário"] = df["Funcionário"].fillna("")
-    df["Cliente"] = df["Cliente"].fillna("")
-
-    # Duração do atendimento em minutos
-    df["Duração (min)"] = (df["Hora Saída"] - df["Hora Início"]).dt.total_seconds() / 60
-    df["Duração (min)"] = df["Duração (min)"].round(0)
-
-    def formatar_tempo(minutos):
-        if pd.isnull(minutos): return ""
-        h = int(minutos // 60)
-        m = int(minutos % 60)
-        return f"{h}h {m}min" if h > 0 else f"0h {m}min"
-
-    df["Duração formatada"] = df["Duração (min)"].apply(formatar_tempo)
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.strftime("%d/%m/%Y")
+    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
+    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
+    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
+    df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
     return df
 
 df = carregar_dados()
+df = df.dropna(subset=["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"])
 
-# 🎯 FILTROS
-st.markdown("### 🧩 Filtros")
-col_func, col_cliente, col_data = st.columns([2, 2, 1])
+# Cálculos de tempo (em minutos)
+for col_name, start_col, end_col in [
+    ("Tempo Espera (min)", "Hora Chegada", "Hora Início"),
+    ("Tempo Atendimento (min)", "Hora Início", "Hora Saída"),
+    ("Tempo Pós (min)", "Hora Saída", "Hora Saída do Salão"),
+    ("Tempo Total (min)", "Hora Chegada", "Hora Saída do Salão")
+]:
+    df[col_name] = (df[end_col] - df[start_col]).dt.total_seconds() / 60
+    df[col_name] = df[col_name].round(0)
 
-with col_func:
-    funcionarios = df["Funcionário"].dropna().unique().tolist()
-    funcionarios_selecionados = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
+# Conversão para formato hh h mm min
+def formatar_tempo(minutos):
+    if pd.isnull(minutos): return ""
+    h = int(minutos // 60)
+    m = int(minutos % 60)
+    if h == 0:
+        return f"0h {m}min"
+    return f"{h}h {m}min"
 
-with col_cliente:
-    cliente_input = st.text_input("Buscar Cliente")
+for col in ["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)", "Tempo Total (min)"]:
+    df[col.replace("(min)", "formatado")] = df[col].apply(formatar_tempo)
 
-with col_data:
-    data_input = st.date_input("Selecionar um dia da semana", value=datetime.today())
+st.subheader("📊 Distribuição dos Tempos por Cliente")
+col1, col2 = st.columns(2)
 
-# ✅ CONVERSÃO DA DATA E CÁLCULO DO INTERVALO SEMANAL
-data_input = pd.to_datetime(data_input).date()
-inicio_semana = datetime.combine(data_input - timedelta(days=data_input.weekday()), time.min)
-fim_semana = inicio_semana + timedelta(days=6, hours=23, minutes=59, seconds=59)
+with col1:
+    st.markdown("### Top 10 Permanências Pós-Atendimento")
+    top_pos = df.sort_values("Tempo Pós (min)", ascending=False).head(10)
+    st.dataframe(top_pos[["Data", "Cliente", "Funcionário", "Tempo Pós formatado", "Tempo Total formatado"]], use_container_width=True)
 
-# 🔍 APLICAÇÃO DOS FILTROS
-df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+with col2:
+    st.markdown("### Top 10 Permanência Total")
+    top_total = df.sort_values("Tempo Total (min)", ascending=False).head(10)
+    st.dataframe(top_total[["Data", "Cliente", "Funcionário", "Tempo Total formatado"]], use_container_width=True)
 
-df_filtrado = df[
-    (df["Funcionário"].isin(funcionarios_selecionados)) &
-    (df["Data"] >= inicio_semana) &
-    (df["Data"] <= fim_semana)
-]
+st.subheader("📈 Comparativo Visual")
+top20 = df.sort_values("Tempo Total (min)", ascending=False).head(20)
 
-if cliente_input:
-    df_filtrado = df_filtrado[df_filtrado["Cliente"].str.contains(cliente_input, case=False, na=False)]
+# Converter os dados para long format e adicionar coluna formatada
+df_long = top20.melt(
+    id_vars=["Cliente"], 
+    value_vars=["Tempo Espera (min)", "Tempo Atendimento (min)", "Tempo Pós (min)"],
+    var_name="Etapa", 
+    value_name="Minutos"
+)
 
-# ✅ DEBUG: Diagnóstico completo
-st.markdown("### 🧪 Diagnóstico de dados (debug)")
+def min_para_texto(minutos):
+    if pd.isnull(minutos): return ""
+    h = int(minutos // 60)
+    m = int(minutos % 60)
+    return f"{h}h {m}min"
 
-st.write(f"📌 Total de registros carregados: `{df.shape[0]}`")
-st.write(f"🗓️ Semana selecionada: `{inicio_semana.strftime('%d/%m/%Y')}` a `{fim_semana.strftime('%d/%m/%Y')}`")
-st.write(f"🔍 Registros após filtros aplicados: `{df_filtrado.shape[0]}`")
+df_long["Tempo Formatado"] = df_long["Minutos"].apply(min_para_texto)
 
-if df_filtrado.empty:
-    st.warning("⚠️ Nenhum dado encontrado após aplicar os filtros. Verifique a semana ou se a aba do Google Sheets está com filtro.")
-else:
-    st.dataframe(df_filtrado.head(10), use_container_width=True)
+fig = px.bar(
+    df_long,
+    x="Cliente",
+    y="Minutos",
+    color="Etapa",
+    barmode="group",
+    text="Tempo Formatado",
+    title="Top 20 Clientes por Tempo Total (Lado a Lado)",
+    labels={"Minutos": "Minutos", "Cliente": "Cliente"}
+)
 
-# 📊 INSIGHTS
-st.markdown("### 🔍 Insights da Semana")
-if not df_filtrado.empty:
-    media_semana = df_filtrado["Duração (min)"].mean()
-    total_minutos = df_filtrado["Duração (min)"].sum()
-    mais_rapido = df_filtrado.sort_values("Duração (min)").iloc[0]
-    mais_lento = df_filtrado.sort_values("Duração (min)", ascending=False).iloc[0]
+fig.update_traces(textposition="outside")
+fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
+st.plotly_chart(fig, use_container_width=True)
 
-    st.write(f"**Semana:** {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}")
-    st.write(f"**Média da semana:** {round(media_semana)} min")
-    st.write(f"**Total de minutos trabalhados:** {int(total_minutos)} min")
-    st.write(f"**Mais rápido:** {mais_rapido['Cliente']} ({int(mais_rapido['Duração (min)'])} min)")
-    st.write(f"**Mais lento:** {mais_lento['Cliente']} ({int(mais_lento['Duração (min)'])} min)")
-else:
-    st.info("Nenhum atendimento registrado nos últimos 7 dias.")
-
-# 🏆 RANKINGS
-st.markdown("### 🏆 Rankings de Tempo por Atendimento")
-col_r1, col_r2 = st.columns(2)
-
-with col_r1:
-    st.markdown("#### Mais Rápidos")
-    top_rapidos = df_filtrado.sort_values("Duração (min)").head(10)
-    st.dataframe(top_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada"]], use_container_width=True)
-
-with col_r2:
-    st.markdown("#### Mais Lentos")
-    top_lentos = df_filtrado.sort_values("Duração (min)", ascending=False).head(10)
-    st.dataframe(top_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada"]], use_container_width=True)
-
-# 📈 GRÁFICO
-st.markdown("### 📈 Top 20 Clientes por Tempo")
-if not df_filtrado.empty:
-    top20 = df_filtrado.sort_values("Duração (min)", ascending=False).head(20)
-
-    fig = px.bar(
-        top20,
-        x="Cliente",
-        y="Duração (min)",
-        color="Funcionário",
-        text="Duração formatada",
-        title=f"Top 20 Clientes - Semana {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}",
-        labels={"Duração (min)": "Minutos"}
-    )
-
-    fig.update_traces(textposition="outside")
-    fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide')
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Nenhum dado suficiente para exibir o gráfico.")
-
-# 📋 BASE FILTRADA
-st.markdown("### 📋 Base Filtrada")
-st.dataframe(df_filtrado[[
-    "Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada"
-]], use_container_width=True)
+st.subheader("📋 Visualizar base completa")
+st.dataframe(
+    df[["Data", "Cliente", "Funcionário",
+        "Tempo Espera formatado", "Tempo Atendimento formatado",
+        "Tempo Pós formatado", "Tempo Total formatado"]],
+    use_container_width=True
+)
