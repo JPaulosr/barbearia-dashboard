@@ -22,12 +22,12 @@ df_base, df_despesas = carregar_dados()
 df_base["Ano"] = df_base["Data"].dt.year
 df_despesas["Ano"] = df_despesas["Data"].dt.year
 anos_disponiveis = sorted(df_base["Ano"].dropna().unique())
-ano_selecionado = st.selectbox("📅 Escolha o Ano", anos_disponiveis, index=len(anos_disponiveis)-1)
+ano_selecionado = st.selectbox("🗕️ Escolha o Ano", anos_disponiveis, index=len(anos_disponiveis)-1)
 
 # === FILTRO MENSAL OPCIONAL ===
 meses_dict = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
 meses_disponiveis = sorted(df_base[df_base["Ano"] == ano_selecionado]["Data"].dt.month.unique())
-mes_selecionado = st.selectbox("📆 Filtrar por Mês (opcional)", options=["Todos"] + [meses_dict[m] for m in meses_disponiveis])
+mes_selecionado = st.selectbox("🗖️ Filtrar por Mês (opcional)", options=["Todos"] + [meses_dict[m] for m in meses_disponiveis])
 
 # === FILTRAGEM DE DADOS ===
 df_produtos = df_base[(df_base["Tipo"] == "Produto") & (df_base["Ano"] == ano_selecionado)].copy()
@@ -42,7 +42,7 @@ if mes_selecionado != "Todos":
     df_despesas_prod = df_despesas_prod[df_despesas_prod["Data"].dt.month == mes_num]
 
 # Receita bruta total com produtos
-receita_total = df_produtos["Valor"].sum()
+receita_total = df_produtos["Valor (R$)"].sum()
 
 # Filtrar despesas relacionadas a produtos
 palavras_chave = ["produto", "barbeador", "pomada", "gel", "cera", "pó"]
@@ -62,9 +62,9 @@ col4.metric("Margem Bruta", f"{margem:.1f}%")
 
 # === EVOLUÇÃO MENSAL ===
 st.subheader("📈 Evolução Mensal")
-df_mensal = df_produtos.groupby(df_produtos["Data"].dt.to_period("M")).agg({"Valor": "sum"}).reset_index()
+df_mensal = df_produtos.groupby(df_produtos["Data"].dt.to_period("M")).agg({"Valor (R$)": "sum"}).reset_index()
 df_mensal["Data"] = df_mensal["Data"].dt.to_timestamp()
-df_mensal = df_mensal.rename(columns={"Valor": "Receita"})
+df_mensal = df_mensal.rename(columns={"Valor (R$)": "Receita"})
 df_mensal["Custo"] = df_despesas_prod.groupby(df_despesas_prod["Data"].dt.to_period("M"))["Valor (R$)"].sum().reset_index(drop=True)
 df_mensal["Lucro"] = df_mensal["Receita"] - df_mensal["Custo"]
 
@@ -77,7 +77,7 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader("🏆 Produtos Mais Vendidos")
 top_produtos = df_produtos["Serviço"].value_counts().reset_index()
 top_produtos.columns = ["Produto", "Quantidade"]
-top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor"].sum())
+top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor (R$)"].sum())
 top_produtos = top_produtos.sort_values("Receita", ascending=False)
 
 top_produtos["% Receita"] = (top_produtos["Receita"] / receita_total * 100).round(1)
@@ -93,7 +93,7 @@ st.plotly_chart(fig_pizza, use_container_width=True)
 
 # === CLIENTES QUE COMPRARAM MAIS PRODUTOS ===
 st.subheader("👤 Clientes que Mais Compram Produtos")
-clientes = df_produtos.groupby("Cliente").agg({"Valor": "sum", "Serviço": "count"}).reset_index()
+clientes = df_produtos.groupby("Cliente").agg({"Valor (R$)": "sum", "Serviço": "count"}).reset_index()
 clientes.columns = ["Cliente", "Total gasto", "Qtd produtos"]
 clientes = clientes.sort_values("Total gasto", ascending=False).head(15)
 st.dataframe(clientes, use_container_width=True)
