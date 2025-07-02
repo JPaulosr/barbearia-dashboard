@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Tempos de Atendimento", page_icon="⏱️", layout="wide")
 st.title("⏱️ Tempos de Atendimento")
@@ -45,19 +45,21 @@ with col_cliente:
     cliente_input = st.text_input("Buscar Cliente")
 
 with col_data:
-    data_input = st.date_input("Período", value=datetime.today())
+    data_input = st.date_input("Selecionar um dia da semana", value=datetime.today())
+
+# 🗓️ INTERVALO SEMANAL
+inicio_semana = data_input - timedelta(days=data_input.weekday())  # segunda
+fim_semana = inicio_semana + timedelta(days=6)  # domingo
 
 # 🔍 APLICAR FILTROS
-df_filtrado = df.copy()
-
-if funcionarios_selecionados:
-    df_filtrado = df_filtrado[df_filtrado["Funcionário"].isin(funcionarios_selecionados)]
+df_filtrado = df[
+    (df["Funcionário"].isin(funcionarios_selecionados)) &
+    (df["Data"] >= pd.to_datetime(inicio_semana)) &
+    (df["Data"] <= pd.to_datetime(fim_semana))
+]
 
 if cliente_input:
     df_filtrado = df_filtrado[df_filtrado["Cliente"].str.contains(cliente_input, case=False, na=False)]
-
-if data_input:
-    df_filtrado = df_filtrado[df_filtrado["Data"] == pd.to_datetime(data_input)]
 
 # 📊 INSIGHTS
 st.markdown("### 🔍 Insights da Semana")
@@ -67,11 +69,11 @@ if not df_filtrado.empty:
     mais_rapido = df_filtrado.sort_values("Duração (min)").iloc[0]
     mais_lento = df_filtrado.sort_values("Duração (min)", ascending=False).iloc[0]
 
-    st.write(f"**Data selecionada:** {data_input.strftime('%d/%m/%Y')}")
-    st.write(f"**Média dos atendimentos:** {round(media_semana)} min")
-    st.write(f"**Total de minutos trabalhados:** {int(total_minutos)} min")
-    st.write(f"**Mais rápido:** {mais_rapido['Cliente']} ({int(mais_rapido['Duração (min)'])} min)")
-    st.write(f"**Mais lento:** {mais_lento['Cliente']} ({int(mais_lento['Duração (min)'])} min)")
+    st.write(f"**Semana:** {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}")
+    st.write(f"**Média da semana:** {round(media_semana)} min")
+    st.write(f"**Total de minutos trabalhados na semana:** {int(total_minutos)} min")
+    st.write(f"**Mais rápido da semana:** {mais_rapido['Cliente']} ({int(mais_rapido['Duração (min)'])} min)")
+    st.write(f"**Mais lento da semana:** {mais_lento['Cliente']} ({int(mais_lento['Duração (min)'])} min)")
 else:
     st.warning("Nenhum dado encontrado para os filtros selecionados.")
 
