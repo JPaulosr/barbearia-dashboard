@@ -24,19 +24,29 @@ df_despesas["Ano"] = df_despesas["Data"].dt.year
 anos_disponiveis = sorted(df_base["Ano"].dropna().unique())
 ano_selecionado = st.selectbox("📅 Escolha o Ano", anos_disponiveis, index=len(anos_disponiveis)-1)
 
-# Filtrar apenas os registros de produtos
+# === FILTRO MENSAL OPCIONAL ===
+meses_dict = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
+meses_disponiveis = sorted(df_base[df_base["Ano"] == ano_selecionado]["Data"].dt.month.unique())
+mes_selecionado = st.selectbox("📆 Filtrar por Mês (opcional)", options=["Todos"] + [meses_dict[m] for m in meses_disponiveis])
+
+# === FILTRAGEM DE DADOS ===
 df_produtos = df_base[(df_base["Tipo"] == "Produto") & (df_base["Ano"] == ano_selecionado)].copy()
 df_produtos["Mês"] = df_produtos["Data"].dt.month
+
+if mes_selecionado != "Todos":
+    mes_num = [k for k, v in meses_dict.items() if v == mes_selecionado][0]
+    df_produtos = df_produtos[df_produtos["Mês"] == mes_num]
+
+df_despesas_prod = df_despesas[(df_despesas["Ano"] == ano_selecionado)].copy()
+if mes_selecionado != "Todos":
+    df_despesas_prod = df_despesas_prod[df_despesas_prod["Data"].dt.month == mes_num]
 
 # Receita bruta total com produtos
 receita_total = df_produtos["Valor"].sum()
 
 # Filtrar despesas relacionadas a produtos
 palavras_chave = ["produto", "barbeador", "pomada", "gel", "cera", "pó"]
-df_despesas_prod = df_despesas[
-    (df_despesas["Ano"] == ano_selecionado) &
-    (df_despesas["Descrição"].str.lower().str.contains('|'.join(palavras_chave)))
-].copy()
+df_despesas_prod = df_despesas_prod[df_despesas_prod["Descrição"].str.lower().str.contains('|'.join(palavras_chave))].copy()
 custo_total = df_despesas_prod["Valor (R$)"].sum()
 
 lucro_bruto = receita_total - custo_total
@@ -51,6 +61,7 @@ col3.metric("Lucro Bruto", f"R$ {lucro_bruto:,.2f}")
 col4.metric("Margem Bruta", f"{margem:.1f}%")
 
 # === EVOLUÇÃO MENSAL ===
+st.subheader("📈 Evolução Mensal")
 df_mensal = df_produtos.groupby(df_produtos["Data"].dt.to_period("M")).agg({"Valor": "sum"}).reset_index()
 df_mensal["Data"] = df_mensal["Data"].dt.to_timestamp()
 df_mensal = df_mensal.rename(columns={"Valor": "Receita"})
@@ -69,7 +80,6 @@ top_produtos.columns = ["Produto", "Quantidade"]
 top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor"].sum())
 top_produtos = top_produtos.sort_values("Receita", ascending=False)
 
-# Cálculo de % de receita e classificação ABC
 top_produtos["% Receita"] = (top_produtos["Receita"] / receita_total * 100).round(1)
 top_produtos["Classificação"] = pd.qcut(top_produtos["% Receita"], q=[0, .8, .95, 1], labels=["C", "B", "A"])
 
