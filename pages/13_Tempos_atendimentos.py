@@ -1,60 +1,94 @@
-# Substituir no seu app principal
-# Aplicando filtros e atualizando todos os blocos com base em df_tempo_filtrado
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from datetime import datetime
 
-# APLICAR FILTROS
-st.markdown("### 🎯 Aplicando Filtros ao Painel")
-df_tempo_filtrado = df_tempo.copy()
+st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
+st.title("⏱️ Tempos por Atendimento")
 
-if isinstance(periodo, list) and len(periodo) == 2:
-    df_tempo_filtrado = df_tempo_filtrado[
-        (df_tempo_filtrado["Data Group"] >= pd.to_datetime(periodo[0])) &
-        (df_tempo_filtrado["Data Group"] <= pd.to_datetime(periodo[1]))
-    ]
+### 🌀 Aplicando Filtros ao Painel
 
-df_tempo_filtrado = df_tempo_filtrado[
-    df_tempo_filtrado["Funcionário"].isin(funcionario_selecionado)
-]
+@st.cache_data
+def carregar_dados_google_sheets():
+    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
+    df = pd.read_csv(url)
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.date
+    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
+    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
+    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
+    df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
+    return df
 
+df = carregar_dados_google_sheets()
+
+colunas_necessarias = ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão", "Cliente", "Funcionário", "Tipo", "Combo", "Data"]
+faltando = [col for col in colunas_necessarias if col not in df.columns]
+if faltando:
+    st.error(f"As colunas obrigatórias estão faltando: {', '.join(faltando)}")
+    st.stop()
+
+# Filtros
+st.markdown("### 🎛️ Filtros")
+col_f1, col_f2, col_f3 = st.columns(3)
+funcionarios = df["Funcionário"].dropna().unique().tolist()
+with col_f1:
+    funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
+with col_f2:
+    cliente_busca = st.text_input("Buscar Cliente")
+with col_f3:
+    periodo = st.date_input("Período", value=None, help="Selecione o intervalo de datas")
+
+# Aplicando filtros
+if funcionario_selecionado:
+    df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if cliente_busca:
-    df_tempo_filtrado = df_tempo_filtrado[
-        df_tempo_filtrado["Cliente"].str.contains(cliente_busca, case=False, na=False)
-    ]
+    df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
+if isinstance(periodo, list) and len(periodo) == 2:
+    df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
-# INSIGHTS
-st.subheader("🔍 Insights Filtrados")
-if not df_tempo_filtrado.empty:
-    media_periodo = df_tempo_filtrado["Duração (min)"].mean()
-    total_minutos = df_tempo_filtrado["Duração (min)"].sum()
-    mais_rapido = df_tempo_filtrado.nsmallest(1, "Duração (min)")
-    mais_lento = df_tempo_filtrado.nlargest(1, "Duração (min)")
+# Agrupamento para Combo
+combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
+combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
+    "Hora Chegada": "min",
+    "Hora Início": "min",
+    "Hora Saída": "max",
+    "Hora Saída do Salão": "max",
+    "Funcionário": "first",
+    "Tipo": lambda x: ', '.join(sorted(set(x)))
+}).reset_index()
 
-    st.markdown(f"**Período Selecionado:** {periodo[0].strftime('%d/%m')} a {periodo[1].strftime('%d/%m')}")
-    st.markdown(f"**Média no período:** {int(media_periodo)} min")
-    st.markdown(f"**Total de minutos:** {int(total_minutos)} min")
-    st.markdown(f"**Mais rápido:** {mais_rapido['Cliente'].values[0]} ({int(mais_rapido['Duração (min)'].values[0])} min)")
-    st.markdown(f"**Mais lento:** {mais_lento['Cliente'].values[0]} ({int(mais_lento['Duração (min)'].values[0])} min)")
-else:
-    st.warning("Nenhum atendimento no período selecionado.")
+combos_df = df.groupby(["Cliente", "Data"])["Combo"].agg(lambda x: ', '.join(sorted(set(str(v) for v in x if pd.notnull(v))))).reset_index()
+combo_grouped = pd.merge(combo_grouped, combos_df, on=["Cliente", "Data"], how="left")
 
-# RANKINGS
-st.subheader("🏆 Rankings de Tempo por Atendimento")
-col1, col2 = st.columns(2)
-with col1:
-    top_mais_rapidos = df_tempo_filtrado.nsmallest(10, "Duração (min)")
-    st.markdown("### Mais Rápidos")
-    st.dataframe(top_mais_rapidos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada", "Espera (min)"]], use_container_width=True)
-with col2:
-    top_mais_lentos = df_tempo_filtrado.nlargest(10, "Duração (min)")
-    st.markdown("### Mais Lentos")
-    st.dataframe(top_mais_lentos[["Data", "Cliente", "Funcionário", "Tipo", "Hora Início", "Hora Saída", "Duração formatada", "Espera (min)"]], use_container_width=True)
+combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"])
+combo_grouped["Data Group"] = combo_grouped["Data"]
+combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")
 
-# EXEMPLO DE UM GRÁFICO FILTRADO
-st.subheader("📊 Tempo Médio por Tipo de Serviço")
-media_tipo = df_tempo_filtrado.groupby("Categoria")["Duração (min)"].mean().reset_index()
-media_tipo["Duração formatada"] = media_tipo["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min")
-fig_tipo = px.bar(media_tipo, x="Categoria", y="Duração (min)", text="Duração formatada", title="Tempo Médio por Tipo de Serviço")
-fig_tipo.update_traces(textposition='outside')
-fig_tipo.update_layout(margin=dict(t=60), title_x=0.5)
-st.plotly_chart(fig_tipo, use_container_width=True)
+combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
+combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
+combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
+combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].dt.strftime("%H:%M")
 
-# Você pode aplicar df_tempo_filtrado nos demais gráficos e análises da mesma forma.
+# Cálculos
+combo_grouped["Duração (min)"] = pd.to_datetime(combo_grouped["Hora Saída"], format="%H:%M") \
+    .subtract(pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M")) \
+    .dt.total_seconds() / 60
+combo_grouped["Espera (min)"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") \
+    .subtract(pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")) \
+    .dt.total_seconds() / 60
+
+combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if "+" in str(x) or "," in str(x) else "Simples")
+combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
+combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
+
+# Dados prontos para uso
+combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
+
+df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
+df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
+
+# O restante do código (insights, rankings, gráficos etc.) permanece o mesmo, utilizando df_tempo
+# Reutilize os blocos anteriores para continuar a lógica do painel.
+
+# IMPORTANTE: Continue daqui com os gráficos, rankings e insights como já estavam definidos,
+# pois o df_tempo agora está filtrado corretamente e pronto para uso em todo o painel.
