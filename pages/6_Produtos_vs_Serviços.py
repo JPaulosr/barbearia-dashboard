@@ -11,11 +11,9 @@ def carregar_dados():
     df_base = pd.read_csv(url_base + "&sheet=Base%20de%20Dados")
     df_despesas = pd.read_csv(url_base + "&sheet=Despesas")
 
-    # Limpeza de colunas
     df_base.columns = df_base.columns.str.strip()
     df_despesas.columns = df_despesas.columns.str.strip()
 
-    # Conversão de datas
     df_base["Data"] = pd.to_datetime(df_base["Data"], errors='coerce')
     df_despesas["Data"] = pd.to_datetime(df_despesas["Data"], errors='coerce')
     return df_base, df_despesas
@@ -95,13 +93,31 @@ st.plotly_chart(fig, use_container_width=True)
 
 # === PRODUTOS MAIS VENDIDOS ===
 st.subheader("🏆 Produtos Mais Vendidos")
+
+# Quantidade e receita por produto
 top_produtos = df_produtos["Serviço"].value_counts().reset_index()
 top_produtos.columns = ["Produto", "Quantidade"]
 top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor"].sum())
-top_produtos = top_produtos.sort_values("Receita", ascending=False)
 
+# Custo por produto com base na aba de despesas
+custo_por_produto = df_despesas_prod.groupby("Descrição")["Valor"].sum().reset_index()
+custo_por_produto["Descrição"] = custo_por_produto["Descrição"].str.strip().str.lower()
+
+# Casar nomes exatos entre Produto e Descrição
+top_produtos["Produto_lower"] = top_produtos["Produto"].str.lower()
+top_produtos["Custo"] = top_produtos["Produto_lower"].map(
+    custo_por_produto.set_index("Descrição")["Valor"]
+)
+top_produtos["Custo"] = top_produtos["Custo"].fillna(0)
+
+# Lucro por produto
+top_produtos["Lucro"] = top_produtos["Receita"] - top_produtos["Custo"]
+
+# % Receita e Classificação ABC
 top_produtos["% Receita"] = (top_produtos["Receita"] / receita_total * 100).round(1)
 top_produtos["Classificação"] = pd.qcut(top_produtos["% Receita"], q=[0, .8, .95, 1], labels=["C", "B", "A"])
+
+top_produtos = top_produtos.drop(columns=["Produto_lower"])
 
 st.dataframe(top_produtos, use_container_width=True)
 
@@ -125,6 +141,7 @@ fig2 = px.line(df_mensal, x="Data", y="Margem", markers=True, title="Margem Brut
 fig2.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig2, use_container_width=True)
 
+# === DADOS BRUTOS ===
 with st.expander("🔍 Ver dados brutos"):
     st.dataframe(df_produtos, use_container_width=True)
     st.dataframe(df_despesas_prod, use_container_width=True)
