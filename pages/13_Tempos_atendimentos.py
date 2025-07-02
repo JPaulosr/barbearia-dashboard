@@ -36,7 +36,10 @@ with col_f1:
 with col_f2:
     cliente_busca = st.text_input("Buscar Cliente")
 with col_f3:
-    periodo = st.date_input("Período", value=None, help="Selecione o intervalo de datas")
+    hoje = datetime.today().date()
+inicio_default = hoje - pd.Timedelta(days=30)
+periodo = st.date_input("Período", value=[inicio_default, hoje], help="Selecione o intervalo de datas")
+
 
 df = df[df["Funcionário"].isin(funcionario_selecionado)]
 if cliente_busca:
