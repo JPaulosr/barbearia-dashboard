@@ -26,7 +26,6 @@ if faltando:
     st.stop()
 
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
-st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
 st.markdown("### 🎛️ Filtros")
 col_f1, col_f2, col_f3 = st.columns(3)
