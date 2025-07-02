@@ -3,21 +3,51 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("💈 Produtos vs Serviços - Análise Financeira")
+st.title("🧴 Produtos - Análise Financeira")
 
 @st.cache_data
 def carregar_dados():
     url_base = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv"
     df_base = pd.read_csv(url_base + "&sheet=Base%20de%20Dados")
     df_despesas = pd.read_csv(url_base + "&sheet=Despesas")
+
     df_base.columns = df_base.columns.str.strip()
     df_despesas.columns = df_despesas.columns.str.strip()
+
     df_base["Data"] = pd.to_datetime(df_base["Data"], errors='coerce')
     df_despesas["Data"] = pd.to_datetime(df_despesas["Data"], errors='coerce')
     return df_base, df_despesas
 
 df_base, df_despesas = carregar_dados()
 
+# === FILTROS ===
+df_base["Ano"] = df_base["Data"].dt.year
+df_despesas["Ano"] = df_despesas["Data"].dt.year
+anos_disponiveis = sorted(df_base["Ano"].dropna().unique())
+ano_selecionado = st.selectbox("🗕️ Escolha o Ano", anos_disponiveis, index=len(anos_disponiveis)-1)
+
+# === FILTRO MENSAL OPCIONAL ===
+meses_dict = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
+meses_disponiveis = sorted(df_base[df_base["Ano"] == ano_selecionado]["Data"].dt.month.unique())
+mes_selecionado = st.selectbox("🗖️ Filtrar por Mês (opcional)", options=["Todos"] + [meses_dict[m] for m in meses_disponiveis])
+
+# === IDENTIFICAR PRODUTOS POR PALAVRAS-CHAVE ===
+palavras_chave = ["pomada", "gel", "cera", "pó", "barbeador", "produto"]
+df_produtos = df_base[
+    (df_base["Ano"] == ano_selecionado) &
+    (df_base["Serviço"].str.lower().str.contains('|'.join(palavras_chave), na=False))
+].copy()
+df_produtos["Mês"] = df_produtos["Data"].dt.month
+
+if mes_selecionado != "Todos":
+    mes_num = [k for k, v in meses_dict.items() if v == mes_selecionado][0]
+    df_produtos = df_produtos[df_produtos["Mês"] == mes_num]
+
+df_despesas_prod = df_despesas[(df_despesas["Ano"] == ano_selecionado)].copy()
+if mes_selecionado != "Todos":
+    df_despesas_prod = df_despesas_prod[df_despesas_prod["Data"].dt.month == mes_num]
+
+# === CONVERSÃO DE VALORES ===
 def converter_para_float(valor):
     if isinstance(valor, str):
         valor = valor.replace("R$", "").replace(".", "").replace(",", ".").strip()
@@ -26,86 +56,92 @@ def converter_para_float(valor):
     except:
         return 0.0
 
-# === FILTROS ===
-df_base["Ano"] = df_base["Data"].dt.year
-df_despesas["Ano"] = df_despesas["Data"].dt.year
-anos_disponiveis = sorted(df_base["Ano"].dropna().unique())
-ano_selecionado = st.selectbox("🗓️ Ano", anos_disponiveis, index=len(anos_disponiveis)-1)
+df_produtos["Valor"] = df_produtos["Valor"].apply(converter_para_float)
+df_despesas_prod["Valor"] = df_despesas_prod["Valor"].apply(converter_para_float)
 
-meses_dict = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"}
-meses_disponiveis = sorted(df_base[df_base["Ano"] == ano_selecionado]["Data"].dt.month.unique())
-mes_selecionado = st.selectbox("📅 Mês (opcional)", options=["Todos"] + [meses_dict[m] for m in meses_disponiveis])
+# Receita bruta total com produtos
+receita_total = df_produtos["Valor"].sum()
 
-# === FILTRAR DADOS ===
-df_base["Valor"] = df_base["Valor"].apply(converter_para_float)
-df_despesas["Valor"] = df_despesas["Valor"].apply(converter_para_float)
+# Filtrar despesas relacionadas a produtos
+df_despesas_prod = df_despesas_prod[df_despesas_prod["Descrição"].str.lower().str.contains('|'.join(palavras_chave), na=False)].copy()
+custo_total = df_despesas_prod["Valor"].sum()
 
-palavras_produto = ["pomada", "gel", "cera", "pó", "barbeador", "produto"]
-df_produtos = df_base[
-    (df_base["Ano"] == ano_selecionado) &
-    (df_base["Serviço"].str.lower().str.contains('|'.join(palavras_produto), na=False))
-].copy()
+lucro_bruto = receita_total - custo_total
+margem = lucro_bruto / receita_total * 100 if receita_total > 0 else 0
 
-df_servicos = df_base[
-    (df_base["Ano"] == ano_selecionado) &
-    (df_base["Tipo"] == "Serviço")
-].copy()
-
-if mes_selecionado != "Todos":
-    mes_num = [k for k, v in meses_dict.items() if v == mes_selecionado][0]
-    df_produtos = df_produtos[df_produtos["Data"].dt.month == mes_num]
-    df_servicos = df_servicos[df_servicos["Data"].dt.month == mes_num]
-    df_despesas = df_despesas[df_despesas["Data"].dt.month == mes_num]
-
-# === PRODUTOS ===
-st.header("🧴 Produtos")
-df_desp_prod = df_despesas[df_despesas["Descrição"].str.lower().str.contains('|'.join(palavras_produto), na=False)]
-receita_prod = df_produtos["Valor"].sum()
-custo_prod = df_desp_prod["Valor"].sum()
-lucro_prod = receita_prod - custo_prod
-margem_prod = (lucro_prod / receita_prod * 100) if receita_prod > 0 else 0
-
+# === RESUMO ===
+st.subheader("📊 Resumo Financeiro de Produtos")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Receita", f"R$ {receita_prod:,.2f}")
-col2.metric("Custo", f"R$ {custo_prod:,.2f}")
-col3.metric("Lucro", f"R$ {lucro_prod:,.2f}")
-col4.metric("Margem", f"{margem_prod:.1f}%")
+col1.metric("Receita Bruta", f"R$ {receita_total:,.2f}")
+col2.metric("Custo dos Produtos", f"R$ {custo_total:,.2f}")
+col3.metric("Lucro Bruto", f"R$ {lucro_bruto:,.2f}")
+col4.metric("Margem Bruta", f"{margem:.1f}%")
 
-df_mensal_prod = df_produtos.groupby(df_produtos["Data"].dt.to_period("M"))["Valor"].sum().reset_index()
-df_mensal_prod["Data"] = df_mensal_prod["Data"].dt.to_timestamp()
-df_mensal_prod = df_mensal_prod.rename(columns={"Valor": "Receita"})
-df_mensal_prod["Custo"] = df_desp_prod.groupby(df_desp_prod["Data"].dt.to_period("M"))["Valor"].sum().reset_index(drop=True)
-df_mensal_prod["Custo"] = pd.to_numeric(df_mensal_prod["Custo"], errors="coerce").fillna(0)
-df_mensal_prod["Lucro"] = df_mensal_prod["Receita"] - df_mensal_prod["Custo"]
+# === EVOLUÇÃO MENSAL ===
+st.subheader("📈 Evolução Mensal")
+df_mensal = df_produtos.groupby(df_produtos["Data"].dt.to_period("M")).agg({"Valor": "sum"}).reset_index()
+df_mensal["Data"] = df_mensal["Data"].dt.to_timestamp()
+df_mensal = df_mensal.rename(columns={"Valor": "Receita"})
 
-fig = px.bar(df_mensal_prod, x="Data", y=["Receita", "Custo", "Lucro"], barmode="group", title="📊 Produtos: Receita x Custo x Lucro")
+df_mensal["Custo"] = df_despesas_prod.groupby(df_despesas_prod["Data"].dt.to_period("M"))["Valor"].sum().reset_index(drop=True)
+df_mensal["Lucro"] = df_mensal["Receita"] - df_mensal["Custo"]
+
+fig = px.bar(df_mensal, x="Data", y=["Receita", "Custo", "Lucro"], barmode="group",
+             title="Evolução Mensal: Receita x Custo x Lucro com Produtos")
+fig.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig, use_container_width=True)
 
-# === SERVIÇOS ===
-st.header("✂️ Serviços")
-receita_serv = df_servicos["Valor"].sum()
-lucro_serv = receita_serv
-margem_serv = 100 if receita_serv > 0 else 0
+# === PRODUTOS MAIS VENDIDOS ===
+st.subheader("🏆 Produtos Mais Vendidos")
 
-col5, col6, col7 = st.columns(3)
-col5.metric("Receita", f"R$ {receita_serv:,.2f}")
-col6.metric("Lucro", f"R$ {lucro_serv:,.2f}")
-col7.metric("Margem", f"{margem_serv:.1f}%")
+# Quantidade e receita por produto
+top_produtos = df_produtos["Serviço"].value_counts().reset_index()
+top_produtos.columns = ["Produto", "Quantidade"]
+top_produtos["Receita"] = top_produtos["Produto"].map(df_produtos.groupby("Serviço")["Valor"].sum())
 
-df_mensal_serv = df_servicos.groupby(df_servicos["Data"].dt.to_period("M"))["Valor"].sum().reset_index()
-df_mensal_serv["Data"] = df_mensal_serv["Data"].dt.to_timestamp()
-df_mensal_serv = df_mensal_serv.rename(columns={"Valor": "Receita"})
-df_mensal_serv["Lucro"] = df_mensal_serv["Receita"]
+# Custo por produto com base na aba de despesas
+custo_por_produto = df_despesas_prod.groupby("Descrição")["Valor"].sum().reset_index()
+custo_por_produto["Descrição"] = custo_por_produto["Descrição"].str.strip().str.lower()
 
-fig2 = px.bar(df_mensal_serv, x="Data", y=["Receita", "Lucro"], barmode="group", title="📈 Serviços: Receita x Lucro")
+# Casar nomes exatos entre Produto e Descrição
+top_produtos["Produto_lower"] = top_produtos["Produto"].str.lower()
+top_produtos["Custo"] = top_produtos["Produto_lower"].map(
+    custo_por_produto.set_index("Descrição")["Valor"]
+)
+top_produtos["Custo"] = top_produtos["Custo"].fillna(0)
+
+# Lucro por produto
+top_produtos["Lucro"] = top_produtos["Receita"] - top_produtos["Custo"]
+
+# % Receita e Classificação ABC
+top_produtos["% Receita"] = (top_produtos["Receita"] / receita_total * 100).round(1)
+top_produtos["Classificação"] = pd.qcut(top_produtos["% Receita"], q=[0, .8, .95, 1], labels=["C", "B", "A"])
+
+top_produtos = top_produtos.drop(columns=["Produto_lower"])
+
+st.dataframe(top_produtos, use_container_width=True)
+
+# === PIZZA DE RECEITA POR PRODUTO ===
+st.subheader("🥧 Receita por Produto (Top 10)")
+fig_pizza = px.pie(top_produtos.head(10), names="Produto", values="Receita", title="Distribuição da Receita por Produto")
+fig_pizza.update_traces(textposition='inside', textinfo='percent+label')
+st.plotly_chart(fig_pizza, use_container_width=True)
+
+# === CLIENTES QUE COMPRARAM MAIS PRODUTOS ===
+st.subheader("👤 Clientes que Mais Compram Produtos")
+clientes = df_produtos.groupby("Cliente").agg({"Valor": "sum", "Serviço": "count"}).reset_index()
+clientes.columns = ["Cliente", "Total gasto", "Qtd produtos"]
+clientes = clientes.sort_values("Total gasto", ascending=False).head(15)
+st.dataframe(clientes, use_container_width=True)
+
+# === VISUALIZAÇÃO DE MARGEM ===
+st.subheader("📈 Margem Bruta Mensal com Produtos")
+df_mensal["Margem"] = (df_mensal["Lucro"] / df_mensal["Receita"] * 100).round(1)
+fig2 = px.line(df_mensal, x="Data", y="Margem", markers=True, title="Margem Bruta Mensal (%)")
+fig2.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig2, use_container_width=True)
 
-# === COMPARATIVO FINAL ===
-st.subheader("📌 Comparativo de Receita e Lucro")
-df_comp = pd.DataFrame({
-    "Categoria": ["Produtos", "Serviços"],
-    "Receita": [receita_prod, receita_serv],
-    "Lucro": [lucro_prod, lucro_serv]
-})
-fig3 = px.bar(df_comp, x="Categoria", y=["Receita", "Lucro"], barmode="group", title="📊 Comparativo: Produtos vs Serviços")
-st.plotly_chart(fig3, use_container_width=True)
+# === DADOS BRUTOS ===
+with st.expander("🔍 Ver dados brutos"):
+    st.dataframe(df_produtos, use_container_width=True)
+    st.dataframe(df_despesas_prod, use_container_width=True)
