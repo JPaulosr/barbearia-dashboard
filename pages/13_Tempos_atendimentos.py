@@ -170,7 +170,15 @@ fig_faixa = px.bar(faixa_dist, x="Faixa", y="Qtd", title="Distribuição por Fai
 fig_faixa.update_layout(margin=dict(t=60), title_x=0.5)
 st.plotly_chart(fig_faixa, use_container_width=True) 
 
-df_ocioso = calcular_ociosidade(df_tempo)
+def calcular_ociosidade(df):
+    df_sorted = df.sort_values(["Funcionário", "Data Group", "Hora Início dt"]).copy()
+    df_sorted["Próximo Início"] = df_sorted.groupby("Funcionário")["Hora Início dt"].shift(-1)
+    df_sorted["Fim Atual"] = df_sorted["Hora Início dt"] + pd.to_timedelta(df_sorted["Duração (min)"], unit='m')
+
+    df_sorted["Ociosidade (min)"] = (df_sorted["Próximo Início"] - df_sorted["Fim Atual"]).dt.total_seconds() / 60
+    df_sorted["Ociosidade (min)"] = df_sorted["Ociosidade (min)"].apply(lambda x: x if x > 0 else 0)
+    return df_sorted
+
 
 # 🔄 Comparativo: Tempo Trabalhado vs Ocioso
 st.subheader("📊 Tempo Trabalhado x Tempo Ocioso")
