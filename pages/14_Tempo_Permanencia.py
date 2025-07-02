@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 st.set_page_config(page_title="Tempos de Atendimento", page_icon="⏱️", layout="wide")
 st.title("⏱️ Tempos de Atendimento")
@@ -17,11 +17,10 @@ def carregar_dados():
     df["Funcionário"] = df["Funcionário"].fillna("")
     df["Cliente"] = df["Cliente"].fillna("")
 
-    # Calcula duração em minutos
+    # Duração em minutos
     df["Duração (min)"] = (df["Hora Saída"] - df["Hora Início"]).dt.total_seconds() / 60
     df["Duração (min)"] = df["Duração (min)"].round(0)
 
-    # Tempo formatado
     def formatar_tempo(minutos):
         if pd.isnull(minutos): return ""
         h = int(minutos // 60)
@@ -47,15 +46,19 @@ with col_cliente:
 with col_data:
     data_input = st.date_input("Selecionar um dia da semana", value=datetime.today())
 
-# 🗓️ INTERVALO SEMANAL
-inicio_semana = data_input - timedelta(days=data_input.weekday())  # segunda
-fim_semana = inicio_semana + timedelta(days=6)  # domingo
+# ✅ CONVERSÃO SEGURA DE DATA
+data_input = pd.to_datetime(data_input).date()
+
+# 🗓️ SEMANA: segunda a domingo da data escolhida
+inicio_semana = datetime.combine(data_input - timedelta(days=data_input.weekday()), time.min)
+fim_semana = inicio_semana + timedelta(days=6, hours=23, minutes=59, seconds=59)
 
 # 🔍 APLICAR FILTROS
+df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 df_filtrado = df[
     (df["Funcionário"].isin(funcionarios_selecionados)) &
-    (df["Data"] >= pd.to_datetime(inicio_semana)) &
-    (df["Data"] <= pd.to_datetime(fim_semana))
+    (df["Data"] >= inicio_semana) &
+    (df["Data"] <= fim_semana)
 ]
 
 if cliente_input:
