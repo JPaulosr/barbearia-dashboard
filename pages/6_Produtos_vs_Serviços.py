@@ -33,8 +33,12 @@ meses_dict = {1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun", 7: "Ju
 meses_disponiveis = sorted(df_base[df_base["Ano"] == ano_selecionado]["Data"].dt.month.unique())
 mes_selecionado = st.selectbox("🗖️ Filtrar por Mês (opcional)", options=["Todos"] + [meses_dict[m] for m in meses_disponiveis])
 
-# === FILTRAGEM DE DADOS ===
-df_produtos = df_base[(df_base["Tipo"] == "Produto") & (df_base["Ano"] == ano_selecionado)].copy()
+# === IDENTIFICAR PRODUTOS POR PALAVRAS-CHAVE ===
+palavras_chave = ["pomada", "gel", "cera", "pó", "barbeador", "produto"]
+df_produtos = df_base[
+    (df_base["Ano"] == ano_selecionado) &
+    (df_base["Serviço"].str.lower().str.contains('|'.join(palavras_chave), na=False))
+].copy()
 df_produtos["Mês"] = df_produtos["Data"].dt.month
 
 if mes_selecionado != "Todos":
@@ -61,8 +65,7 @@ df_despesas_prod["Valor"] = df_despesas_prod["Valor"].apply(converter_para_float
 receita_total = df_produtos["Valor"].sum()
 
 # Filtrar despesas relacionadas a produtos
-palavras_chave = ["produto", "barbeador", "pomada", "gel", "cera", "pó"]
-df_despesas_prod = df_despesas_prod[df_despesas_prod["Descrição"].str.lower().str.contains('|'.join(palavras_chave))].copy()
+df_despesas_prod = df_despesas_prod[df_despesas_prod["Descrição"].str.lower().str.contains('|'.join(palavras_chave), na=False)].copy()
 custo_total = df_despesas_prod["Valor"].sum()
 
 lucro_bruto = receita_total - custo_total
