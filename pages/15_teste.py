@@ -11,9 +11,7 @@ st.title("📸 Upload de Imagem do Cliente")
 
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 PLANILHA_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_NOME = "clientes_status"
 
-# Conexão com Google APIs
 @st.cache_resource
 def conectar_credenciais():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -22,33 +20,40 @@ def conectar_credenciais():
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets"
     ]
-    credenciais = Credentials.from_service_account_info(info, scopes=scopes)
-    return credenciais
+    return Credentials.from_service_account_info(info, scopes=scopes)
 
-# Corrigir automaticamente o cabeçalho da aba
-def corrigir_cabecalho_se_preciso(gc):
-    aba = gc.open_by_key(PLANILHA_ID).worksheet(ABA_NOME)
+def corrigir_cabecalho(gc):
+    aba = gc.open_by_key(PLANILHA_ID).worksheet("clientes_status")
     valores = aba.get_all_values()
     if valores[0][0].strip().lower() != "cliente":
         aba.delete_rows(1)
         novo_cabecalho = ["Cliente", "Telefone", "Status", "Foto_URL"]
         aba.insert_row(novo_cabecalho, 1)
-        st.warning("⚠️ Cabeçalho estava incorreto e foi corrigido.")
+        st.warning("⚠️ Cabeçalho da aba 'clientes_status' foi corrigido.")
 
-# Carrega a lista de clientes
 def carregar_lista_clientes():
     creds = conectar_credenciais()
     gc = gspread.authorize(creds)
-    corrigir_cabecalho_se_preciso(gc)
-    aba = gc.open_by_key(PLANILHA_ID).worksheet(ABA_NOME)
-    df = pd.DataFrame(aba.get_all_records())
-    return sorted(df["Cliente"].dropna().unique().tolist())
+    corrigir_cabecalho(gc)
 
-# Atualiza o link da imagem na planilha
+    planilha = gc.open_by_key(PLANILHA_ID)
+
+    # Carrega de ambas as abas
+    aba1 = planilha.worksheet("clientes_status")
+    df1 = pd.DataFrame(aba1.get_all_records())
+    nomes1 = df1["Cliente"].dropna().astype(str).str.strip()
+
+    aba2 = planilha.worksheet("Base de Dados")
+    df2 = pd.DataFrame(aba2.get_all_records())
+    nomes2 = df2["Cliente"].dropna().astype(str).str.strip()
+
+    todos_nomes = pd.concat([nomes1, nomes2]).drop_duplicates().sort_values()
+    return todos_nomes.tolist()
+
 def atualizar_link_na_planilha(nome_cliente, link):
     creds = conectar_credenciais()
     gc = gspread.authorize(creds)
-    aba = gc.open_by_key(PLANILHA_ID).worksheet(ABA_NOME)
+    aba = gc.open_by_key(PLANILHA_ID).worksheet("clientes_status")
     df = pd.DataFrame(aba.get_all_records())
 
     if "Foto_URL" not in df.columns:
@@ -61,18 +66,17 @@ def atualizar_link_na_planilha(nome_cliente, link):
     if idx:
         aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
     else:
-        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha. Verifique o nome.")
+        st.warning(f"Cliente '{nome_cliente}' não está na aba 'clientes_status'. Nenhuma célula foi atualizada.")
 
-# Upload da imagem
 uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
 
 try:
     lista_clientes = carregar_lista_clientes()
 except Exception as e:
-    st.error(f"Erro ao carregar lista de clientes: {e}")
+    st.error(f"Erro ao carregar clientes: {e}")
     st.stop()
 
-nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes)
+nome_cliente = st.selectbox("🧍 Nome do Cliente", options=lista_clientes)
 drive_service = build("drive", "v3", credentials=conectar_credenciais())
 
 if uploaded_file and nome_cliente:
@@ -91,4 +95,4 @@ if uploaded_file and nome_cliente:
         except Exception as e:
             st.error(f"Erro ao enviar: {e}")
 else:
-    st.info("Envie uma imagem e selecione o nome do cliente para continuar.")
+    st.info("Envie uma imagem e selecione o cliente para continuar.")
