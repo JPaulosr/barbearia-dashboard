@@ -1,108 +1,27 @@
-import streamlit as st
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2.service_account import Credentials
-import io
-import gspread
-from gspread_dataframe import get_as_dataframe
-import pandas as pd
-
-st.set_page_config(page_title="Upload de Imagem", layout="wide")
-st.title("📸 Upload de Imagem do Cliente")
-
-# === CONFIGURAÇÃO ===
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-
-# Conecta com o Google Drive
-@st.cache_resource
-def conectar_drive():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    scopes = ["https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_info(info, scopes=scopes)
-    service = build("drive", "v3", credentials=credenciais)
-    return service
-
-# Atualiza o link da imagem no Google Sheets e insere o cliente se ele não existir
-def atualizar_link_na_planilha(nome_cliente, link):
-    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-    aba_nome = "clientes_status"
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets"
-    ]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    gc = gspread.authorize(credenciais)
-    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
-    dados = aba.get_all_records()
-    df = pd.DataFrame(dados)
-
-    if "Foto_URL" not in df.columns:
-        df["Foto_URL"] = ""
-
-    df["cliente_formatado"] = df["Cliente"].astype(str).str.strip().str.lower()
-    nome_input = nome_cliente.strip().lower()
-    idx = df.index[df["cliente_formatado"] == nome_input].tolist()
-
-    if idx:
-        aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
-        st.success("✅ Imagem enviada com sucesso e planilha atualizada!")
-    else:
-        nova_linha = [nome_cliente.strip(), "", "", link]
-        aba.append_row(nova_linha)
-        st.warning(f"⚠️ Cliente '{nome_cliente}' não estava na planilha e foi adicionado automaticamente.")
-        st.success("✅ Imagem enviada com sucesso e planilha atualizada!")
-
-# === Carrega lista de clientes para autocomplete ===
+@st.cache_data(show_spinner=False)
 def carregar_lista_clientes():
-    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-    aba_nome = "clientes_status"
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets"
-    ]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    gc = gspread.authorize(credenciais)
-    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
-    dados = aba.get_all_records()
-    df = pd.DataFrame(dados)
-    return sorted(df["Cliente"].dropna().unique().tolist())
+    try:
+        escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        credenciais = Credentials.from_service_account_info(
+            st.secrets["GCP_SERVICE_ACCOUNT"],
+            scopes=escopos
+        )
+        cliente = gspread.authorize(credenciais)
+        planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
 
-lista_clientes = carregar_lista_clientes()
+        # Nome da aba correta que contém a lista de clientes
+        aba = planilha.worksheet("clientes_status")
 
-# Upload da imagem
-uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
-nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes + ["-- Nome não está na lista --"])
-nome_manual = ""
+        # Evitar erro se estiver vazia
+        valores = aba.get_all_values()
+        if len(valores) <= 1:
+            st.warning("A aba 'clientes_status' está vazia ou sem dados.")
+            return pd.DataFrame(columns=["Cliente", "Status"])
 
-if nome_cliente == "-- Nome não está na lista --":
-    nome_manual = st.text_input("Digite manualmente o nome do cliente")
-    nome_final = nome_manual.strip()
-else:
-    nome_final = nome_cliente.strip()
+        dados = aba.get_all_records()
+        df = pd.DataFrame(dados)
+        return df
 
-drive_service = conectar_drive()
-
-if uploaded_file and nome_final:
-    st.image(uploaded_file, caption="Pré-visualização", width=200)
-    if st.button("Salvar imagem no Google Drive e atualizar planilha", type="primary"):
-        try:
-            nome_arquivo = f"{nome_final.lower().replace(' ', '_')}.jpg"
-            img_bytes = io.BytesIO(uploaded_file.getvalue())
-            media = MediaIoBaseUpload(img_bytes, mimetype="image/jpeg", resumable=False)
-            file_metadata = {
-                "name": nome_arquivo,
-                "parents": [PASTA_ID]
-            }
-            file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-            file_id = file.get("id")
-            url = f"https://drive.google.com/uc?id={file_id}"
-            atualizar_link_na_planilha(nome_final, url)
-            st.markdown(f"[🔗 Ver imagem no Drive]({url})")
-        except Exception as e:
-            st.error(f"Erro ao enviar: {e}")
-else:
-    st.info("Envie uma imagem e selecione (ou digite) o nome do cliente para continuar.")
+    except Exception as e:
+        st.error(f"Erro ao carregar lista de clientes: {e}")
+        return pd.DataFrame(columns=["Cliente", "Status"])
