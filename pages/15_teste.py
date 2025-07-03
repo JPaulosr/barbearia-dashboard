@@ -28,7 +28,7 @@ def carregar_lista_clientes():
         st.error(f"Erro ao carregar lista de clientes: {e}")
         return []
 
-# Função para fazer upload da imagem no Google Drive com permissão pública
+# Função para fazer upload da imagem e torná-la pública
 def upload_imagem_drive(caminho_arquivo, nome_cliente):
     try:
         credenciais = Credentials.from_service_account_info(
@@ -40,34 +40,36 @@ def upload_imagem_drive(caminho_arquivo, nome_cliente):
         pasta_id = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
         nome_arquivo = f"{nome_cliente}.jpg"
 
-        metadata = {
-            "name": nome_arquivo,
-            "parents": [pasta_id]
-        }
-
+        metadata = {"name": nome_arquivo, "parents": [pasta_id]}
         media = MediaFileUpload(caminho_arquivo, resumable=True)
+
         arquivo = servico.files().create(
             body=metadata,
             media_body=media,
-            fields="id"
+            fields="id, name"
         ).execute()
 
-        # Torna o arquivo público
-        permissao = {
-            "type": "anyone",
-            "role": "reader"
-        }
-        servico.permissions().create(fileId=arquivo["id"], body=permissao).execute()
+        file_id = arquivo.get("id")
+        file_name = arquivo.get("name")
 
-        return True, arquivo.get("id")
+        if not file_id:
+            return False, "ID do arquivo não retornado pelo Drive."
+
+        # Torna o arquivo público
+        permissao = {"type": "anyone", "role": "reader"}
+        servico.permissions().create(fileId=file_id, body=permissao).execute()
+
+        print(f"✅ Imagem '{file_name}' enviada com ID: {file_id}")
+        return True, file_id
+
     except Exception as e:
         return False, str(e)
 
-# Interface principal
+# Interface
 clientes = carregar_lista_clientes()
 cliente_selecionado = st.selectbox("Selecione o cliente:", clientes)
 
-# Mostra imagem atual, se houver
+# Mostrar imagem existente
 if cliente_selecionado:
     try:
         escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -104,6 +106,12 @@ if st.button("💾 Enviar imagem"):
             sucesso, resposta = upload_imagem_drive(caminho_temp, cliente_selecionado)
             os.remove(caminho_temp)
 
+            # 🔍 DEBUG
+            st.markdown("### 🔍 DEBUG")
+            st.write(f"- Sucesso no upload: {sucesso}")
+            st.write(f"- ID retornado do Drive: {resposta}")
+            st.write(f"- URL montada: https://drive.google.com/uc?id={resposta}")
+
             if sucesso:
                 try:
                     link_imagem = f"https://drive.google.com/uc?id={resposta}"
@@ -135,11 +143,12 @@ if st.button("💾 Enviar imagem"):
                             aba.update_cell(idx, coluna_foto, link_imagem)
                             break
 
-                    st.success("✅ Imagem enviada e link registrado na planilha!")
+                    st.success("✅ Imagem enviada e link registrado com sucesso!")
                 except Exception as e:
                     st.warning(f"Imagem enviada, mas falha ao atualizar a planilha: {e}")
             else:
                 st.error(f"Erro no upload: {resposta}")
+
         except Exception as erro:
             st.error(f"Erro inesperado: {erro}")
     else:
