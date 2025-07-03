@@ -4,7 +4,6 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
 import io
 import gspread
-from gspread_dataframe import get_as_dataframe
 import pandas as pd
 
 st.set_page_config(page_title="Upload de Imagem", layout="wide")
@@ -12,6 +11,7 @@ st.title("📸 Upload de Imagem do Cliente")
 
 # === CONFIGURAÇÃO ===
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
+PLANILHA_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 
 # Conecta com o Google Drive
 @st.cache_resource
@@ -24,7 +24,6 @@ def conectar_drive():
 
 # Atualiza o link da imagem no Google Sheets
 def atualizar_link_na_planilha(nome_cliente, link):
-    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
     aba_nome = "clientes_status"
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
     escopo = [
@@ -34,7 +33,8 @@ def atualizar_link_na_planilha(nome_cliente, link):
     ]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     gc = gspread.authorize(credenciais)
-    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
+    aba = gc.open_by_key(PLANILHA_ID).worksheet(aba_nome)
+
     dados = aba.get_all_records()
     df = pd.DataFrame(dados)
 
@@ -48,28 +48,21 @@ def atualizar_link_na_planilha(nome_cliente, link):
     if idx:
         aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
     else:
-        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha. Verifique o nome.")
+        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha clientes_status. Verifique o nome.")
 
-# === Carrega lista de clientes para autocomplete ===
+# === Carrega lista de clientes direto da aba 'Base de Dados' ===
 def carregar_lista_clientes():
-    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-    aba_nome = "clientes_status"
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets"
-    ]
+    escopo = ["https://www.googleapis.com/auth/spreadsheets"]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     gc = gspread.authorize(credenciais)
-    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
+    aba = gc.open_by_key(PLANILHA_ID).worksheet("Base de Dados")
     dados = aba.get_all_records()
     df = pd.DataFrame(dados)
     return sorted(df["Cliente"].dropna().unique().tolist())
 
+# === Upload da imagem ===
 lista_clientes = carregar_lista_clientes()
-
-# Upload da imagem
 uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
 nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes)
 
