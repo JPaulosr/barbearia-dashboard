@@ -59,7 +59,7 @@ def carregar_dados():
 df = carregar_dados()
 
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
-cliente = st.text_input("🔍 Digite o nome do cliente para detalhamento")
+cliente = st.selectbox("🔍 Selecione o cliente para detalhamento:", options=[""] + clientes_disponiveis, index=0)
 
 # === Filtro de mês ===
 meses_disponiveis = sorted(df["Mês_Ano"].unique())
@@ -98,4 +98,4 @@ if cliente:
 
         # (continua o restante do código normalmente...)
 else:
-    st.info("Digite o nome de um cliente para visualizar os dados.")
+    st.info("Selecione um cliente para visualizar os dados.")
