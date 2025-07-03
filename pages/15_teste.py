@@ -1,98 +1,49 @@
 import streamlit as st
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2.service_account import Credentials
-import io
 import gspread
-import pandas as pd
+from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Upload de Imagem", layout="wide")
-st.title("📸 Upload de Imagem do Cliente")
+st.set_page_config(page_title="🔧 Correção de Cabeçalho", layout="centered")
+st.title("🛠️ Corrigir Cabeçalho da Aba clientes_status")
 
-# === CONFIGURAÇÃO ===
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-PLANILHA_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+# === CONFIGURAÇÕES ===
+planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+aba_nome = "clientes_status"
 
-# Conecta com o Google Drive
+# Autenticação com Google
 @st.cache_resource
-def conectar_drive():
+def autenticar_gspread():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    scopes = ["https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_info(info, scopes=scopes)
-    service = build("drive", "v3", credentials=credenciais)
-    return service
-
-# Atualiza o link da imagem no Google Sheets
-def atualizar_link_na_planilha(nome_cliente, link):
-    aba_nome = "clientes_status"
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets"
+    escopos = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
     ]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    gc = gspread.authorize(credenciais)
-    aba = gc.open_by_key(PLANILHA_ID).worksheet(aba_nome)
+    credenciais = Credentials.from_service_account_info(info, scopes=escopos)
+    return gspread.authorize(credenciais)
 
-    dados = aba.get_all_records()
-    df = pd.DataFrame(dados)
+gc = autenticar_gspread()
 
-    if "Foto_URL" not in df.columns:
-        df["Foto_URL"] = ""
+# Cabeçalhos corretos (ajuste conforme sua aba clientes_status real)
+cabecalhos_corrigidos = ["Cliente", "Telefone", "Status", "Foto_URL"]
 
-    df["cliente_formatado"] = df["Cliente"].astype(str).str.strip().str.lower()
-    nome_input = nome_cliente.strip().lower()
-    idx = df.index[df["cliente_formatado"] == nome_input].tolist()
+# === Execução ===
+if st.button("⚠️ Corrigir Cabeçalho da Aba"):
+    try:
+        aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
 
-    if idx:
-        aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
-    else:
-        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha clientes_status. Verifique o nome.")
+        # Pega dados existentes
+        dados_existentes = aba.get_all_values()[1:]  # ignora cabeçalho antigo
 
-# === Carrega lista de clientes direto da aba 'Base de Dados' ===
-def carregar_lista_clientes():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = ["https://www.googleapis.com/auth/spreadsheets"]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    gc = gspread.authorize(credenciais)
-    aba = gc.open_by_key(PLANILHA_ID).worksheet("Base de Dados")
-    dados = aba.get_all_records()
-    df = pd.DataFrame(dados)
-    return sorted(df["Cliente"].dropna().unique().tolist())
+        # Apaga tudo e reescreve
+        aba.clear()
+        aba.append_row(cabecalhos_corrigidos)
 
-# === Upload da imagem ===
-lista_clientes = carregar_lista_clientes()
-uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
-nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes)
+        # Restaura dados existentes (sem cabeçalho)
+        for linha in dados_existentes:
+            if any(campo.strip() for campo in linha):
+                aba.append_row(linha[:len(cabecalhos_corrigidos)])
 
-drive_service = conectar_drive()
-
-if uploaded_file and nome_cliente:
-    st.image(uploaded_file, caption="Pré-visualização", width=200)
-    if st.button("Salvar imagem no Google Drive e atualizar planilha", type="primary"):
-        if "upload_feito" not in st.session_state:
-            st.session_state.upload_feito = False
-
-        if not st.session_state.upload_feito:
-            try:
-                nome_arquivo = f"{nome_cliente.lower().replace(' ', '_')}.jpg"
-                img_bytes = io.BytesIO(uploaded_file.getvalue())
-                media = MediaIoBaseUpload(img_bytes, mimetype="image/jpeg", resumable=False)
-                file_metadata = {
-                    "name": nome_arquivo,
-                    "parents": [PASTA_ID]
-                }
-                file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-                file_id = file.get("id")
-                url = f"https://drive.google.com/uc?id={file_id}"
-                atualizar_link_na_planilha(nome_cliente, url)
-                st.session_state.upload_feito = True
-                st.success("✅ Imagem enviada com sucesso e planilha atualizada!")
-                st.markdown(f"[🔗 Ver imagem no Drive]({url})")
-            except Exception as e:
-                st.error(f"Erro ao enviar: {e}")
-        else:
-            st.warning("A imagem já foi enviada. Atualize a página se quiser reenviar.")
+        st.success("✅ Cabeçalho corrigido com sucesso!")
+    except Exception as e:
+        st.error(f"❌ Erro ao corrigir cabeçalho: {e}")
 else:
-    st.info("Envie uma imagem e selecione o nome do cliente para continuar.")
+    st.info("Clique no botão acima para reescrever o cabeçalho da aba `clientes_status`.")
