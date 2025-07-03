@@ -63,7 +63,7 @@ clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-# === Mostrar imagem do cliente ===
+# === Mostrar miniatura da imagem do cliente ===
 def buscar_link_foto(nome):
     try:
         planilha = conectar_sheets()
@@ -80,7 +80,7 @@ if link_foto:
     try:
         response = requests.get(link_foto)
         img = Image.open(BytesIO(response.content))
-        st.image(img, caption=f"Foto de {cliente}", use_container_width=True)
+        st.image(img, caption=f"{cliente}", width=200)
     except:
         st.warning("Erro ao carregar imagem do cliente.")
 else:
