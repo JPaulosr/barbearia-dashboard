@@ -109,5 +109,6 @@ with st.expander("🧪 Comparativo entre Clientes", expanded=False):
     df_comp = pd.DataFrame([indicadores(cliente_1), indicadores(cliente_2)])
     st.dataframe(df_comp, use_container_width=True)
 
-# === 📊 Análises Detalhadas do Cliente Selecionado ===
-# (continua o restante do código sem alterações...)
+# === Continuação: Blocos completos de análises ===
+from DetalhesCliente_completo import mostrar_detalhes_cliente
+mostrar_detalhes_cliente(df, cliente)
