@@ -8,3 +8,5 @@ streamlit-extras
 gspread
 gspread_dataframe
 oauth2client
+google-api-python-client
+
