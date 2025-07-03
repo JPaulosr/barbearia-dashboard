@@ -73,7 +73,6 @@ if cliente:
     if df_cliente.empty:
         st.warning("Nenhum dado encontrado para esse cliente no período selecionado.")
     else:
-        # === Mostrar miniatura da imagem do cliente ===
         def buscar_link_foto(nome):
             try:
                 planilha = conectar_sheets()
@@ -96,8 +95,48 @@ if cliente:
         else:
             st.info("Cliente sem imagem cadastrada.")
 
-        # === Blocos restaurados ===
-        st.write("Blocos completos restaurados aqui...")
+        # Bloco: Histórico de atendimentos
+        st.subheader(f"📅 Histórico de atendimentos - {cliente}")
+        st.dataframe(df_cliente.sort_values("Data", ascending=False).drop(columns=["Data"]).rename(columns={"Data_str": "Data"}), use_container_width=True)
+
+        # Receita mensal
+        st.subheader("📊 Receita mensal")
+        receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
+        fig_receita = px.bar(
+            receita_mensal,
+            x="Mês_Ano",
+            y="Valor",
+            text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+            labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
+        )
+        fig_receita.update_traces(textposition="inside")
+        fig_receita.update_layout(height=400, margin=dict(t=50), uniformtext_minsize=10, uniformtext_mode='show')
+        st.plotly_chart(fig_receita, use_container_width=True)
+
+        # Receita por serviço e produto
+        st.subheader("📊 Receita por Serviço e Produto")
+        df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
+        receita_geral = df_tipos.groupby(["Serviço", "Tipo"])["Valor"].sum().reset_index()
+        receita_geral = receita_geral.sort_values("Valor", ascending=False)
+        fig_receita_tipos = px.bar(
+            receita_geral,
+            x="Serviço",
+            y="Valor",
+            color="Tipo",
+            text=receita_geral["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+            labels={"Valor": "Receita (R$)", "Serviço": "Item"},
+            barmode="group"
+        )
+        fig_receita_tipos.update_traces(textposition="outside")
+        fig_receita_tipos.update_layout(height=450, margin=dict(t=80), uniformtext_minsize=10, uniformtext_mode='show')
+        st.plotly_chart(fig_receita_tipos, use_container_width=True)
+
+        # Atendimentos por funcionário
+        st.subheader("📊 Atendimentos por Funcionário")
+        atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+        atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
+        atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
+        st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 else:
     st.info("Selecione um cliente para visualizar os dados.")
