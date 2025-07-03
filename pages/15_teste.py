@@ -21,16 +21,14 @@ def carregar_lista_clientes():
         cliente = gspread.authorize(credenciais)
         planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
         aba = planilha.worksheet("clientes_status")
-
         dados = aba.get_all_records()
         df = pd.DataFrame(dados)
         return sorted(df["Cliente"].dropna().unique())
-
     except Exception as e:
         st.error(f"Erro ao carregar lista de clientes: {e}")
         return []
 
-# Função para fazer upload da imagem no Google Drive
+# Função para fazer upload da imagem no Google Drive com permissão pública
 def upload_imagem_drive(caminho_arquivo, nome_cliente):
     try:
         credenciais = Credentials.from_service_account_info(
@@ -46,8 +44,13 @@ def upload_imagem_drive(caminho_arquivo, nome_cliente):
             "name": nome_arquivo,
             "parents": [pasta_id]
         }
+
         media = MediaFileUpload(caminho_arquivo, resumable=True)
-        arquivo = servico.files().create(body=metadata, media_body=media, fields="id").execute()
+        arquivo = servico.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id"
+        ).execute()
 
         # Torna o arquivo público
         permissao = {
@@ -57,15 +60,14 @@ def upload_imagem_drive(caminho_arquivo, nome_cliente):
         servico.permissions().create(fileId=arquivo["id"], body=permissao).execute()
 
         return True, arquivo.get("id")
-
     except Exception as e:
         return False, str(e)
 
-# Interface
+# Interface principal
 clientes = carregar_lista_clientes()
 cliente_selecionado = st.selectbox("Selecione o cliente:", clientes)
 
-# Mostrar imagem existente do cliente
+# Mostra imagem atual, se houver
 if cliente_selecionado:
     try:
         escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -89,7 +91,7 @@ if cliente_selecionado:
     except Exception as e:
         st.warning(f"Erro ao buscar imagem: {e}")
 
-# Upload da imagem
+# Upload de nova imagem
 arquivo = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
 if st.button("💾 Enviar imagem"):
@@ -133,13 +135,11 @@ if st.button("💾 Enviar imagem"):
                             aba.update_cell(idx, coluna_foto, link_imagem)
                             break
 
-                    st.success("Imagem enviada e link registrado na planilha!")
-
+                    st.success("✅ Imagem enviada e link registrado na planilha!")
                 except Exception as e:
                     st.warning(f"Imagem enviada, mas falha ao atualizar a planilha: {e}")
             else:
                 st.error(f"Erro no upload: {resposta}")
-
         except Exception as erro:
             st.error(f"Erro inesperado: {erro}")
     else:
