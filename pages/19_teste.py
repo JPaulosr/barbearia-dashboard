@@ -63,4 +63,4 @@ def carregar_dados():
 
     return df
 
-...
+st.success("✅ Dados carregados e cálculo de tempo total funcionando corretamente.")
