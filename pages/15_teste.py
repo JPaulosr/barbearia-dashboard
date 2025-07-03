@@ -5,7 +5,7 @@ import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 import datetime
-import re
+import requests
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
@@ -54,47 +54,13 @@ def carregar_dados():
 
     return df
 
-# === CORRIGIR LINKS DA COLUNA Foto_URL ===
-def corrigir_links_foto_url():
-    planilha = conectar_sheets()
-    aba = planilha.worksheet(BASE_ABA)
-    coluna_foto_url = aba.col_values(14)
-    novos_links = []
-    alterados = 0
-
-    for url in coluna_foto_url:
-        if "drive.google.com" in url and "/file/d/" in url:
-            try:
-                file_id = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url).group(1)
-                novo_url = f"https://drive.google.com/uc?id={file_id}"
-                novos_links.append(novo_url)
-                alterados += 1
-            except:
-                novos_links.append(url)
-        else:
-            novos_links.append(url)
-
-    # Atualiza a partir da célula N2 (ignora cabeçalho)
-    celulas = aba.range(f"N2:N{len(novos_links)+1}")
-    for i, cell in enumerate(celulas):
-        cell.value = novos_links[i]
-    aba.update_cells(celulas)
-
-    return alterados
-
-# === BOTÃO DE CORREÇÃO ===
-with st.expander("🛠️ Corrigir links da coluna Foto_URL"):
-    if st.button("🔄 Corrigir agora"):
-        total = corrigir_links_foto_url()
-        st.success(f"✅ {total} link(s) corrigido(s) com sucesso!")
-
-# === DADOS E SELEÇÃO ===
 df = carregar_dados()
+
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
-# === FOTO DO CLIENTE ===
+# === EXIBIR FOTO DO CLIENTE ===
 try:
     if "Foto_URL" in df.columns:
         df_foto = df[df["Cliente"] == cliente]
@@ -104,10 +70,40 @@ try:
             if "drive.google.com" in link and "/file/d/" in link:
                 file_id = link.split("/file/d/")[1].split("/")[0]
                 link = f"https://drive.google.com/uc?id={file_id}"
-            st.image(link, width=150, caption=f"Foto de {cliente}")
+            st.image(link, width=200, caption=f"Foto de {cliente}")
         else:
             st.info(f"ℹ️ Nenhuma imagem cadastrada para **{cliente}**.")
     else:
         st.info("ℹ️ A coluna 'Foto_URL' ainda não existe na planilha.")
 except Exception as e:
     st.warning(f"Erro ao carregar foto: {e}")
+
+# === UPLOAD DE IMAGEM ===
+with st.expander("📤 Enviar nova foto do cliente"):
+    uploaded = st.file_uploader("Escolha uma imagem", type=["jpg", "png", "jpeg"])
+    if uploaded:
+        st.image(uploaded, width=200)
+        if st.button("Salvar imagem no Imgur e atualizar planilha"):
+            client_id = st.secrets["IMGUR"]["client_id"]
+            headers = {"Authorization": f"Client-ID {client_id}"}
+            files = {"image": uploaded.getvalue()}
+            response = requests.post("https://api.imgur.com/3/image", headers=headers, files=files)
+
+            if response.status_code == 200:
+                img_url = response.json()["data"]["link"]
+                st.success("Imagem enviada com sucesso!")
+                st.write("Link gerado:", img_url)
+
+                # Atualizar a planilha com novo link
+                planilha = conectar_sheets()
+                aba = planilha.worksheet(BASE_ABA)
+                registros = aba.get_all_records()
+                for i, row in enumerate(registros):
+                    if row.get("Cliente", "").strip().lower() == cliente.strip().lower():
+                        aba.update_cell(i + 2, 14, img_url)  # Coluna N (14ª)
+                        st.success("Planilha atualizada com a nova imagem.")
+                        break
+            else:
+                st.error("Erro ao enviar imagem para o Imgur.")
+
+# (continua normalmente com o restante do seu código abaixo)
