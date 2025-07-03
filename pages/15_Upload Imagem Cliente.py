@@ -12,7 +12,6 @@ from io import BytesIO
 st.set_page_config(page_title="Upload de Imagem do Cliente", layout="wide")
 st.markdown("## 📸 Upload de Imagem do Cliente")
 
-# Função para carregar a lista de clientes da aba "clientes_status"
 @st.cache_data(show_spinner=False)
 def carregar_lista_clientes():
     try:
@@ -24,20 +23,13 @@ def carregar_lista_clientes():
         cliente = gspread.authorize(credenciais)
         planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
         aba = planilha.worksheet("clientes_status")
-
-        valores = aba.get_all_values()
-        if len(valores) <= 1:
-            return []
-
         dados = aba.get_all_records()
         df = pd.DataFrame(dados)
         return sorted(df["Cliente"].dropna().unique())
-
     except Exception as e:
         st.error(f"Erro ao carregar lista de clientes: {e}")
         return []
 
-# Função para fazer upload da imagem no Google Drive
 def upload_imagem_drive(caminho_arquivo, nome_cliente):
     try:
         credenciais = Credentials.from_service_account_info(
@@ -46,27 +38,46 @@ def upload_imagem_drive(caminho_arquivo, nome_cliente):
         )
         servico = build("drive", "v3", credentials=credenciais)
 
-        pasta_id = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # Pasta pública
-
+        pasta_id = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
         nome_arquivo = f"{nome_cliente}.jpg"
 
-        metadata = {
-            "name": nome_arquivo,
-            "parents": [pasta_id]
-        }
+        metadata = {"name": nome_arquivo, "parents": [pasta_id]}
         media = MediaFileUpload(caminho_arquivo, resumable=True)
         arquivo = servico.files().create(body=metadata, media_body=media, fields="id").execute()
 
-        return True, arquivo.get("id")
+        permissao = {"type": "anyone", "role": "reader"}
+        servico.permissions().create(fileId=arquivo["id"], body=permissao).execute()
 
+        return True, arquivo.get("id")
     except Exception as e:
         return False, str(e)
 
-# Interface
+def excluir_imagem_drive(nome_cliente):
+    try:
+        credenciais = Credentials.from_service_account_info(
+            st.secrets["GCP_SERVICE_ACCOUNT"],
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        servico = build("drive", "v3", credentials=credenciais)
+
+        nome_arquivo = f"{nome_cliente}.jpg"
+        resultado = servico.files().list(q=f"name='{nome_arquivo}' and trashed=false",
+                                         spaces='drive', fields="files(id, name)").execute()
+        arquivos = resultado.get("files", [])
+
+        if arquivos:
+            file_id = arquivos[0]["id"]
+            servico.files().delete(fileId=file_id).execute()
+            return True
+        else:
+            return False
+    except Exception as e:
+        return False
+
 clientes = carregar_lista_clientes()
 cliente_selecionado = st.selectbox("Selecione o cliente:", clientes)
 
-# Mostrar imagem existente (via requests + PIL)
+imagem_existente = None
 if cliente_selecionado:
     try:
         escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -82,56 +93,81 @@ if cliente_selecionado:
         for linha in dados:
             if linha.get("Cliente") == cliente_selecionado:
                 link_foto = linha.get("Foto")
+                imagem_existente = link_foto
                 if link_foto:
                     try:
                         response = requests.get(link_foto)
                         img = Image.open(BytesIO(response.content))
                         st.image(img, caption=f"Foto de {cliente_selecionado}", use_container_width=False)
-                    except Exception as erro_img:
+                    except:
                         st.warning("❌ Link encontrado, mas não foi possível carregar a imagem.")
-                        st.text(f"Erro: {erro_img}")
                 else:
                     st.info("Nenhuma imagem cadastrada para este cliente.")
                 break
     except Exception as e:
         st.warning(f"Erro ao buscar imagem: {e}")
 
-# Upload manual
 arquivo = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
-if st.button("💾 Enviar imagem"):
-    if cliente_selecionado and arquivo:
-        try:
-            caminho_temp = f"temp_{cliente_selecionado}.jpg"
-            with open(caminho_temp, "wb") as f:
-                f.write(arquivo.read())
+col1, col2 = st.columns(2)
 
-            sucesso, resposta = upload_imagem_drive(caminho_temp, cliente_selecionado)
-            os.remove(caminho_temp)
+with col1:
+    if st.button("💾 Substituir imagem"):
+        if cliente_selecionado and arquivo:
+            try:
+                caminho_temp = f"temp_{cliente_selecionado}.jpg"
+                with open(caminho_temp, "wb") as f:
+                    f.write(arquivo.read())
+                sucesso, resposta = upload_imagem_drive(caminho_temp, cliente_selecionado)
+                os.remove(caminho_temp)
 
-            if sucesso:
-                link_imagem = f"https://drive.google.com/uc?export=download&id={resposta}"
+                if sucesso:
+                    link_imagem = f"https://drive.google.com/uc?export=download&id={resposta}"
 
-                # Atualizar a planilha com o link
-                credenciais = Credentials.from_service_account_info(
-                    st.secrets["GCP_SERVICE_ACCOUNT"],
-                    scopes=["https://www.googleapis.com/auth/spreadsheets"]
-                )
-                cliente = gspread.authorize(credenciais)
-                planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
-                aba = planilha.worksheet("clientes_status")
-                dados = aba.get_all_records()
+                    credenciais = Credentials.from_service_account_info(
+                        st.secrets["GCP_SERVICE_ACCOUNT"],
+                        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+                    )
+                    cliente = gspread.authorize(credenciais)
+                    planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
+                    aba = planilha.worksheet("clientes_status")
+                    dados = aba.get_all_records()
 
-                for i, linha in enumerate(dados):
-                    if linha.get("Cliente") == cliente_selecionado:
-                        aba.update_cell(i + 2, 3, link_imagem)  # Coluna C (Foto)
-                        break
+                    for i, linha in enumerate(dados):
+                        if linha.get("Cliente") == cliente_selecionado:
+                            aba.update_cell(i + 2, 3, link_imagem)  # Coluna C (Foto)
+                            break
 
-                st.success("Imagem enviada e salva com sucesso!")
+                    st.success("Imagem substituída com sucesso!")
+                else:
+                    st.error(f"Erro no upload: {resposta}")
+            except Exception as erro:
+                st.error(f"Erro inesperado: {erro}")
+        else:
+            st.warning("Selecione um cliente e uma imagem antes de enviar.")
+
+with col2:
+    if st.button("🚫 Excluir imagem"):
+        if cliente_selecionado and imagem_existente:
+            apagado = excluir_imagem_drive(cliente_selecionado)
+            if apagado:
+                try:
+                    credenciais = Credentials.from_service_account_info(
+                        st.secrets["GCP_SERVICE_ACCOUNT"],
+                        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+                    )
+                    cliente = gspread.authorize(credenciais)
+                    planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
+                    aba = planilha.worksheet("clientes_status")
+                    dados = aba.get_all_records()
+                    for i, linha in enumerate(dados):
+                        if linha.get("Cliente") == cliente_selecionado:
+                            aba.update_cell(i + 2, 3, "")
+                            break
+                    st.success("Imagem excluída com sucesso!")
+                except:
+                    st.warning("Imagem excluída do Drive, mas não da planilha.")
             else:
-                st.error(f"Erro no upload: {resposta}")
-
-        except Exception as erro:
-            st.error(f"Erro inesperado: {erro}")
-    else:
-        st.warning("Selecione um cliente e uma imagem antes de enviar.")
+                st.warning("Imagem não encontrada no Drive para excluir.")
+        else:
+            st.info("Este cliente não possui imagem para excluir.")
