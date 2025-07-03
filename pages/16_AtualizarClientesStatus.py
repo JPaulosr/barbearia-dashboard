@@ -2,47 +2,52 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import json
+from datetime import datetime
 
-st.set_page_config(page_title="Atualizar Clientes", page_icon="🔄", layout="wide")
-st.title("🔄 Atualizar Lista de Clientes (clientes_status)")
+st.set_page_config(page_title="Atualizar Clientes", layout="wide")
+st.markdown("## 🔄 Atualizar Lista de Clientes (clientes_status)")
 
-# Função para autenticar com base nos secrets do Streamlit
-@st.cache_data
+# ⬇️ Conectar com a planilha Google Sheets via SECRETS
+@st.cache_data(show_spinner=False)
 def conectar_planilha():
-    # Carrega o JSON das credenciais do secrets
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    
-    # Cria credenciais a partir do dicionário
-    credentials = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
-    
-    # Conecta com gspread
-    gc = gspread.authorize(credentials)
-    
-    # Abre a planilha e retorna a aba clientes_status
-    sh = gc.open_by_url("https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit")
-    aba = sh.worksheet("clientes_status")
-    return aba
+    escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(
+        st.secrets["GCP_SERVICE_ACCOUNT"],
+        scopes=escopos
+    )
+    cliente = gspread.authorize(credenciais)
+    url = st.secrets["PLANILHA_URL"]
+    planilha = cliente.open_by_url(url)
+    return planilha
 
-# Função para carregar clientes únicos da base de dados
-@st.cache_data
-def carregar_clientes_base():
-    url_base = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url_base)
-    df["Cliente"] = df["Cliente"].fillna("").str.strip()
-    clientes_unicos = sorted(df["Cliente"].unique())
-    return clientes_unicos
+# ⬇️ Carregar abas da planilha
+@st.cache_data(show_spinner=False)
+def carregar_abas():
+    planilha = conectar_planilha()
+    base_dados = planilha.worksheet("Base de Dados")
+    clientes_status = planilha.worksheet("clientes_status")
+    return base_dados, clientes_status
 
-# Botão para atualizar
-if st.button("🔁 Atualizar clientes_status com nomes únicos da Base de Dados"):
-    try:
-        aba = conectar_planilha()
-        clientes = carregar_clientes_base()
-        
-        # Atualiza os dados na planilha
-        dados = [["Cliente", "Status"]] + [[nome, ""] for nome in clientes]
-        aba.clear()
-        aba.update(dados)
-        st.success("✅ Lista de clientes atualizada com sucesso!")
-    except Exception as e:
-        st.error(f"Erro ao atualizar: {e}")
+# ⬇️ Atualizar lista de clientes
+def atualizar_clientes():
+    base_dados, clientes_status = carregar_abas()
+    dados = base_dados.get_all_records()
+    df = pd.DataFrame(dados)
+    df["Cliente"] = df["Cliente"].str.strip()
+    clientes_unicos = sorted(df["Cliente"].dropna().unique())
+
+    # Limpar aba atual
+    clientes_status.clear()
+
+    # Atualizar com novos dados
+    nova_lista = pd.DataFrame({"Cliente": clientes_unicos, "Status": ""})
+    clientes_status.update([nova_lista.columns.values.tolist()] + nova_lista.values.tolist())
+
+    return nova_lista
+
+# ⬇️ Botão para atualizar
+if st.button("🔁 Atualizar Lista de Clientes"):
+    with st.spinner("Atualizando lista de clientes..."):
+        resultado = atualizar_clientes()
+        st.success("Lista de clientes atualizada com sucesso!")
+        st.dataframe(resultado, use_container_width=True)
