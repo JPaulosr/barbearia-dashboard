@@ -2,65 +2,64 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import time
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
 st.set_page_config(page_title="Atualizar Clientes Status", layout="wide")
-st.title("♻️ Atualizar clientes_status automaticamente")
+st.title("🔄 Atualizar Lista de Clientes (clientes_status)")
 
-# Função para carregar dados da planilha
-@st.cache_data
-def carregar_dados():
-    url_base = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    url_status = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=clientes_status"
-    df_base = pd.read_csv(url_base)
-    df_status = pd.read_csv(url_status)
-    return df_base, df_status
+# === CONFIGURAÇÃO ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+ABA_DADOS = "Base de Dados"
+ABA_CLIENTES = "clientes_status"
+CAMINHO_CREDENCIAL = "barbearia-dashboard-04c0ce9b53d4.json"
 
-# Carregar dados
-df_base, df_status = carregar_dados()
+# === Conectar ao Google Sheets ===
+@st.cache_resource
+def conectar_planilha():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+        "https://spreadsheets.google.com/feeds"
+    ]
+    credenciais = Credentials.from_service_account_file(CAMINHO_CREDENCIAL, scopes=scopes)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
 
-# Clientes únicos na base de dados
-clientes_base = sorted(df_base["Cliente"].dropna().unique())
+# === Carregar dados ===
+def carregar_clientes_base():
+    aba = planilha.worksheet(ABA_DADOS)
+    df = get_as_dataframe(aba)
+    df = df.dropna(subset=["Cliente"])
+    clientes_base = sorted(df["Cliente"].astype(str).str.strip().unique().tolist())
+    return clientes_base
 
-# Clientes já existentes na aba clientes_status
-clientes_status = sorted(df_status["Cliente"].dropna().unique())
+def carregar_clientes_status():
+    aba = planilha.worksheet(ABA_CLIENTES)
+    df = get_as_dataframe(aba)
+    df = df.dropna(subset=["Cliente"])
+    clientes_status = df["Cliente"].astype(str).str.strip().tolist()
+    return df, clientes_status
 
-# Identificar novos clientes ainda não cadastrados
-clientes_novos = sorted(set(clientes_base) - set(clientes_status))
+# === Execução ===
+planilha = conectar_planilha()
+clientes_base = carregar_clientes_base()
+df_status, clientes_status = carregar_clientes_status()
 
-st.success(f"{len(clientes_novos)} novos clientes encontrados:")
+faltando = sorted([c for c in clientes_base if c not in clientes_status])
 
-# Quebra em grupos de 100
-for i in range(0, len(clientes_novos), 100):
-    st.markdown(f"<details><summary>[ {i} – {min(i+100, len(clientes_novos))} ]</summary><p>", unsafe_allow_html=True)
-    for cliente in clientes_novos[i:i+100]:
-        st.text(cliente)
-    st.markdown("</p></details>", unsafe_allow_html=True)
+st.subheader("📋 Clientes faltando em 'clientes_status'")
+st.write(f"Total de clientes na base de dados: {len(clientes_base)}")
+st.write(f"Total de clientes já na 'clientes_status': {len(clientes_status)}")
+st.write(f"Total de novos clientes a adicionar: {len(faltando)}")
 
-# Botão para atualizar a planilha diretamente
-st.warning("⚠️ Atualização automática da planilha requer permissão de escrita (gspread).")
+if faltando:
+    st.dataframe(pd.DataFrame({"Cliente": faltando}), use_container_width=True)
 
-# Upload do arquivo de credenciais
-arquivo_credenciais = st.file_uploader("📄 Envie seu arquivo `credenciais.json` para autenticar com o Google", type="json")
-
-if arquivo_credenciais is not None:
-    try:
-        # Autenticar com as credenciais
-        credentials = Credentials.from_service_account_info(
-            info=pd.read_json(arquivo_credenciais, typ='series').to_dict(),
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-
-        client = gspread.authorize(credentials)
-        sheet = client.open_by_key("1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE")
-        aba = sheet.worksheet("clientes_status")
-
-        # Inserir novos clientes na próxima linha
-        valores_novos = [[nome] for nome in clientes_novos]
-        aba.append_rows(valores_novos, value_input_option="RAW")
-
-        st.success("✅ Planilha atualizada com sucesso!")
-    except Exception as e:
-        st.error(f"Erro ao autenticar ou atualizar a planilha: {e}")
+    if st.button("✅ Adicionar clientes faltantes"):
+        aba = planilha.worksheet(ABA_CLIENTES)
+        df_atualizado = pd.concat([df_status, pd.DataFrame({"Cliente": faltando})], ignore_index=True)
+        df_atualizado = df_atualizado.drop_duplicates(subset=["Cliente"])
+        set_with_dataframe(aba, df_atualizado)
+        st.success("Clientes adicionados com sucesso à aba 'clientes_status'!")
 else:
-    st.info("Copie e cole manualmente os nomes abaixo na aba 'clientes_status', ou envie o arquivo de credenciais acima para automatizar.")
+    st.success("Todos os clientes já estão cadastrados na aba 'clientes_status'.")
