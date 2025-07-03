@@ -49,6 +49,13 @@ def upload_imagem_drive(caminho_arquivo, nome_cliente):
         media = MediaFileUpload(caminho_arquivo, resumable=True)
         arquivo = servico.files().create(body=metadata, media_body=media, fields="id").execute()
 
+        # Torna o arquivo público
+        permissao = {
+            "type": "anyone",
+            "role": "reader"
+        }
+        servico.permissions().create(fileId=arquivo["id"], body=permissao).execute()
+
         return True, arquivo.get("id")
 
     except Exception as e:
@@ -58,7 +65,7 @@ def upload_imagem_drive(caminho_arquivo, nome_cliente):
 clientes = carregar_lista_clientes()
 cliente_selecionado = st.selectbox("Selecione o cliente:", clientes)
 
-# Mostrar imagem existente do cliente, se houver
+# Mostrar imagem existente do cliente
 if cliente_selecionado:
     try:
         escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -75,14 +82,14 @@ if cliente_selecionado:
             if linha.get("Cliente") == cliente_selecionado:
                 link_foto = linha.get("Foto")
                 if link_foto:
-                    st.image(link_foto, caption=f"Foto de {cliente_selecionado}", use_column_width=False)
+                    st.image(link_foto, caption=f"Foto de {cliente_selecionado}", use_container_width=False)
                 else:
                     st.info("Nenhuma imagem cadastrada para este cliente.")
                 break
     except Exception as e:
         st.warning(f"Erro ao buscar imagem: {e}")
 
-# Upload da nova imagem
+# Upload da imagem
 arquivo = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
 if st.button("💾 Enviar imagem"):
