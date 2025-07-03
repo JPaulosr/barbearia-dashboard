@@ -1,2 +1,3 @@
-# Ignorar credenciais
+# Ignorar arquivos de credenciais
+barbearia-dashboard-*.json
 *.json
