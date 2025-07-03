@@ -64,6 +64,10 @@ try:
     df_foto = df[df["Cliente"] == cliente]
     url_foto = df_foto["Foto_URL"].dropna().unique()
     if len(url_foto) > 0:
-        st.image(url_foto[0], width=150, caption=f"Foto de {cliente}")
+        link = url_foto[0]
+        if "drive.google.com" in link and "/file/d/" in link:
+            file_id = link.split("/file/d/")[1].split("/")[0]
+            link = f"https://drive.google.com/uc?id={file_id}"
+        st.image(link, width=150, caption=f"Foto de {cliente}")
 except Exception as e:
     st.warning(f"Erro ao carregar foto: {e}")
