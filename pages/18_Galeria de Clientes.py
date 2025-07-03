@@ -12,7 +12,7 @@ st.title("🖼️ Galeria de Clientes")
 # Função para carregar os dados da planilha
 def carregar_dados():
     try:
-        escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        escopos = ["https://www.googleapis.com/auth/spreadsheets"]
         credenciais = Credentials.from_service_account_info(
             st.secrets["GCP_SERVICE_ACCOUNT"],
             scopes=escopos
@@ -21,13 +21,13 @@ def carregar_dados():
         planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"]["url"])
         aba = planilha.worksheet("clientes_status")
         dados = aba.get_all_records()
-        return pd.DataFrame(dados)
+        return pd.DataFrame(dados), aba
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
 # Carregar dados da planilha
-df = carregar_dados()
+df, aba_clientes = carregar_dados()
 
 if df.empty or "Foto" not in df.columns:
     st.info("Nenhuma imagem encontrada.")
@@ -44,14 +44,31 @@ else:
     if fotos_validas.empty:
         st.warning("Nenhuma imagem disponível para esse filtro.")
     else:
-        # Layout em colunas (3 por linha)
         cols = st.columns(3)
-        for i, (_, row) in enumerate(fotos_validas.iterrows()):
-            try:
-                response = requests.get(row["Foto"])
-                img = Image.open(BytesIO(response.content))
-                with cols[i % 3]:
+        for i, (idx, row) in enumerate(fotos_validas.iterrows()):
+            with cols[i % 3]:
+                try:
+                    response = requests.get(row["Foto"])
+                    img = Image.open(BytesIO(response.content))
                     st.image(img, caption=row["Cliente"], use_container_width=True)
-            except:
-                with cols[i % 3]:
+                except:
                     st.error(f"Erro ao carregar imagem de {row['Cliente']}")
+                    continue
+
+                # Ações
+                with st.expander(f"🛠 Ações para {row['Cliente']}"):
+                    if st.button(f"❌ Excluir imagem - {idx}", key=f"excluir_{idx}"):
+                        # Atualizar planilha e remover o link da imagem
+                        cell = aba_clientes.find(str(row["Cliente"]))
+                        if cell:
+                            col_foto = df.columns.get_loc("Foto") + 1
+                            aba_clientes.update_cell(cell.row, col_foto, "")
+                            st.success("Imagem excluída. Recarregue a página para atualizar.")
+
+                    nova_foto = st.text_input(f"🔁 Substituir link da imagem - {row['Cliente']}", key=f"edit_{idx}")
+                    if nova_foto:
+                        cell = aba_clientes.find(str(row["Cliente"]))
+                        if cell:
+                            col_foto = df.columns.get_loc("Foto") + 1
+                            aba_clientes.update_cell(cell.row, col_foto, nova_foto)
+                            st.success("Imagem substituída. Recarregue a página para atualizar.")
