@@ -4,57 +4,39 @@ from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
 import io
 import gspread
+from gspread_dataframe import get_as_dataframe
 import pandas as pd
 
 st.set_page_config(page_title="Upload de Imagem", layout="wide")
 st.title("📸 Upload de Imagem do Cliente")
 
+# === CONFIGURAÇÃO ===
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-PLANILHA_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 
+# Conecta com o Google Drive
 @st.cache_resource
-def conectar_credenciais():
+def conectar_drive():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    scopes = [
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=scopes)
+    service = build("drive", "v3", credentials=credenciais)
+    return service
+
+# Atualiza o link da imagem no Google Sheets e insere o cliente se ele não existir
+def atualizar_link_na_planilha(nome_cliente, link):
+    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+    aba_nome = "clientes_status"
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets"
     ]
-    return Credentials.from_service_account_info(info, scopes=scopes)
-
-def corrigir_cabecalho(gc):
-    aba = gc.open_by_key(PLANILHA_ID).worksheet("clientes_status")
-    valores = aba.get_all_values()
-    if valores[0][0].strip().lower() != "cliente":
-        aba.delete_rows(1)
-        novo_cabecalho = ["Cliente", "Telefone", "Status", "Foto_URL"]
-        aba.insert_row(novo_cabecalho, 1)
-        st.warning("⚠️ Cabeçalho da aba 'clientes_status' foi corrigido.")
-
-def carregar_lista_clientes():
-    creds = conectar_credenciais()
-    gc = gspread.authorize(creds)
-    corrigir_cabecalho(gc)
-
-    planilha = gc.open_by_key(PLANILHA_ID)
-
-    # Carrega de ambas as abas
-    aba1 = planilha.worksheet("clientes_status")
-    df1 = pd.DataFrame(aba1.get_all_records())
-    nomes1 = df1["Cliente"].dropna().astype(str).str.strip()
-
-    aba2 = planilha.worksheet("Base de Dados")
-    df2 = pd.DataFrame(aba2.get_all_records())
-    nomes2 = df2["Cliente"].dropna().astype(str).str.strip()
-
-    todos_nomes = pd.concat([nomes1, nomes2]).drop_duplicates().sort_values()
-    return todos_nomes.tolist()
-
-def atualizar_link_na_planilha(nome_cliente, link):
-    creds = conectar_credenciais()
-    gc = gspread.authorize(creds)
-    aba = gc.open_by_key(PLANILHA_ID).worksheet("clientes_status")
-    df = pd.DataFrame(aba.get_all_records())
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    gc = gspread.authorize(credenciais)
+    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
+    dados = aba.get_all_records()
+    df = pd.DataFrame(dados)
 
     if "Foto_URL" not in df.columns:
         df["Foto_URL"] = ""
@@ -65,34 +47,62 @@ def atualizar_link_na_planilha(nome_cliente, link):
 
     if idx:
         aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
+        st.success("✅ Imagem enviada com sucesso e planilha atualizada!")
     else:
-        st.warning(f"Cliente '{nome_cliente}' não está na aba 'clientes_status'. Nenhuma célula foi atualizada.")
+        nova_linha = [nome_cliente.strip(), "", "", link]
+        aba.append_row(nova_linha)
+        st.warning(f"⚠️ Cliente '{nome_cliente}' não estava na planilha e foi adicionado automaticamente.")
+        st.success("✅ Imagem enviada com sucesso e planilha atualizada!")
 
+# === Carrega lista de clientes para autocomplete ===
+def carregar_lista_clientes():
+    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+    aba_nome = "clientes_status"
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+    ]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    gc = gspread.authorize(credenciais)
+    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
+    dados = aba.get_all_records()
+    df = pd.DataFrame(dados)
+    return sorted(df["Cliente"].dropna().unique().tolist())
+
+lista_clientes = carregar_lista_clientes()
+
+# Upload da imagem
 uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
+nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes + ["-- Nome não está na lista --"])
+nome_manual = ""
 
-try:
-    lista_clientes = carregar_lista_clientes()
-except Exception as e:
-    st.error(f"Erro ao carregar clientes: {e}")
-    st.stop()
+if nome_cliente == "-- Nome não está na lista --":
+    nome_manual = st.text_input("Digite manualmente o nome do cliente")
+    nome_final = nome_manual.strip()
+else:
+    nome_final = nome_cliente.strip()
 
-nome_cliente = st.selectbox("🧍 Nome do Cliente", options=lista_clientes)
-drive_service = build("drive", "v3", credentials=conectar_credenciais())
+drive_service = conectar_drive()
 
-if uploaded_file and nome_cliente:
+if uploaded_file and nome_final:
     st.image(uploaded_file, caption="Pré-visualização", width=200)
     if st.button("Salvar imagem no Google Drive e atualizar planilha", type="primary"):
         try:
-            nome_arquivo = f"{nome_cliente.lower().replace(' ', '_')}.jpg"
+            nome_arquivo = f"{nome_final.lower().replace(' ', '_')}.jpg"
             img_bytes = io.BytesIO(uploaded_file.getvalue())
             media = MediaIoBaseUpload(img_bytes, mimetype="image/jpeg", resumable=False)
-            file_metadata = {"name": nome_arquivo, "parents": [PASTA_ID]}
+            file_metadata = {
+                "name": nome_arquivo,
+                "parents": [PASTA_ID]
+            }
             file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-            url = f"https://drive.google.com/uc?id={file.get('id')}"
-            atualizar_link_na_planilha(nome_cliente, url)
-            st.success("✅ Imagem enviada com sucesso e planilha atualizada!")
+            file_id = file.get("id")
+            url = f"https://drive.google.com/uc?id={file_id}"
+            atualizar_link_na_planilha(nome_final, url)
             st.markdown(f"[🔗 Ver imagem no Drive]({url})")
         except Exception as e:
             st.error(f"Erro ao enviar: {e}")
 else:
-    st.info("Envie uma imagem e selecione o cliente para continuar.")
+    st.info("Envie uma imagem e selecione (ou digite) o nome do cliente para continuar.")
