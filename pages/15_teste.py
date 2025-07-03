@@ -110,11 +110,11 @@ if st.button("💾 Enviar imagem"):
             st.markdown("### 🔍 DEBUG")
             st.write(f"- Sucesso no upload: {sucesso}")
             st.write(f"- ID retornado do Drive: {resposta}")
-            st.write(f"- URL montada: https://drive.google.com/uc?id={resposta}")
+            st.write(f"- URL montada: https://drive.google.com/uc?export=view&id={resposta}")
 
             if sucesso:
                 try:
-                    link_imagem = f"https://drive.google.com/uc?id={resposta}"
+                    link_imagem = f"https://drive.google.com/uc?export=view&id={resposta}"
 
                     escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
                     credenciais = Credentials.from_service_account_info(
