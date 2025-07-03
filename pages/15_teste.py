@@ -41,21 +41,37 @@ def atualizar_link_na_planilha(nome_cliente, link):
     if "Foto_URL" not in df.columns:
         df["Foto_URL"] = ""
 
-    nome_input = nome_cliente.strip().lower()
     df["cliente_formatado"] = df["Cliente"].astype(str).str.strip().str.lower()
-
+    nome_input = nome_cliente.strip().lower()
     idx = df.index[df["cliente_formatado"] == nome_input].tolist()
 
     if idx:
         aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
     else:
         st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha. Verifique o nome.")
-        st.write("Clientes disponíveis:")
-        st.dataframe(df[["Cliente"]])
+
+# === Carrega lista de clientes para autocomplete ===
+def carregar_lista_clientes():
+    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+    aba_nome = "clientes_status"
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+    ]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    gc = gspread.authorize(credenciais)
+    aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
+    dados = aba.get_all_records()
+    df = pd.DataFrame(dados)
+    return sorted(df["Cliente"].dropna().unique().tolist())
+
+lista_clientes = carregar_lista_clientes()
 
 # Upload da imagem
 uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
-nome_cliente = st.text_input("🧍 Nome do Cliente (para nomear o arquivo)")
+nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes)
 
 drive_service = conectar_drive()
 
@@ -86,4 +102,4 @@ if uploaded_file and nome_cliente:
         else:
             st.warning("A imagem já foi enviada. Atualize a página se quiser reenviar.")
 else:
-    st.info("Envie uma imagem e preencha o nome do cliente para continuar.")
+    st.info("Envie uma imagem e selecione o nome do cliente para continuar.")
