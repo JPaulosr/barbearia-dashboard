@@ -4,27 +4,34 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 import datetime
-import requests
+import io
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
+# === CONFIGURAÇÕES ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
+PASTA_ID_DRIVE = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 
+# === AUTENTICAÇÃO GOOGLE ===
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    escopo = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(SHEET_ID)
+    return cliente.open_by_key(SHEET_ID), credenciais
 
 @st.cache_data
 def carregar_dados():
-    planilha = conectar_sheets()
+    planilha, _ = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
@@ -55,7 +62,6 @@ def carregar_dados():
     return df
 
 df = carregar_dados()
-
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
@@ -78,32 +84,40 @@ try:
 except Exception as e:
     st.warning(f"Erro ao carregar foto: {e}")
 
-# === UPLOAD DE IMAGEM ===
-with st.expander("📤 Enviar nova foto do cliente"):
-    uploaded = st.file_uploader("Escolha uma imagem", type=["jpg", "png", "jpeg"])
+# === UPLOAD PARA GOOGLE DRIVE ===
+with st.expander("📤 Enviar nova foto do cliente para o Google Drive"):
+    uploaded = st.file_uploader("Escolha uma imagem", type=["jpg", "jpeg", "png"])
     if uploaded:
         st.image(uploaded, width=200)
-        if st.button("Salvar imagem no Imgur e atualizar planilha"):
-            client_id = st.secrets["IMGUR"]["client_id"]
-            headers = {"Authorization": f"Client-ID {client_id}"}
-            files = {"image": uploaded.getvalue()}
-            response = requests.post("https://api.imgur.com/3/image", headers=headers, files=files)
+        if st.button("Salvar imagem no Google Drive e atualizar planilha"):
+            _, creds = conectar_sheets()
+            service = build("drive", "v3", credentials=creds)
 
-            if response.status_code == 200:
-                img_url = response.json()["data"]["link"]
-                st.success("Imagem enviada com sucesso!")
-                st.write("Link gerado:", img_url)
+            media = MediaIoBaseUpload(uploaded, mimetype=uploaded.type, resumable=True)
+            nome_arquivo = f"{cliente}.jpg"
 
-                # Atualizar a planilha com novo link
-                planilha = conectar_sheets()
-                aba = planilha.worksheet(BASE_ABA)
-                registros = aba.get_all_records()
-                for i, row in enumerate(registros):
-                    if row.get("Cliente", "").strip().lower() == cliente.strip().lower():
-                        aba.update_cell(i + 2, 14, img_url)  # Coluna N (14ª)
-                        st.success("Planilha atualizada com a nova imagem.")
-                        break
-            else:
-                st.error("Erro ao enviar imagem para o Imgur.")
+            file_metadata = {
+                "name": nome_arquivo,
+                "parents": [PASTA_ID_DRIVE]
+            }
 
-# (continua normalmente com o restante do seu código abaixo)
+            arquivo = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id"
+            ).execute()
+
+            file_id = arquivo.get("id")
+            link_final = f"https://drive.google.com/uc?id={file_id}"
+            st.success("✅ Imagem enviada com sucesso!")
+            st.write("🔗 Link da imagem:", link_final)
+
+            # Atualizar planilha
+            planilha, _ = conectar_sheets()
+            aba = planilha.worksheet(BASE_ABA)
+            registros = aba.get_all_records()
+            for i, row in enumerate(registros):
+                if row.get("Cliente", "").strip().lower() == cliente.strip().lower():
+                    aba.update_cell(i + 2, 14, link_final)  # coluna N = 14
+                    st.success("📄 Planilha atualizada com novo link da imagem.")
+                    break
