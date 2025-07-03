@@ -96,13 +96,18 @@ cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_di
 
 # === FOTO DO CLIENTE ===
 try:
-    df_foto = df[df["Cliente"] == cliente]
-    url_foto = df_foto["Foto_URL"].dropna().unique()
-    if len(url_foto) > 0:
-        link = url_foto[0]
-        if "drive.google.com" in link and "/file/d/" in link:
-            file_id = link.split("/file/d/")[1].split("/")[0]
-            link = f"https://drive.google.com/uc?id={file_id}"
-        st.image(link, width=150, caption=f"Foto de {cliente}")
+    if "Foto_URL" in df.columns:
+        df_foto = df[df["Cliente"] == cliente]
+        url_foto = df_foto["Foto_URL"].dropna().unique()
+        if len(url_foto) > 0:
+            link = url_foto[0]
+            if "drive.google.com" in link and "/file/d/" in link:
+                file_id = link.split("/file/d/")[1].split("/")[0]
+                link = f"https://drive.google.com/uc?id={file_id}"
+            st.image(link, width=150, caption=f"Foto de {cliente}")
+        else:
+            st.info(f"ℹ️ Nenhuma imagem cadastrada para **{cliente}**.")
+    else:
+        st.info("ℹ️ A coluna 'Foto_URL' ainda não existe na planilha.")
 except Exception as e:
     st.warning(f"Erro ao carregar foto: {e}")
