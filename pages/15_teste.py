@@ -37,11 +37,21 @@ def atualizar_link_na_planilha(nome_cliente, link):
     aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
     dados = aba.get_all_records()
     df = pd.DataFrame(dados)
+
     if "Foto_URL" not in df.columns:
         df["Foto_URL"] = ""
-    idx = df.index[df["Cliente"] == nome_cliente].tolist()
+
+    nome_input = nome_cliente.strip().lower()
+    df["cliente_formatado"] = df["Cliente"].astype(str).str.strip().str.lower()
+
+    idx = df.index[df["cliente_formatado"] == nome_input].tolist()
+
     if idx:
         aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
+    else:
+        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha. Verifique o nome.")
+        st.write("Clientes disponíveis:")
+        st.dataframe(df[["Cliente"]])
 
 # Upload da imagem
 uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
