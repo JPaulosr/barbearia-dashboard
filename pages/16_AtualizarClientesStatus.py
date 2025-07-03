@@ -2,36 +2,41 @@ import streamlit as st
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2.service_account import Credentials
-import io
 import gspread
 from gspread_dataframe import get_as_dataframe
 import pandas as pd
+import io
+import json
 
 st.set_page_config(page_title="Upload de Imagem", layout="wide")
 st.title("📸 Upload de Imagem do Cliente")
 
-# === CONFIGURAÇÃO ===
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-CAMINHO_CREDENCIAL = "barbearia-dashboard-04c0ce9b53d4.json"  # Seu arquivo local
 
-# === CONECTAR AO GOOGLE DRIVE ===
+# === CREDENCIAIS DO SECRETS ===
+@st.cache_resource
+def carregar_credenciais():
+    infos = st.secrets["GCP_SERVICE_ACCOUNT"]
+    return Credentials.from_service_account_info(infos)
+
+# === CONECTAR AO DRIVE ===
 @st.cache_resource
 def conectar_drive():
     scopes = ["https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_file(CAMINHO_CREDENCIAL, scopes=scopes)
+    credenciais = carregar_credenciais().with_scopes(scopes)
     service = build("drive", "v3", credentials=credenciais)
     return service
 
 # === ATUALIZAR O LINK NA PLANILHA ===
 def atualizar_link_na_planilha(nome_cliente, link):
-    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+    planilha_id = st.secrets["PLANILHA_URL"]["url"].split("/")[5]
     aba_nome = "clientes_status"
     scopes = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
         "https://www.googleapis.com/auth/spreadsheets"
     ]
-    credenciais = Credentials.from_service_account_file(CAMINHO_CREDENCIAL, scopes=scopes)
+    credenciais = carregar_credenciais().with_scopes(scopes)
     gc = gspread.authorize(credenciais)
     aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
     dados = aba.get_all_records()
@@ -47,25 +52,23 @@ def atualizar_link_na_planilha(nome_cliente, link):
     if idx:
         aba.update_cell(idx[0] + 2, df.columns.get_loc("Foto_URL") + 1, link)
     else:
-        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha. Verifique o nome.")
+        st.error(f"❌ Cliente '{nome_cliente}' não encontrado na planilha.")
 
-# === CARREGAR LISTA DE CLIENTES DA BASE DE DADOS ===
+# === CARREGAR NOMES DE CLIENTES ===
 def carregar_lista_clientes():
-    planilha_id = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+    planilha_id = st.secrets["PLANILHA_URL"]["url"].split("/")[5]
     aba_nome = "Base de Dados"
     scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets"]
-    credenciais = Credentials.from_service_account_file(CAMINHO_CREDENCIAL, scopes=scopes)
+    credenciais = carregar_credenciais().with_scopes(scopes)
     gc = gspread.authorize(credenciais)
     aba = gc.open_by_key(planilha_id).worksheet(aba_nome)
     df = get_as_dataframe(aba).dropna(how="all")
     return sorted(df["Cliente"].dropna().unique().tolist())
 
+# === INTERFACE ===
 lista_clientes = carregar_lista_clientes()
-
-# === UPLOAD DE IMAGEM ===
 uploaded_file = st.file_uploader("📤 Envie a imagem do cliente", type=["jpg", "jpeg", "png"])
 nome_cliente = st.selectbox("🧍 Nome do Cliente (para nomear o arquivo)", options=lista_clientes)
-
 drive_service = conectar_drive()
 
 if uploaded_file and nome_cliente:
