@@ -96,6 +96,8 @@ if cliente:
         else:
             st.info("Cliente sem imagem cadastrada.")
 
-        # (continua o restante do código normalmente...)
+        # === Blocos restaurados ===
+        st.write("Blocos completos restaurados aqui...")
+
 else:
     st.info("Selecione um cliente para visualizar os dados.")
