@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "barbearia-dashboard",
+  "private_key_id": "779252f5052c33355fbf8440e836f94590f7c82b",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCleAuDdKnnf2IL\nFJhiDEOhZNYzf6F4YisQyC0OSApmn/GLGhe1qAx8+9SBXmeC1Kw5v4+eCprBk3Ke\nSp9gqfYKlcXm12wqtrEhH+JJSTVEBz6j/QvCArBuq0WdOxG92rwFEhB/W+ei9YsR\nVEygNcE84Bo2oQnwTgcoEZ9zK85Twwavrq7FraAvgkKDWirtFOdHTojPMDEaI7mc\nZhKpGY/qIIaSbD5Kl2Xw376P+yEVovzw4+CU4d9zlKm0xOsvmWKNeDmC/3ONLAGS\nnHuTNb0JF66AtL/tJ3qflLITYp/FAIyU4Q1HXmoGqkWKCmiSFmgitSRoS7Gic5Dk\n3uO5LV5jAgMBAAECggEAJ7bPwJ3UF6llrTYkusepxcdPd+3Gof+hyXXaBob45Be4\nYAQDs8hhMvA4WVKAspB7w6J8BFkUOqi6hk5vwUIZuQGojZafsgLGMaaW57MH80tv\n1+kolMiTcwRtgWbHg9NHdEoZJpA24NBhL+gVOhCc0BETiZAONBxuMEpGhFx7uXN/\nTXN1sI70CgKVbmm6FGhP/u8uN/0x+r39uS579oty/FcX14XwSzvXvH/jgBzajDjK\nIQelTXuNVLJQZvHfaXmwvc2exltZcsGw8SoWWiwfDRPiszoKEmQb1gyAe2cPZp1o\nBlj7OKgnsKmnMTxfCx8mHlU/jYoxxQ/ST/8sORQYxQKBgQDQqG3XA/JHGAjkCbuV\n/9BEnjulBxumvvz+Ro6vNK5PzU0ekUM73uUXgkMPeyB14XqkYC/VXyyf3UASiREw\nyo7/IdP38B1LSC8iygRcq3kIePxHLMCCvzPtCzKlK8U4XzWVXf+aP/vXtw5DaCy3\nl2uLKUdqi0oxoU9GfZz5S8hmZQKBgQDLAwzPEMclWoSAkD1F0bt4UQ4NtjQQ4RzQ\nCNUEoqAi1DJYKrsCOPsdHvWcgNvDxRUUH3870D4wx+sgPF8ZgleihPOlIys0DyGL\nBp5L/9t6Xi0IgdBEGw+l/WKBb7cSsNUiqCGWrWTDVa6+TrHh2G31KNUIzzNUWa9r\nusxO0xvhJwKBgFXvOCWYs3yCMo8wTviM/cp03J2v2ryG5g0XJAaWjL/DDuLq8qTC\nvNk8xb+ndwv1jBwMnUakRu2kIpI/rzvIALKkzPbNBlON7BPI3ZkI6fUKVuQ9Ux/F\n/W2/8eDCsRvxYlEdAHsXpPIHqzEpw1jtXNZYbtg7e5gLFmoyq6akhmldAoGAVlNp\nsvNTe5LOHU04gOP6b+MnsrTz1umisuPOkTYGGklZTxx8gSlxvqRXlMFGsiywFep+\n1BRtHZklZoPFfLdsRHN8l5Ao4u48OT4LOg4GajZ5t9Bbm1pWgSMKLDgxBQWk3CPa\nhJQe8OESeWJFSeAagdFnJWPWU9v/ODQqhKpIhKkCgYBnFm1UUAV1dktVf8kZ/RKI\nfdfltrDBACrxeSdYT4Y3cxfkUplBskWEXa6UFQ87RCodXfE7mr95H3W0JgyPfSE9\nQhOX++O7uoaaDxGy4Fc2hBpBCmb7MezGWSoUzw0ptBUZg3uGQcifaC4HiefbqdiR\nWk5lMZ3Za1QojBf/YRWZmw==\n-----END PRIVATE KEY-----\n",
+  "client_email": "streamlit-barbearia@barbearia-dashboard.iam.gserviceaccount.com",
+  "client_id": "112255251924595239270",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/streamlit-barbearia%40barbearia-dashboard.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
