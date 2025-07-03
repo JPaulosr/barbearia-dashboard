@@ -5,6 +5,9 @@ import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 import datetime
+import requests
+from PIL import Image
+from io import BytesIO
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
@@ -55,11 +58,34 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# === 🔍 Filtro e Comparativo ===
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
+# === Mostrar miniatura da imagem do cliente ===
+def buscar_link_foto(nome):
+    try:
+        planilha = conectar_sheets()
+        aba_status = planilha.worksheet("clientes_status")
+        df_status = get_as_dataframe(aba_status).dropna(how="all")
+        df_status.columns = [str(col).strip() for col in df_status.columns]
+        foto = df_status[df_status["Cliente"] == nome]["Foto"].dropna().values
+        return foto[0] if len(foto) > 0 else None
+    except:
+        return None
+
+link_foto = buscar_link_foto(cliente)
+if link_foto:
+    try:
+        response = requests.get(link_foto)
+        img = Image.open(BytesIO(response.content))
+        st.image(img, caption=f"{cliente}", width=200)
+    except:
+        st.warning("Erro ao carregar imagem do cliente.")
+else:
+    st.info("Cliente sem imagem cadastrada.")
+
+# === Comparativo entre Clientes ===
 with st.expander("🧪 Comparativo entre Clientes", expanded=False):
     col_c1, col_c2 = st.columns(2)
     cliente_1 = col_c1.selectbox("Cliente 1", clientes_disponiveis, key="c1")
@@ -82,7 +108,7 @@ with st.expander("🧪 Comparativo entre Clientes", expanded=False):
     df_comp = pd.DataFrame([indicadores(cliente_1), indicadores(cliente_2)])
     st.dataframe(df_comp, use_container_width=True)
 
-# === 📊 Análises Detalhadas do Cliente Selecionado ===
+# === Exibir todos os detalhes do cliente ===
 df_cliente = df[df["Cliente"] == cliente]
 
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
@@ -139,7 +165,6 @@ resumo_final = pd.DataFrame({
 })
 st.dataframe(resumo_final, use_container_width=True)
 
-# === 📈 Indicadores de Frequência e Perfil ===
 st.subheader("📈 Frequência de Atendimento")
 data_corte = pd.to_datetime("2025-05-11")
 df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
@@ -163,7 +188,6 @@ else:
     col3.metric("⏱️ Dias Desde Último", dias_desde_ultimo)
     col4.metric("📌 Status", status)
 
-    # === 💡 Insights Adicionais do Cliente ===
     st.subheader("💡 Insights Adicionais do Cliente")
 
     meses_ativos = df_cliente["Mês_Ano"].nunique()
