@@ -5,6 +5,7 @@ import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 import datetime
+import re
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
@@ -53,8 +54,42 @@ def carregar_dados():
 
     return df
 
-df = carregar_dados()
+# === CORRIGIR LINKS DA COLUNA Foto_URL ===
+def corrigir_links_foto_url():
+    planilha = conectar_sheets()
+    aba = planilha.worksheet(BASE_ABA)
+    coluna_foto_url = aba.col_values(14)
+    novos_links = []
+    alterados = 0
 
+    for url in coluna_foto_url:
+        if "drive.google.com" in url and "/file/d/" in url:
+            try:
+                file_id = re.search(r"/file/d/([a-zA-Z0-9_-]+)", url).group(1)
+                novo_url = f"https://drive.google.com/uc?id={file_id}"
+                novos_links.append(novo_url)
+                alterados += 1
+            except:
+                novos_links.append(url)
+        else:
+            novos_links.append(url)
+
+    # Atualiza a partir da célula N2 (ignora cabeçalho)
+    celulas = aba.range(f"N2:N{len(novos_links)+1}")
+    for i, cell in enumerate(celulas):
+        cell.value = novos_links[i]
+    aba.update_cells(celulas)
+
+    return alterados
+
+# === BOTÃO DE CORREÇÃO ===
+with st.expander("🛠️ Corrigir links da coluna Foto_URL"):
+    if st.button("🔄 Corrigir agora"):
+        total = corrigir_links_foto_url()
+        st.success(f"✅ {total} link(s) corrigido(s) com sucesso!")
+
+# === DADOS E SELEÇÃO ===
+df = carregar_dados()
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
