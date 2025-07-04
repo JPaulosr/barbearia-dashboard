@@ -122,8 +122,8 @@ col2.metric("🟢 Em dia", freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente
 col3.metric("🟠 Pouco atrasado", freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique())
 col4.metric("🔴 Muito atrasado", freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique())
 
-# === VISUAL COM COLUNAS E FOTO ===
-def mostrar_clientes_com_foto(df_input, titulo):
+# === NOVO LAYOUT — CARTÕES EM GRADE ===
+def exibir_clientes_em_galeria(df_input, titulo):
     st.markdown(titulo)
 
     nome_filtrado = st.text_input(f"🔍 Filtrar {titulo.replace('#', '').strip()} por nome", key=titulo).strip().lower()
@@ -134,25 +134,30 @@ def mostrar_clientes_com_foto(df_input, titulo):
         st.warning("Nenhum cliente encontrado com esse filtro.")
         return
 
-    for _, row in df_input.iterrows():
-        col1, col2, col3 = st.columns([1, 3, 6])
-        imagem = carregar_imagem(row["Imagem"])
-        if imagem:
-            col1.image(imagem, width=50)
-        else:
-            col1.markdown("📷❌")
-        col2.markdown(f"**{row['Cliente']}**")
-        col3.markdown(
-            f"Último: {row['Último Atendimento']} — "
-            f"{row['Qtd Atendimentos']} atendimentos — "
-            f"Freq: {row['Frequência Média (dias)']}d — "
-            f"{row['Dias Desde Último']} dias sem vir"
-        )
+    colunas = st.columns(3)
 
-# === EXIBIÇÃO FINAL ===
+    for idx, (_, row) in enumerate(df_input.iterrows()):
+        col = colunas[idx % 3]
+        with col:
+            st.markdown("----")
+            imagem = carregar_imagem(row["Imagem"])
+            if imagem:
+                st.image(imagem, width=80)
+            else:
+                st.markdown("📷❌")
+            st.markdown(f"**{row['Cliente']}**")
+            st.markdown(
+                f"🗓️ Último: {row['Último Atendimento']}  \n"
+                f"🔁 Freq: {row['Frequência Média (dias)']}d  \n"
+                f"⏳ {row['Dias Desde Último']} dias sem vir"
+            )
+
+# === EXIBIÇÃO FINAL COM NOVO LAYOUT ===
 st.divider()
-mostrar_clientes_com_foto(freq_df[freq_df["Status_Label"] == "Muito atrasado"], "## 🔴 Muito Atrasados")
+exibir_clientes_em_galeria(freq_df[freq_df["Status_Label"] == "Muito atrasado"], "## 🔴 Muito Atrasados")
+
 st.divider()
-mostrar_clientes_com_foto(freq_df[freq_df["Status_Label"] == "Pouco atrasado"], "## 🟠 Pouco Atrasados")
+exibir_clientes_em_galeria(freq_df[freq_df["Status_Label"] == "Pouco atrasado"], "## 🟠 Pouco Atrasados")
+
 st.divider()
-mostrar_clientes_com_foto(freq_df[freq_df["Status_Label"] == "Em dia"], "## 🟢 Em Dia")
+exibir_clientes_em_galeria(freq_df[freq_df["Status_Label"] == "Em dia"], "## 🟢 Em Dia")
