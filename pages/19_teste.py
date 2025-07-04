@@ -26,6 +26,18 @@ def carregar_imagem(link):
     except:
         return None
 
+def verificar_status_imagem(link):
+    if not link:
+        return "❌ Vazio"
+    try:
+        response = requests.get(link)
+        if response.status_code == 200:
+            return "✅ OK"
+        else:
+            return f"⚠️ {response.status_code}"
+    except:
+        return "❌ Erro"
+
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -218,3 +230,10 @@ with st.expander("📊 Ver gráfico"):
         xaxis_title="Cliente"
     )
     st.plotly_chart(fig2, use_container_width=True)
+
+# === DIAGNÓSTICO DE IMAGENS ===
+st.divider()
+st.subheader("📷 Diagnóstico de Imagens dos Clientes")
+diagnostico = freq_df[["Cliente", "Imagem"]].drop_duplicates().copy()
+diagnostico["Status da Imagem"] = diagnostico["Imagem"].apply(verificar_status_imagem)
+st.dataframe(diagnostico, use_container_width=True)
