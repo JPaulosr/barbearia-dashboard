@@ -74,12 +74,12 @@ def carregar_status():
         status = get_as_dataframe(aba_status).dropna(how="all")
         status.columns = [str(col).strip() for col in status.columns]
 
-        # Diagnóstico e ajuste de coluna de imagem
+        # Identifica dinamicamente a coluna da imagem
         colunas = status.columns.tolist()
-        if "LinkImagem" in colunas:
-            status = status.rename(columns={"LinkImagem": "Imagem"})
-        elif "Imagem cliente" in colunas:
-            status = status.rename(columns={"Imagem cliente": "Imagem"})
+        coluna_imagem = next((col for col in colunas if col.strip().lower() in ["linkimagem", "imagem cliente", "foto", "imagem"]), None)
+
+        if coluna_imagem:
+            status = status.rename(columns={coluna_imagem: "Imagem"})
         else:
             status["Imagem"] = ""
 
