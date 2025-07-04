@@ -8,6 +8,7 @@ from urllib.parse import quote
 from PIL import Image
 import requests
 from io import BytesIO
+import re
 
 st.set_page_config(layout="wide")
 st.title("\U0001F4C6 Frequência dos Clientes")
@@ -37,6 +38,15 @@ def verificar_status_imagem(link):
             return f"⚠️ {response.status_code}"
     except:
         return "❌ Erro"
+
+def padronizar_link(link):
+    if not isinstance(link, str) or link.strip() == "":
+        return ""
+    match = re.search(r"[-\w]{25,}", link)
+    if match:
+        file_id = match.group(0)
+        return f"https://drive.google.com/uc?export=view&id={file_id}"
+    return ""
 
 @st.cache_resource
 def conectar_sheets():
@@ -73,7 +83,7 @@ def carregar_status():
         else:
             status["Imagem"] = ""
 
-        status["Imagem"] = status["Imagem"].fillna("").str.replace("export=download", "export=view")
+        status["Imagem"] = status["Imagem"].fillna("").apply(padronizar_link)
         return status[["Cliente", "Status", "Imagem"]]
     except:
         return pd.DataFrame(columns=["Cliente", "Status", "Imagem"])
