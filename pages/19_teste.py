@@ -1,10 +1,8 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-from urllib.parse import quote
 from PIL import Image
 import requests
 from io import BytesIO
@@ -27,6 +25,14 @@ def padronizar_link(link):
         file_id = match.group(0)
         return f"https://drive.google.com/uc?export=view&id={file_id}"
     return ""
+
+def carregar_imagem(link):
+    try:
+        response = requests.get(link)
+        if response.status_code == 200:
+            return Image.open(BytesIO(response.content))
+    except:
+        return None
 
 @st.cache_resource
 def conectar_sheets():
@@ -116,8 +122,8 @@ col2.metric("🟢 Em dia", freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente
 col3.metric("🟠 Pouco atrasado", freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique())
 col4.metric("🔴 Muito atrasado", freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique())
 
-# === TABELA COM IMAGEM E FILTRO POR STATUS ===
-def gerar_tabela_com_imagens(df_input, titulo, cor_status="🔴"):
+# === VISUAL COM COLUNAS E FOTO ===
+def mostrar_clientes_com_foto(df_input, titulo):
     st.markdown(titulo)
 
     nome_filtrado = st.text_input(f"🔍 Filtrar {titulo.replace('#', '').strip()} por nome", key=titulo).strip().lower()
@@ -128,31 +134,25 @@ def gerar_tabela_com_imagens(df_input, titulo, cor_status="🔴"):
         st.warning("Nenhum cliente encontrado com esse filtro.")
         return
 
-    df_tabela = df_input.copy()
-    df_tabela["Foto"] = df_tabela["Imagem"].apply(
-        lambda x: f'<img src="{x}" width="40">' if isinstance(x, str) and x.startswith("http") else "📷❌"
-    )
+    for _, row in df_input.iterrows():
+        col1, col2, col3 = st.columns([1, 3, 6])
+        imagem = carregar_imagem(row["Imagem"])
+        if imagem:
+            col1.image(imagem, width=50)
+        else:
+            col1.markdown("📷❌")
+        col2.markdown(f"**{row['Cliente']}**")
+        col3.markdown(
+            f"Último: {row['Último Atendimento']} — "
+            f"{row['Qtd Atendimentos']} atendimentos — "
+            f"Freq: {row['Frequência Média (dias)']}d — "
+            f"{row['Dias Desde Último']} dias sem vir"
+        )
 
-    df_tabela["Cliente"] = df_tabela["Cliente"].apply(lambda x: f"<b>{x}</b>")
-    df_tabela = df_tabela[[
-        "Foto", "Cliente", "Último Atendimento", "Qtd Atendimentos",
-        "Frequência Média (dias)", "Dias Desde Último", "Status_Label"
-    ]].rename(columns={
-        "Foto": "Foto",
-        "Cliente": "Cliente",
-        "Último Atendimento": "Último",
-        "Qtd Atendimentos": "Atendimentos",
-        "Frequência Média (dias)": "Freq. Média",
-        "Dias Desde Último": "Ausência (dias)",
-        "Status_Label": "Status"
-    })
-
-    st.markdown(df_tabela.to_html(escape=False, index=False), unsafe_allow_html=True)
-
-# === EXIBIÇÃO DAS TABELAS COM FILTRO E FOTO ===
+# === EXIBIÇÃO FINAL ===
 st.divider()
-gerar_tabela_com_imagens(freq_df[freq_df["Status_Label"] == "Muito atrasado"], "## 🔴 Muito Atrasados")
+mostrar_clientes_com_foto(freq_df[freq_df["Status_Label"] == "Muito atrasado"], "## 🔴 Muito Atrasados")
 st.divider()
-gerar_tabela_com_imagens(freq_df[freq_df["Status_Label"] == "Pouco atrasado"], "## 🟠 Pouco Atrasados")
+mostrar_clientes_com_foto(freq_df[freq_df["Status_Label"] == "Pouco atrasado"], "## 🟠 Pouco Atrasados")
 st.divider()
-gerar_tabela_com_imagens(freq_df[freq_df["Status_Label"] == "Em dia"], "## 🟢 Em Dia")
+mostrar_clientes_com_foto(freq_df[freq_df["Status_Label"] == "Em dia"], "## 🟢 Em Dia")
