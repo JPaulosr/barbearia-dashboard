@@ -18,10 +18,6 @@ BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
 
 # === Funções auxiliares ===
-def gerar_link_imagem(nome_cliente):
-    nome_arquivo = quote(nome_cliente.strip().lower()) + ".jpg"
-    return f"https://drive.google.com/uc?export=view&id={nome_arquivo}"
-
 def carregar_imagem(link):
     try:
         response = requests.get(link)
@@ -55,9 +51,10 @@ def carregar_status():
         aba_status = planilha.worksheet(STATUS_ABA)
         status = get_as_dataframe(aba_status).dropna(how="all")
         status.columns = [str(col).strip() for col in status.columns]
-        return status[["Cliente", "Status"]]
+        status["Imagem"] = status["Imagem"].fillna("").str.replace("export=download", "export=view")
+        return status[["Cliente", "Status", "Imagem"]]
     except:
-        return pd.DataFrame(columns=["Cliente", "Status"])
+        return pd.DataFrame(columns=["Cliente", "Status", "Imagem"])
 
 # === PRÉ-PROCESSAMENTO ===
 df = carregar_dados()
@@ -94,11 +91,11 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
         "Qtd Atendimentos": len(datas),
         "Frequência Média (dias)": round(media_freq, 1),
         "Dias Desde Último": dias_desde_ultimo,
-        "Status_Label": status[1],
-        "Imagem": gerar_link_imagem(cliente)
+        "Status_Label": status[1]
     })
 
 freq_df = pd.DataFrame(frequencia_clientes)
+freq_df = freq_df.merge(df_status[["Cliente", "Imagem"]], on="Cliente", how="left")
 
 # === FILTRO POR TEXTO ===
 st.markdown("### 🎯 Filtro de Cliente")
