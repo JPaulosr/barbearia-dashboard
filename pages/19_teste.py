@@ -51,6 +51,16 @@ def carregar_status():
         aba_status = planilha.worksheet(STATUS_ABA)
         status = get_as_dataframe(aba_status).dropna(how="all")
         status.columns = [str(col).strip() for col in status.columns]
+
+        # Diagnóstico e ajuste de coluna de imagem
+        colunas = status.columns.tolist()
+        if "LinkImagem" in colunas:
+            status = status.rename(columns={"LinkImagem": "Imagem"})
+        elif "Imagem cliente" in colunas:
+            status = status.rename(columns={"Imagem cliente": "Imagem"})
+        else:
+            status["Imagem"] = ""
+
         status["Imagem"] = status["Imagem"].fillna("").str.replace("export=download", "export=view")
         return status[["Cliente", "Status", "Imagem"]]
     except:
