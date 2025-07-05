@@ -1,43 +1,45 @@
-import streamlit as st
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
+def atualizar_clientes():
+    base_dados, clientes_status = carregar_abas()
+    if base_dados is None or clientes_status is None:
+        return None
 
-st.set_page_config(page_title="Galeria de Clientes", layout="wide")
-st.title("🖼️ Galeria de Clientes")
+    # 🔹 Pega os dados da aba Base de Dados
+    dados = base_dados.get_all_records()
+    df = pd.DataFrame(dados)
 
-# Conexão segura com planilha
-@st.cache_data(show_spinner=False)
-def conectar_e_carregar():
-    escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_info(
-        st.secrets["GCP_SERVICE_ACCOUNT"],
-        scopes=escopos
-    )
-    cliente = gspread.authorize(credenciais)
-    url = st.secrets["PLANILHA_URL"]["url"]
-    planilha = cliente.open_by_url(url)
-    aba = planilha.worksheet("clientes_status")
-    dados = pd.DataFrame(aba.get_all_records())
-    return dados
+    if df.empty or "Cliente" not in df.columns:
+        st.warning("⚠️ Não foi possível encontrar clientes na base de dados.")
+        return None
 
-# Carrega e trata
-df = conectar_e_carregar()
-df["Cliente"] = df["Cliente"].astype(str).str.strip()
-df["Foto_URL"] = df["Foto_URL"].fillna("")
+    df["Cliente"] = df["Cliente"].astype(str).str.strip()
+    clientes_unicos = sorted(df["Cliente"].dropna().unique())
 
-# Filtro de nome
-nome_filtrado = st.text_input("🔍 Buscar cliente pelo nome").strip().lower()
-if nome_filtrado:
-    df = df[df["Cliente"].str.lower().str.contains(nome_filtrado)]
+    # 🔹 Lê a aba clientes_status atual
+    registros_atuais = clientes_status.get_all_records()
+    df_atual = pd.DataFrame(registros_atuais)
 
-# Layout da galeria
-cols = st.columns(4)
-for i, (idx, row) in enumerate(df.iterrows()):
-    col = cols[i % 4]
-    with col:
-        st.markdown(f"**{row['Cliente']}**")
-        if row["Foto_URL"]:
-            st.image(row["Foto_URL"], use_column_width=True)
-        else:
-            st.info("Sem imagem")
+    # Se ainda não existe nada na planilha
+    if df_atual.empty:
+        df_atual = pd.DataFrame(columns=["Cliente", "Status", "Foto_URL"])
+
+    # 🔹 Garante colunas obrigatórias
+    for coluna in ["Cliente", "Status", "Foto_URL"]:
+        if coluna not in df_atual.columns:
+            df_atual[coluna] = ""
+
+    # 🔹 Cria nova lista de clientes a partir da base e preserva dados existentes
+    df_novo = pd.DataFrame({"Cliente": clientes_unicos})
+    df_final = df_novo.merge(df_atual, on="Cliente", how="left")
+
+    # 🔹 Preenche valores vazios com string vazia
+    df_final["Status"] = df_final["Status"].fillna("")
+    df_final["Foto_URL"] = df_final["Foto_URL"].fillna("")
+
+    # 🔹 Reorganiza colunas
+    df_final = df_final[["Cliente", "Status", "Foto_URL"]]
+
+    # 🔹 Atualiza planilha
+    clientes_status.clear()
+    clientes_status.update([df_final.columns.tolist()] + df_final.values.tolist())
+
+    return df_final
