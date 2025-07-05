@@ -1,39 +1,43 @@
-def atualizar_clientes():
-    base_dados, clientes_status = carregar_abas()
-    if base_dados is None or clientes_status is None:
-        return None
+import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
-    # Carrega clientes únicos da base de dados
-    dados = base_dados.get_all_records()
-    df = pd.DataFrame(dados)
-    df["Cliente"] = df["Cliente"].astype(str).str.strip()
-    clientes_unicos = sorted(df["Cliente"].dropna().unique())
+st.set_page_config(page_title="Galeria de Clientes", layout="wide")
+st.title("🖼️ Galeria de Clientes")
 
-    # Carrega conteúdo atual da aba clientes_status
-    registros_atuais = clientes_status.get_all_records()
-    df_atual = pd.DataFrame(registros_atuais)
+# Conexão segura com planilha
+@st.cache_data(show_spinner=False)
+def conectar_e_carregar():
+    escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(
+        st.secrets["GCP_SERVICE_ACCOUNT"],
+        scopes=escopos
+    )
+    cliente = gspread.authorize(credenciais)
+    url = st.secrets["PLANILHA_URL"]["url"]
+    planilha = cliente.open_by_url(url)
+    aba = planilha.worksheet("clientes_status")
+    dados = pd.DataFrame(aba.get_all_records())
+    return dados
 
-    # Garante colunas mínimas
-    if "Cliente" not in df_atual.columns:
-        df_atual["Cliente"] = []
-    if "Status" not in df_atual.columns:
-        df_atual["Status"] = ""
-    if "Foto_URL" not in df_atual.columns:
-        df_atual["Foto_URL"] = ""
+# Carrega e trata
+df = conectar_e_carregar()
+df["Cliente"] = df["Cliente"].astype(str).str.strip()
+df["Foto_URL"] = df["Foto_URL"].fillna("")
 
-    # Junta com novos clientes, preservando status e foto já existentes
-    df_novo = pd.DataFrame({"Cliente": clientes_unicos})
-    df_final = df_novo.merge(df_atual, on="Cliente", how="left")
+# Filtro de nome
+nome_filtrado = st.text_input("🔍 Buscar cliente pelo nome").strip().lower()
+if nome_filtrado:
+    df = df[df["Cliente"].str.lower().str.contains(nome_filtrado)]
 
-    # Reorganiza colunas
-    colunas = ["Cliente", "Status", "Foto_URL"]
-    for col in colunas:
-        if col not in df_final.columns:
-            df_final[col] = ""
-
-    df_final = df_final[colunas]
-
-    # Atualiza aba com os novos dados
-    clientes_status.clear()
-    clientes_status.update([df_final.columns.tolist()] + df_final.values.tolist())
-    return df_final
+# Layout da galeria
+cols = st.columns(4)
+for i, (idx, row) in enumerate(df.iterrows()):
+    col = cols[i % 4]
+    with col:
+        st.markdown(f"**{row['Cliente']}**")
+        if row["Foto_URL"]:
+            st.image(row["Foto_URL"], use_column_width=True)
+        else:
+            st.info("Sem imagem")
