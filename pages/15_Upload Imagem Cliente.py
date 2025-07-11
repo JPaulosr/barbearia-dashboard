@@ -45,7 +45,7 @@ def autenticar_oauth_streamlit():
 
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        flow.redirect_uri = REDIRECT_URI  # ✅ Força explicitamente o redirect_uri
+        flow.redirect_uri = REDIRECT_URI
 
         auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
         st.markdown(f"### 🔐 [Clique aqui para autorizar o Google]({auth_url})", unsafe_allow_html=True)
@@ -53,7 +53,7 @@ def autenticar_oauth_streamlit():
 
         if auth_code:
             try:
-                flow.fetch_token(code=auth_code)  # ✅ Não repassa redirect_uri aqui
+                flow.fetch_token(code=auth_code)
                 creds = flow.credentials
                 with open(TOKEN_FILE, 'wb') as token:
                     pickle.dump(creds, token)
@@ -82,7 +82,12 @@ try:
     df_clientes = carregar_lista_clientes()
     col_cliente = [col for col in df_clientes.columns if col.lower() == "cliente"][0]
     nomes_clientes = df_clientes[col_cliente].dropna().sort_values().unique().tolist()
-    cliente = st.selectbox("Selecione o cliente:", nomes_clientes)
+    cliente = st.selectbox(
+        "Digite ou selecione o cliente:",
+        nomes_clientes,
+        index=None,
+        placeholder="Comece a digitar o nome do cliente..."
+    )
 except Exception as e:
     st.error(f"Erro ao carregar lista de clientes: {e}")
     st.stop()
@@ -136,30 +141,31 @@ def atualizar_link_na_planilha(cliente_nome, novo_link):
 # ========= UI =========
 uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
-imagem_atual = buscar_imagem_existente(cliente)
-if imagem_atual:
-    st.markdown("**Imagem atual do cliente:**")
-    st.image(f"https://drive.google.com/uc?id={imagem_atual['id']}", width=300)
-    st.markdown(f"[🔗 Abrir no Drive]({imagem_atual['webViewLink']})", unsafe_allow_html=True)
-else:
-    st.info("Nenhuma imagem encontrada para este cliente.")
-
-if uploaded_file and cliente:
-    if st.button("📸 Substituir imagem"):
-        try:
-            _, link = substituir_imagem_cliente(cliente, uploaded_file)
-            st.success("✅ Imagem enviada com sucesso!")
-            st.markdown(f"[🔗 Ver no Drive]({link})", unsafe_allow_html=True)
-            st.rerun()
-        except Exception as e:
-            st.error(f"Erro ao fazer upload: {e}")
-
-if st.button("🚫 Excluir imagem"):
-    existente = buscar_imagem_existente(cliente)
-    if existente:
-        drive_service.files().delete(fileId=existente["id"]).execute()
-        atualizar_link_na_planilha(cliente, "")
-        st.success("✅ Imagem excluída com sucesso.")
-        st.rerun()
+if cliente:
+    imagem_atual = buscar_imagem_existente(cliente)
+    if imagem_atual:
+        st.markdown("**Imagem atual do cliente:**")
+        st.image(f"https://drive.google.com/uc?id={imagem_atual['id']}", width=300)
+        st.markdown(f"[🔗 Abrir no Drive]({imagem_atual['webViewLink']})", unsafe_allow_html=True)
     else:
-        st.warning("Nenhuma imagem encontrada para este cliente.")
+        st.info("Nenhuma imagem encontrada para este cliente.")
+
+    if uploaded_file:
+        if st.button("📸 Substituir imagem"):
+            try:
+                _, link = substituir_imagem_cliente(cliente, uploaded_file)
+                st.success("✅ Imagem enviada com sucesso!")
+                st.markdown(f"[🔗 Ver no Drive]({link})", unsafe_allow_html=True)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao fazer upload: {e}")
+
+    if st.button("🚫 Excluir imagem"):
+        existente = buscar_imagem_existente(cliente)
+        if existente:
+            drive_service.files().delete(fileId=existente["id"]).execute()
+            atualizar_link_na_planilha(cliente, "")
+            st.success("✅ Imagem excluída com sucesso.")
+            st.rerun()
+        else:
+            st.warning("Nenhuma imagem encontrada para este cliente.")
