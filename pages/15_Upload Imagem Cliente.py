@@ -22,10 +22,6 @@ CLIENT_SECRET_FILE = "client_secret.json"
 REDIRECT_URI = "https://barbearia-dashboard.streamlit.app"
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
 
-# ========= Limpa token antigo (força reautenticação) =========
-if os.path.exists(TOKEN_FILE):
-    os.remove(TOKEN_FILE)
-
 # ========= GERA client_secret.json =========
 if not os.path.exists(CLIENT_SECRET_FILE):
     with open(CLIENT_SECRET_FILE, "w") as f:
@@ -40,7 +36,7 @@ if not os.path.exists(CLIENT_SECRET_FILE):
             }
         }, f)
 
-# ========= AUTENTICAÇÃO COM REDIRECT FIXO =========
+# ========= AUTENTICAÇÃO (com código manual) =========
 def autenticar_oauth_streamlit():
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -49,7 +45,7 @@ def autenticar_oauth_streamlit():
 
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        auth_url, _ = flow.authorization_url(prompt='consent', redirect_uri=REDIRECT_URI)
+        auth_url, _ = flow.authorization_url(prompt='consent')
         st.markdown(f"### 🔐 [Clique aqui para autorizar o Google]({auth_url})", unsafe_allow_html=True)
         auth_code = st.text_input("Cole aqui o código da URL após autorizar:")
 
@@ -89,7 +85,7 @@ except Exception as e:
     st.error(f"Erro ao carregar lista de clientes: {e}")
     st.stop()
 
-# ========= DRIVE =========
+# ========= GOOGLE DRIVE =========
 def buscar_imagem_existente(nome_cliente):
     query = f"'{PASTA_DRIVE_ID}' in parents and name contains '{nome_cliente}' and trashed = false"
     results = drive_service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
