@@ -1,47 +1,43 @@
 import streamlit as st
-import os
-import pickle
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
+import os
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-TOKEN_PATH = "token_drive.pkl"
+# 1. Dados do secrets
+client_id = st.secrets["GOOGLE_OAUTH"]["client_id"]
+client_secret = st.secrets["GOOGLE_OAUTH"]["client_secret"]
+redirect_uri = st.secrets["GOOGLE_OAUTH"]["redirect_uris"][0]
 
-def autenticar_google_drive():
-    creds = None
+# 2. Inicia o fluxo de autenticação OAuth
+flow = Flow.from_client_config(
+    {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri]
+        }
+    },
+    scopes=["https://www.googleapis.com/auth/drive.file"]
+)
 
-    if os.path.exists(TOKEN_PATH):
-        with open(TOKEN_PATH, 'rb') as token:
-            creds = pickle.load(token)
+# 3. Gera o link para o usuário autorizar
+auth_url, _ = flow.authorization_url(prompt='consent')
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_config({
-                "installed": {
-                    "client_id": st.secrets["GOOGLE_OAUTH"]["client_id"],
-                    "client_secret": st.secrets["GOOGLE_OAUTH"]["client_secret"],
-                    "redirect_uris": st.secrets["GOOGLE_OAUTH"]["redirect_uris"],
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token"
-                }
-            }, SCOPES)
+st.markdown(f"[Clique aqui para autorizar com Google]({auth_url})")
 
-            # Mostra o link e pede o código
-            auth_url, _ = flow.authorization_url(prompt='consent')
-            st.info("👉 Clique no link abaixo para fazer login com sua conta Google:")
-            st.markdown(f"[Fazer login com o Google]({auth_url})")
+# 4. Campo para colar o código de autenticação
+auth_code = st.text_input("Cole aqui o código de autorização:")
 
-            auth_code = st.text_input("Cole aqui o código que você recebeu após o login:")
+if auth_code:
+    try:
+        flow.fetch_token(code=auth_code)
+        credentials = flow.credentials
+        st.success("Autenticação concluída com sucesso!")
 
-            if auth_code:
-                flow.fetch_token(code=auth_code)
-                creds = flow.credentials
+        # Aqui você pode usar `credentials.token` e `credentials.refresh_token` para subir a imagem para o Drive
+        # Com esses dados, você pode usar o Google Drive API como autenticado
 
-                with open(TOKEN_PATH, 'wb') as token:
-                    pickle.dump(creds, token)
-                st.success("✅ Login realizado com sucesso!")
-
-    return creds
+    except Exception as e:
+        st.error(f"Erro ao autenticar: {e}")
