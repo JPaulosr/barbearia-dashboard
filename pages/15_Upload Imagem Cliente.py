@@ -57,6 +57,15 @@ def atualizar_link_planilha(nome_cliente, link):
             ).execute()
             break
 
+def tornar_arquivo_publico(file_id):
+    try:
+        drive_service.permissions().create(
+            fileId=file_id,
+            body={"role": "reader", "type": "anyone"},
+        ).execute()
+    except Exception as e:
+        st.warning(f"Não foi possível tornar a imagem pública: {e}")
+
 # ========== INTERFACE ==========
 st.set_page_config(page_title="Upload de Imagem para o Google Drive", layout="wide")
 st.title("📸 Upload de Imagem para o Google Drive")
@@ -93,6 +102,7 @@ with col2:
             media_body=media,
             fields="id"
         ).execute()
+        tornar_arquivo_publico(novo_arquivo["id"])
         link_final = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
         atualizar_link_planilha(cliente_nome, link_final)
         st.success("✅ Imagem enviada e link atualizado!")
