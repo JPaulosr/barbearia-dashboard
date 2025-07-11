@@ -6,10 +6,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # ========== CONFIG ==========
+
 PLANILHA_URL = st.secrets["PLANILHA_URL"]
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 
 # ========== AUTENTICAÇÃO ==========
+
 cred_upload = Credentials.from_service_account_info(
     st.secrets["GCP_UPLOAD"],
     scopes=["https://www.googleapis.com/auth/drive"]
@@ -23,6 +25,7 @@ cred_sheets = Credentials.from_service_account_info(
 sheets_service = build("sheets", "v4", credentials=cred_sheets)
 
 # ========== FUNÇÕES ==========
+
 @st.cache_data(ttl=300)
 def carregar_nomes_clientes():
     sheet = sheets_service.spreadsheets().values().get(
@@ -34,7 +37,7 @@ def carregar_nomes_clientes():
 
 def buscar_arquivo_drive(nome_arquivo):
     query = f"name='{nome_arquivo}' and '{PASTA_ID}' in parents and trashed = false"
-    response = drive_service.files().list(q=query, fields="files(id)").execute()
+    response = drive_service.files().list(q=query, fields="files(id, webContentLink)").execute()
     files = response.get("files", [])
     return files[0] if files else None
 
@@ -57,16 +60,8 @@ def atualizar_link_planilha(nome_cliente, link):
             ).execute()
             break
 
-def tornar_arquivo_publico(file_id):
-    try:
-        drive_service.permissions().create(
-            fileId=file_id,
-            body={"role": "reader", "type": "anyone"},
-        ).execute()
-    except Exception as e:
-        st.warning(f"Não foi possível tornar a imagem pública: {e}")
-
 # ========== INTERFACE ==========
+
 st.set_page_config(page_title="Upload de Imagem para o Google Drive", layout="wide")
 st.title("📸 Upload de Imagem para o Google Drive")
 st.markdown("Selecione o cliente abaixo para visualizar, substituir ou excluir a imagem:")
@@ -80,11 +75,10 @@ arquivo_drive = buscar_arquivo_drive(nome_arquivo)
 col1, col2 = st.columns([1.2, 1.8])
 with col1:
     if arquivo_drive:
-        link_imagem = f"https://drive.google.com/uc?id={arquivo_drive['id']}"
+        link_imagem = f"https://drive.google.com/uc?export=view&id={arquivo_drive['id']}"
         st.image(link_imagem, width=300, caption="📸 Imagem atual")
         if st.button("🗑️ Excluir imagem", use_container_width=True):
             deletar_arquivo_drive(arquivo_drive["id"])
-            atualizar_link_planilha(cliente_nome, "")
             st.success("Imagem excluída com sucesso!")
     else:
         st.info("Nenhuma imagem encontrada para este cliente.")
@@ -95,14 +89,21 @@ with col2:
     if nova_imagem:
         if arquivo_drive:
             deletar_arquivo_drive(arquivo_drive["id"])
+
         media = MediaIoBaseUpload(io.BytesIO(nova_imagem.read()), mimetype="image/jpeg")
         file_metadata = {"name": nome_arquivo, "parents": [PASTA_ID]}
         novo_arquivo = drive_service.files().create(
             body=file_metadata,
             media_body=media,
-            fields="id"
+            fields="id, webContentLink"
         ).execute()
-        tornar_arquivo_publico(novo_arquivo["id"])
-        link_final = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
+
+        # Torna o arquivo público
+        drive_service.permissions().create(
+            fileId=novo_arquivo['id'],
+            body={"role": "reader", "type": "anyone"},
+        ).execute()
+
+        link_final = f"https://drive.google.com/uc?export=view&id={novo_arquivo['id']}"
         atualizar_link_planilha(cliente_nome, link_final)
-        st.success("✅ Imagem enviada e link atualizado!")
+        st.success("✅ Imagem enviada e link atualizado com sucesso!")
