@@ -12,13 +12,13 @@ st.set_page_config(page_title="Upload de Imagem do Cliente", page_icon="📸")
 st.markdown("# 📸 Upload de Imagem do Cliente")
 
 # ========= CONFIG =========
-CLIENT_SECRET_FILE = "client_secret.json"
+CLIENT_SECRET_FILE = "/mnt/data/client_secret.json"  # Caminho corrigido
 TOKEN_FILE = "token_drive.pkl"
-SCOPES = ['https://www.googleapis.com/auth/drive.file']  # Acesso a arquivos criados pelo app
-PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # Sua pasta no Drive
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 PLANILHA_URL = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit?usp=sharing"
 
-# ========= AUTENTICAÇÃO OAUTH =========
+# ========= AUTENTICAÇÃO =========
 def autenticar_oauth():
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -36,7 +36,7 @@ def autenticar_oauth():
 
 drive_service = autenticar_oauth()
 
-# ========= CARREGAR CLIENTES =========
+# ========= CLIENTES =========
 @st.cache_data(ttl=3600)
 def carregar_lista_clientes():
     sheet_id = PLANILHA_URL.split("/")[5]
@@ -57,12 +57,12 @@ except Exception as e:
     st.error(f"Erro ao carregar lista de clientes: {e}")
     st.stop()
 
-# ========= BUSCAR E SUBSTITUIR =========
+# ========= GOOGLE DRIVE =========
 def buscar_imagem_existente(nome_cliente):
     query = f"'{PASTA_DRIVE_ID}' in parents and name contains '{nome_cliente}' and trashed = false"
-    results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+    results = drive_service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
     files = results.get("files", [])
-    return files[0]["id"] if files else None
+    return files[0] if files else None
 
 def fazer_upload_drive(file, filename):
     temp_file = tempfile.NamedTemporaryFile(delete=False)
@@ -78,26 +78,36 @@ def fazer_upload_drive(file, filename):
     os.remove(temp_file.name)
 
 def substituir_imagem_cliente(cliente_nome, arquivo_novo):
-    existente_id = buscar_imagem_existente(cliente_nome)
-    if existente_id:
-        drive_service.files().delete(fileId=existente_id).execute()
+    existente = buscar_imagem_existente(cliente_nome)
+    if existente:
+        drive_service.files().delete(fileId=existente["id"]).execute()
     fazer_upload_drive(arquivo_novo, f"{cliente_nome}.png")
 
 # ========= UI =========
 uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
+
+# Preview da imagem atual (se existir)
+imagem_atual = buscar_imagem_existente(cliente)
+if imagem_atual:
+    st.markdown("**Imagem atual do cliente:**")
+    st.image(f"https://drive.google.com/uc?id={imagem_atual['id']}", width=300)
+else:
+    st.info("Nenhuma imagem encontrada para este cliente.")
 
 if uploaded_file and cliente:
     if st.button("📸 Substituir imagem"):
         try:
             substituir_imagem_cliente(cliente, uploaded_file)
             st.success("✅ Imagem enviada com sucesso!")
+            st.rerun()
         except Exception as e:
             st.error(f"Erro ao fazer upload: {e}")
 
 if st.button("🚫 Excluir imagem"):
-    existente_id = buscar_imagem_existente(cliente)
-    if existente_id:
-        drive_service.files().delete(fileId=existente_id).execute()
+    existente = buscar_imagem_existente(cliente)
+    if existente:
+        drive_service.files().delete(fileId=existente["id"]).execute()
         st.success("✅ Imagem excluída com sucesso.")
+        st.rerun()
     else:
         st.warning("Nenhuma imagem encontrada para este cliente.")
