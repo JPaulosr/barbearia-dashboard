@@ -1,107 +1,95 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import os
-import requests
-from PIL import Image
-from io import BytesIO
+import tempfile
 
-st.set_page_config(page_title="Upload de Imagem do Cliente", layout="wide")
-st.title("📸 Upload de Imagem do Cliente")
+st.set_page_config(page_title="Upload de Imagem do Cliente", page_icon="📸")
 
-# Autenticar via OAuth2 (Drive pessoal)
+st.markdown("# 📸 Upload de Imagem do Cliente")
+
+# ===============================
+# Autenticação com o Google Drive via st.secrets
+# ===============================
 @st.cache_resource
 def autenticar_drive():
-    flow = InstalledAppFlow.from_client_secrets_file(
-        "client_secret.json",
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    creds = flow.run_local_server(port=0)
-    return build("drive", "v3", credentials=creds)
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    creds = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
+    service = build("drive", "v3", credentials=creds)
+    return service
 
-# Carregar clientes do Google Sheets
-@st.cache_data
+drive_service = autenticar_drive()
+
+# ===============================
+# Dados da Planilha
+# ===============================
+@st.cache_data(ttl=3600)
 def carregar_lista_clientes():
-    try:
-        escopos = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        credenciais = st.secrets["GCP_SERVICE_ACCOUNT"]
-        gc = gspread.service_account_from_dict(credenciais)
-        aba = gc.open_by_url(st.secrets["PLANILHA_URL"]["url"]).worksheet("clientes_status")
-        df = pd.DataFrame(aba.get_all_records())
-        return sorted(df["Cliente"].dropna().unique())
-    except Exception as e:
-        st.error(f"Erro ao carregar lista de clientes: {e}")
-        return []
+    url = st.secrets["PLANILHA_URL"]
+    sheet_id = url.split("/")[5]
+    aba = "clientes_status"
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={aba}"
+    df = pd.read_csv(csv_url)
+    return df
 
-# Função para upload
-def upload_imagem_drive(caminho_arquivo, nome_cliente):
-    try:
-        servico = autenticar_drive()
-        pasta_id = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-        nome_arquivo = f"{nome_cliente}.jpg"
+try:
+    df_clientes = carregar_lista_clientes()
+    nomes_clientes = df_clientes["Nome"].dropna().sort_values().unique().tolist()
+    cliente = st.selectbox("Selecione o cliente:", nomes_clientes)
+except Exception as e:
+    st.error(f"Erro ao carregar lista de clientes: {e}")
+    st.stop()
 
-        # Apaga arquivos anteriores com o mesmo nome
-        resultados = servico.files().list(q=f"name='{nome_arquivo}' and trashed=false and '{pasta_id}' in parents",
-                                          fields="files(id)").execute()
-        for item in resultados.get("files", []):
-            servico.files().delete(fileId=item["id"]).execute()
+# ===============================
+# Upload e Envio da Imagem
+# ===============================
+uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
-        # Faz upload
-        metadata = {"name": nome_arquivo, "parents": [pasta_id]}
-        media = MediaFileUpload(caminho_arquivo, resumable=True)
-        arquivo = servico.files().create(body=metadata, media_body=media, fields="id").execute()
+# ID da pasta no Drive compartilhado com você:
+PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 
-        # Permissões
-        servico.permissions().create(fileId=arquivo["id"], body={"type": "anyone", "role": "reader"}).execute()
-        return f"https://drive.google.com/uc?export=download&id={arquivo['id']}"
-    except Exception as e:
-        st.error(f"Erro ao fazer upload: {e}")
-        return None
+def buscar_imagem_existente(nome_cliente):
+    query = f"'{PASTA_DRIVE_ID}' in parents and name contains '{nome_cliente}' and trashed = false"
+    results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+    files = results.get("files", [])
+    return files[0]["id"] if files else None
 
-# Função para atualizar link na planilha
-def atualizar_link_foto(nome_cliente, link):
-    try:
-        credenciais = st.secrets["GCP_SERVICE_ACCOUNT"]
-        gc = gspread.service_account_from_dict(credenciais)
-        aba = gc.open_by_url(st.secrets["PLANILHA_URL"]["url"]).worksheet("clientes_status")
-        dados = aba.get_all_records()
-        for i, linha in enumerate(dados):
-            if linha.get("Cliente") == nome_cliente:
-                aba.update_cell(i + 2, 3, link)  # Coluna C = Foto
-                return True
-        return False
-    except Exception as e:
-        st.error(f"Erro ao atualizar planilha: {e}")
-        return False
+def fazer_upload_drive(file, filename):
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file.write(file.read())
+    temp_file.close()
 
-# Interface
-clientes = carregar_lista_clientes()
-cliente_selecionado = st.selectbox("Selecione o cliente:", clientes)
+    file_metadata = {
+        "name": filename,
+        "parents": [PASTA_DRIVE_ID]
+    }
+    media = MediaFileUpload(temp_file.name, mimetype="image/png", resumable=True)
+    drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    os.remove(temp_file.name)
 
-arquivo = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
+def substituir_imagem_cliente(cliente_nome, arquivo_novo):
+    existente_id = buscar_imagem_existente(cliente_nome)
+    if existente_id:
+        drive_service.files().delete(fileId=existente_id).execute()
+    fazer_upload_drive(arquivo_novo, f"{cliente_nome}.png")
 
-col1, col2 = st.columns(2)
+if uploaded_file and cliente:
+    if st.button("📸 Substituir imagem"):
+        try:
+            substituir_imagem_cliente(cliente, uploaded_file)
+            st.success("Imagem enviada com sucesso!")
+        except Exception as e:
+            st.error(f"Erro ao fazer upload: {e}")
 
-with col1:
-    if st.button("💾 Substituir imagem"):
-        if cliente_selecionado and arquivo:
-            try:
-                caminho_temp = f"temp_{cliente_selecionado}.jpg"
-                with open(caminho_temp, "wb") as f:
-                    f.write(arquivo.read())
-                link = upload_imagem_drive(caminho_temp, cliente_selecionado)
-                os.remove(caminho_temp)
-
-                if link:
-                    atualizado = atualizar_link_foto(cliente_selecionado, link)
-                    if atualizado:
-                        st.success("✅ Imagem enviada e planilha atualizada!")
-                    else:
-                        st.warning("Imagem enviada, mas cliente não encontrado na planilha.")
-            except Exception as e:
-                st.error(f"Erro inesperado: {e}")
-        else:
-            st.warning("Selecione um cliente e uma imagem primeiro.")
+# ===============================
+# Excluir imagem
+# ===============================
+if st.button("🚫 Excluir imagem"):
+    existente_id = buscar_imagem_existente(cliente)
+    if existente_id:
+        drive_service.files().delete(fileId=existente_id).execute()
+        st.success("Imagem excluída com sucesso.")
+    else:
+        st.warning("Nenhuma imagem encontrada para este cliente.")
