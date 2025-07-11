@@ -36,7 +36,7 @@ if not os.path.exists(CLIENT_SECRET_FILE):
             }
         }, f)
 
-# ========= AUTENTICAÇÃO (com código manual) =========
+# ========= AUTENTICAÇÃO OAUTH =========
 def autenticar_oauth_streamlit():
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -45,13 +45,15 @@ def autenticar_oauth_streamlit():
 
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        auth_url, _ = flow.authorization_url(prompt='consent')
+        flow.redirect_uri = REDIRECT_URI  # ✅ Força explicitamente o redirect_uri
+
+        auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
         st.markdown(f"### 🔐 [Clique aqui para autorizar o Google]({auth_url})", unsafe_allow_html=True)
         auth_code = st.text_input("Cole aqui o código da URL após autorizar:")
 
         if auth_code:
             try:
-                flow.fetch_token(code=auth_code, redirect_uri=REDIRECT_URI)
+                flow.fetch_token(code=auth_code)  # ✅ Não repassa redirect_uri aqui
                 creds = flow.credentials
                 with open(TOKEN_FILE, 'wb') as token:
                     pickle.dump(creds, token)
