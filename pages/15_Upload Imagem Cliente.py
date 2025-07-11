@@ -1,64 +1,71 @@
+import ast
 import streamlit as st
+import os
+import io
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import io
 
-st.set_page_config(page_title="📸 Upload de Imagem para o Google Drive")
-st.title("📸 Upload de Imagem para o Google Drive")
+st.set_page_config(page_title="Upload de Imagem", layout="wide")
 
-# =====================
-# Garante conversão correta da chave (sem modificar st.secrets)
-# =====================
-secrets_raw = st.secrets["GCP_UPLOAD"]
+st.markdown("## 📸 Upload de Imagem para o Google Drive")
+st.markdown("🔒 Envie o arquivo `.json` da conta de serviço")
 
-# Copia os dados necessários e corrige a private_key com replace seguro
-upload_info = {k: secrets_raw[k] for k in secrets_raw}
-upload_info["private_key"] = upload_info["private_key"].replace("\\n", "\n")
+# ========= AUTENTICAÇÃO GOOGLE DRIVE via secrets ========= #
+try:
+    raw_secret = str(st.secrets["GCP_UPLOAD"])
+    upload_info = ast.literal_eval(raw_secret.replace('\\n', '\\\\n'))
+    upload_info["private_key"] = upload_info["private_key"].replace("\\n", "\n")
 
-# =====================
-# Autenticação com Google Drive
-# =====================
-scopes = ["https://www.googleapis.com/auth/drive"]
-credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
-service = build("drive", "v3", credentials=credentials)
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
 
-# =====================
-# ID da pasta de destino no Drive
-# =====================
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
+    service = build("drive", "v3", credentials=credentials)
 
-# =====================
-# Interface de Upload
-# =====================
-st.subheader("1️⃣ Escolha o cliente e envie a imagem")
+except Exception as e:
+    st.error("Erro ao autenticar com o Google Drive")
+    st.exception(e)
+    st.stop()
 
-cliente_nome = st.text_input("Nome do Cliente")
-arquivo = st.file_uploader("Escolha a imagem do cliente", type=["jpg", "jpeg", "png"])
+# ========= CONFIGURAÇÕES ========= #
+PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # sua pasta no Drive
+TIPOS_PERMITIDOS = ["image/jpeg", "image/png"]
+MAX_MB = 10
 
-if st.button("📤 Enviar imagem para o Drive"):
-    if not cliente_nome:
-        st.warning("⚠️ Por favor, digite o nome do cliente.")
-    elif not arquivo:
-        st.warning("⚠️ Por favor, selecione uma imagem.")
-    else:
+# ========= UPLOAD ========= #
+arquivo = st.file_uploader("📁 Enviar imagem do cliente", type=["jpg", "jpeg", "png"])
+
+if arquivo:
+    if arquivo.type not in TIPOS_PERMITIDOS:
+        st.warning("Tipo de arquivo não suportado. Envie JPEG ou PNG.")
+        st.stop()
+
+    if arquivo.size > MAX_MB * 1024 * 1024:
+        st.warning("Arquivo muito grande. Máximo permitido: 10MB.")
+        st.stop()
+
+    nome_cliente = st.text_input("Nome do cliente (sem espaços, sem acento):")
+    if nome_cliente:
+        nome_final = f"{nome_cliente}.png"
+
+        # Monta mídia e metadados
+        media = MediaIoBaseUpload(arquivo, mimetype=arquivo.type)
+        file_metadata = {
+            "name": nome_final,
+            "parents": [PASTA_ID]
+        }
+
         try:
-            nome_arquivo = f"{cliente_nome.strip().lower()}.jpg"
-            file_stream = io.BytesIO(arquivo.read())
-            media = MediaIoBaseUpload(file_stream, mimetype="image/jpeg")
-
-            file_metadata = {
-                "name": nome_arquivo,
-                "parents": [PASTA_ID]
-            }
-
-            uploaded = service.files().create(
+            arquivo_drive = service.files().create(
                 body=file_metadata,
                 media_body=media,
-                fields="id"
+                fields="id, webViewLink"
             ).execute()
 
-            st.success(f"✅ Imagem enviada com sucesso! ID: {uploaded['id']}")
+            st.success("✅ Imagem enviada com sucesso!")
+            st.markdown(f"[🔗 Ver imagem no Google Drive]({arquivo_drive['webViewLink']})")
 
         except Exception as e:
-            st.error(f"❌ Erro no upload: {e}")
+            st.error("Erro ao enviar imagem para o Google Drive")
+            st.exception(e)
+
