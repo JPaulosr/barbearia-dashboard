@@ -1,23 +1,23 @@
 import streamlit as st
 from google_auth_oauthlib.flow import Flow
+import google.auth.transport.requests
+import requests
+import os
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import io
-import pandas as pd
-import gspread
-from google.oauth2.credentials import Credentials
+from googleapiclient.http import MediaFileUpload
+import tempfile
 
-st.set_page_config(page_title="📸 Upload de Imagem Cliente", layout="wide")
-
+st.set_page_config(layout="wide")
 st.title("📸 Upload de Imagem para o Google Drive")
-st.info("1️⃣ Autentique sua conta Google para salvar no seu próprio Drive")
 
-# ========== CREDENCIAIS ==========
+st.info("🔹 Autentique sua conta Google para salvar no seu próprio Drive")
+
+# === CARREGA SEGREDOS DO OAUTH ===
 client_id = st.secrets["GOOGLE_OAUTH"]["client_id"]
 client_secret = st.secrets["GOOGLE_OAUTH"]["client_secret"]
 redirect_uri = st.secrets["GOOGLE_OAUTH"]["redirect_uris"][0]
 
-# ========= FLUXO DE AUTENTICAÇÃO =========
+# === CONFIGURA O FLOW DO OAUTH ===
 flow = Flow.from_client_config(
     {
         "web": {
@@ -28,71 +28,62 @@ flow = Flow.from_client_config(
             "redirect_uris": [redirect_uri]
         }
     },
-    scopes=["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets"]
+    scopes=["https://www.googleapis.com/auth/drive.file"]
 )
 flow.redirect_uri = redirect_uri
 
-# ========= ETAPA 1 – LINK DE AUTORIZAÇÃO =========
-auth_url, _ = flow.authorization_url(
-    access_type='offline',
-    include_granted_scopes='true',
-    prompt='consent'
-)
-
+# === ETAPA 1: MOSTRA LINK DE AUTORIZAÇÃO ===
+auth_url, _ = flow.authorization_url(prompt='consent', include_granted_scopes='true')
 st.markdown(f"[Clique aqui para autorizar o app com sua conta Google]({auth_url})")
 
-auth_code = st.text_input("Cole o código que você recebeu aqui:")
+# === ETAPA 2: INSERE CÓDIGO DE AUTORIZAÇÃO ===
+codigo = st.text_input("Cole o código que você recebeu aqui:")
 
-# ========= ETAPA 2 – AUTENTICAÇÃO E UPLOAD =========
-uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG)", type=["jpg", "jpeg", "png"])
-nome_cliente = st.text_input("Nome do cliente (como aparece na planilha)")
+# === ETAPA 3: UPLOAD DA IMAGEM ===
+nome_cliente = st.text_input("🧍 Nome do cliente")
+imagem = st.file_uploader("📷 Escolha uma imagem do cliente", type=["jpg", "jpeg", "png"])
 
-if st.button("Fazer upload"):
+if st.button("🚀 Fazer upload"):
+    if not codigo or not imagem or not nome_cliente:
+        st.error("Preencha todos os campos antes de prosseguir.")
+    else:
+        try:
+            # Troca o código de autorização por tokens
+            flow.fetch_token(code=codigo)
+            credenciais = flow.credentials
 
-    if not auth_code or not uploaded_file or not nome_cliente:
-        st.warning("Preencha todos os campos e envie uma imagem.")
-        st.stop()
+            # Inicializa o serviço do Drive
+            drive_service = build("drive", "v3", credentials=credenciais)
 
-    try:
-        # Troca código pelo token
-        flow.fetch_token(code=auth_code)
-        credentials = flow.credentials
+            # Salva o arquivo temporariamente
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(imagem.read())
+                tmp_path = tmp.name
 
-        # Cria serviço do Drive
-        service = build("drive", "v3", credentials=credentials)
+            # Define metadados
+            metadata = {
+                "name": f"{nome_cliente.lower().strip().replace(' ', '_')}.jpg",
+                "mimeType": "image/jpeg"
+            }
 
-        # Lê o arquivo como binário
-        file_data = io.BytesIO(uploaded_file.read())
+            media = MediaFileUpload(tmp_path, mimetype="image/jpeg")
 
-        # Prepara upload
-        file_metadata = {"name": f"{nome_cliente}.jpg", "parents": [st.secrets["FOLDER_ID"]]}
-        media = MediaIoBaseUpload(file_data, mimetype=uploaded_file.type)
+            # Faz upload no Drive do usuário autenticado
+            uploaded = drive_service.files().create(
+                body=metadata,
+                media_body=media,
+                fields="id"
+            ).execute()
 
-        uploaded_file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id"
-        ).execute()
+            # Gera link compartilhável
+            file_id = uploaded.get("id")
+            shareable_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
-        file_id = uploaded_file.get("id")
-        file_link = f"https://drive.google.com/uc?export=download&id={file_id}"
+            st.success("✅ Imagem enviada com sucesso!")
+            st.code(shareable_url)
 
-        st.success(f"Imagem enviada com sucesso! Link: {file_link}")
-        st.image(file_link, width=200)
+            # Limpa o arquivo temporário
+            os.remove(tmp_path)
 
-        # ========== Atualiza planilha ==========
-        gc = gspread.service_account_from_dict(st.secrets["GSHEETS_SERVICE_ACCOUNT"])
-        sh = gc.open_by_url("https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE")
-        ws = sh.worksheet("clientes_status")
-
-        df = pd.DataFrame(ws.get_all_records())
-
-        if nome_cliente not in df['Cliente'].values:
-            st.error("Cliente não encontrado na planilha.")
-        else:
-            row_idx = df[df['Cliente'] == nome_cliente].index[0] + 2  # +2 porque planilha começa em 1 e tem cabeçalho
-            ws.update_cell(row_idx, 3, file_link)
-            st.success("Link salvo na planilha com sucesso!")
-
-    except Exception as e:
-        st.error(f"Erro ao autenticar ou fazer upload: {e}")
+        except Exception as e:
+            st.error(f"Erro ao autenticar ou fazer upload: {e}")
