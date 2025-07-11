@@ -4,72 +4,26 @@ import os
 import pickle
 import tempfile
 import json
-
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google.oauth2 import service_account
 
+# ========= CONFIG =========
 st.set_page_config(page_title="Upload de Imagem do Cliente", page_icon="📸")
 st.markdown("# 📸 Upload de Imagem do Cliente")
 
-# ========= CONFIG =========
-PLANILHA_URL = st.secrets["PLANILHA_URL"]
+PLANILHA_URL = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit?usp=sharing"
 SHEET_ID = PLANILHA_URL.split("/")[5]
 ABA = "clientes_status"
 PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-TOKEN_FILE = "token_drive.pkl"
-CLIENT_SECRET_FILE = "client_secret.json"
-REDIRECT_URI = "https://barbearia-dashboard.streamlit.app"
-SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
 
-# ========= GERA client_secret.json =========
-if not os.path.exists(CLIENT_SECRET_FILE):
-    with open(CLIENT_SECRET_FILE, "w") as f:
-        json.dump({
-            "web": {
-                "client_id": st.secrets["GOOGLE_OAUTH"]["client_id"],
-                "client_secret": st.secrets["GOOGLE_OAUTH"]["client_secret"],
-                "redirect_uris": [REDIRECT_URI],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/v1/certs"
-            }
-        }, f)
+# ========= CREDENCIAIS SERVICE ACCOUNT =========
+SERVICE_ACCOUNT_INFO = st.secrets["GCP_SERVICE_ACCOUNT"]
+SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
-# ========= AUTENTICAÇÃO OAUTH =========
-def autenticar_oauth_streamlit():
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'rb') as token:
-            creds = pickle.load(token)
-
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        flow.redirect_uri = REDIRECT_URI
-
-        auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
-        st.markdown(f"### 🔐 [Clique aqui para autorizar o Google]({auth_url})", unsafe_allow_html=True)
-        auth_code = st.text_input("Cole aqui o código da URL após autorizar:")
-
-        if auth_code:
-            try:
-                flow.fetch_token(code=auth_code)
-                creds = flow.credentials
-                with open(TOKEN_FILE, 'wb') as token:
-                    pickle.dump(creds, token)
-                st.success("✅ Autenticado com sucesso! Recarregue a página.")
-                st.stop()
-            except Exception as e:
-                st.error(f"Erro ao autenticar: {e}")
-                st.stop()
-        else:
-            st.stop()
-
-    drive_service = build('drive', 'v3', credentials=creds)
-    sheets_service = build('sheets', 'v4', credentials=creds)
-    return drive_service, sheets_service
-
-drive_service, sheets_service = autenticar_oauth_streamlit()
+creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
+drive_service = build('drive', 'v3', credentials=creds)
+sheets_service = build('sheets', 'v4', credentials=creds)
 
 # ========= CLIENTES =========
 @st.cache_data(ttl=3600)
@@ -146,7 +100,7 @@ if cliente:
     if imagem_atual:
         st.markdown("**Imagem atual do cliente:**")
         st.image(f"https://drive.google.com/uc?id={imagem_atual['id']}", width=300)
-        st.markdown(f"[🔗 Abrir no Drive]({imagem_atual['webViewLink']})", unsafe_allow_html=True)
+        st.markdown(f"[\ud83d\udd17 Abrir no Drive]({imagem_atual['webViewLink']})", unsafe_allow_html=True)
     else:
         st.info("Nenhuma imagem encontrada para este cliente.")
 
@@ -154,8 +108,8 @@ if cliente:
         if st.button("📸 Substituir imagem"):
             try:
                 _, link = substituir_imagem_cliente(cliente, uploaded_file)
-                st.success("✅ Imagem enviada com sucesso!")
-                st.markdown(f"[🔗 Ver no Drive]({link})", unsafe_allow_html=True)
+                st.success("\u2705 Imagem enviada com sucesso!")
+                st.markdown(f"[\ud83d\udd17 Ver no Drive]({link})", unsafe_allow_html=True)
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao fazer upload: {e}")
@@ -165,7 +119,7 @@ if cliente:
         if existente:
             drive_service.files().delete(fileId=existente["id"]).execute()
             atualizar_link_na_planilha(cliente, "")
-            st.success("✅ Imagem excluída com sucesso.")
+            st.success("\u2705 Imagem excluída com sucesso.")
             st.rerun()
         else:
             st.warning("Nenhuma imagem encontrada para este cliente.")
