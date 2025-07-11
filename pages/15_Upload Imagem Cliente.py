@@ -8,14 +8,26 @@ st.set_page_config(page_title="📸 Upload de Imagem para o Google Drive")
 st.title("📸 Upload de Imagem para o Google Drive")
 
 # =====================
-# Autenticação por conta de serviço (UPLOAD)
+# Autenticação (conta de serviço para UPLOAD)
 # =====================
-from copy import deepcopy
-upload_info_raw = deepcopy(st.secrets["GCP_UPLOAD"])  # copia mutável
-upload_info_raw["private_key"] = upload_info_raw["private_key"].replace("\\n", "\n")
+upload_info_secret = st.secrets["GCP_UPLOAD"]
+
+# ⚠️ Reconstrói manualmente o dicionário (sem deepcopy)
+upload_info = {
+    "type": upload_info_secret["type"],
+    "project_id": upload_info_secret["project_id"],
+    "private_key_id": upload_info_secret["private_key_id"],
+    "private_key": upload_info_secret["private_key"].replace("\\n", "\n"),
+    "client_email": upload_info_secret["client_email"],
+    "client_id": upload_info_secret["client_id"],
+    "auth_uri": upload_info_secret["auth_uri"],
+    "token_uri": upload_info_secret["token_uri"],
+    "auth_provider_x509_cert_url": upload_info_secret["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": upload_info_secret["client_x509_cert_url"]
+}
 
 scopes = ["https://www.googleapis.com/auth/drive"]
-credentials = Credentials.from_service_account_info(upload_info_raw, scopes=scopes)
+credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
 service = build("drive", "v3", credentials=credentials)
 
 # =====================
