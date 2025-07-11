@@ -8,22 +8,38 @@ st.set_page_config(page_title="📸 Upload de Imagem para o Google Drive")
 st.title("📸 Upload de Imagem para o Google Drive")
 
 # =====================
-# Usando diretamente do secrets
+# Corrigir chave do secrets
 # =====================
-upload_info = dict(st.secrets["GCP_UPLOAD"])  # transforma em dict puro, mutável
+secrets_raw = st.secrets["GCP_UPLOAD"]
 
-# NÃO precisa .replace("\\n", "\n") se sua chave estiver em triple-quote no secrets.toml
+# Monta dicionário com private_key corrigida
+upload_info = {
+    "type": secrets_raw["type"],
+    "project_id": secrets_raw["project_id"],
+    "private_key_id": secrets_raw["private_key_id"],
+    "private_key": secrets_raw["private_key"].replace("\\n", "\n"),  # <-- ESSA LINHA É FUNDAMENTAL
+    "client_email": secrets_raw["client_email"],
+    "client_id": secrets_raw["client_id"],
+    "auth_uri": secrets_raw["auth_uri"],
+    "token_uri": secrets_raw["token_uri"],
+    "auth_provider_x509_cert_url": secrets_raw["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": secrets_raw["client_x509_cert_url"]
+}
+
+# =====================
+# Autenticação com Google
+# =====================
 scopes = ["https://www.googleapis.com/auth/drive"]
 credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
 service = build("drive", "v3", credentials=credentials)
 
 # =====================
-# ID da pasta no Drive
+# Configuração da pasta
 # =====================
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 
 # =====================
-# Upload
+# Upload da Imagem
 # =====================
 st.subheader("1️⃣ Escolha o cliente e envie a imagem")
 
@@ -52,7 +68,7 @@ if st.button("📤 Enviar imagem para o Drive"):
                 fields="id"
             ).execute()
 
-            st.success(f"✅ Imagem enviada com sucesso para o Google Drive (ID: {uploaded['id']})")
+            st.success(f"✅ Imagem enviada com sucesso para o Google Drive! ID: {uploaded['id']}")
 
         except Exception as e:
-            st.error(f"❌ Erro ao fazer upload: {e}")
+            st.error(f"❌ Erro no upload: {e}")
