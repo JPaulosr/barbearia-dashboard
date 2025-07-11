@@ -4,13 +4,12 @@ import io
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from googleapiclient.errors import HttpError
 
 # ========== CONFIG ==========
 PLANILHA_URL = st.secrets["PLANILHA_URL"]
 PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 
-# ========== AUTENTICAÇÃO GOOGLE ==========
+# ========== AUTENTICAÇÃO ==========
 cred_upload = Credentials.from_service_account_info(
     st.secrets["GCP_UPLOAD"],
     scopes=["https://www.googleapis.com/auth/drive"]
@@ -59,43 +58,40 @@ def atualizar_link_planilha(nome_cliente, link):
             break
 
 # ========== INTERFACE ==========
-st.set_page_config(page_title="Upload de Imagem para o Google Drive", layout="centered")
+st.set_page_config(page_title="Upload de Imagem para o Google Drive", layout="wide")
 st.title("📸 Upload de Imagem para o Google Drive")
 st.markdown("Selecione o cliente abaixo para visualizar, substituir ou excluir a imagem:")
 
 nomes_clientes = carregar_nomes_clientes()
-cliente_nome = st.selectbox("🔍 Nome do cliente", nomes_clientes)
+cliente_nome = st.selectbox("🔍 Nome do cliente", nomes_clientes, label_visibility="visible")
 
 nome_arquivo = f"{cliente_nome.strip().lower()}.jpg"
 arquivo_drive = buscar_arquivo_drive(nome_arquivo)
 
-if arquivo_drive:
-    st.image(arquivo_drive["webContentLink"], width=300, caption="📸 Imagem atual")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🗑️ Excluir imagem"):
+col1, col2 = st.columns([1.2, 1.8])
+with col1:
+    if arquivo_drive:
+        link_imagem = f"https://drive.google.com/uc?id={arquivo_drive['id']}"
+        st.image(link_imagem, width=300, caption="📸 Imagem atual")
+        if st.button("🗑️ Excluir imagem", use_container_width=True):
             deletar_arquivo_drive(arquivo_drive["id"])
             st.success("Imagem excluída com sucesso!")
-    with col2:
-        substituir = st.file_uploader("📤 Substituir imagem", type=["jpg", "jpeg", "png"])
-        if substituir:
+    else:
+        st.info("Nenhuma imagem encontrada para este cliente.")
+
+with col2:
+    st.markdown("📤 **Substituir ou enviar nova imagem**")
+    nova_imagem = st.file_uploader("Selecione uma imagem", type=["jpg", "jpeg", "png"])
+    if nova_imagem:
+        if arquivo_drive:
             deletar_arquivo_drive(arquivo_drive["id"])
-            file_stream = io.BytesIO(substituir.read())
-            media = MediaIoBaseUpload(file_stream, mimetype="image/jpeg")
-            file_metadata = {"name": nome_arquivo, "parents": [PASTA_ID]}
-            novo_arquivo = drive_service.files().create(
-                body=file_metadata, media_body=media, fields="id, webContentLink"
-            ).execute()
-            atualizar_link_planilha(cliente_nome, novo_arquivo["webContentLink"])
-            st.success("Imagem substituída e link atualizado!")
-else:
-    novo = st.file_uploader("📤 Enviar nova imagem", type=["jpg", "jpeg", "png"])
-    if novo:
-        file_stream = io.BytesIO(novo.read())
-        media = MediaIoBaseUpload(file_stream, mimetype="image/jpeg")
+        media = MediaIoBaseUpload(io.BytesIO(nova_imagem.read()), mimetype="image/jpeg")
         file_metadata = {"name": nome_arquivo, "parents": [PASTA_ID]}
         novo_arquivo = drive_service.files().create(
-            body=file_metadata, media_body=media, fields="id, webContentLink"
+            body=file_metadata,
+            media_body=media,
+            fields="id, webContentLink"
         ).execute()
-        atualizar_link_planilha(cliente_nome, novo_arquivo["webContentLink"])
-        st.success("Imagem enviada e link atualizado!")
+        link_final = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
+        atualizar_link_planilha(cliente_nome, link_final)
+        st.success("✅ Imagem enviada e link atualizado!")
