@@ -9,16 +9,21 @@ st.set_page_config(page_title="📸 Upload de Imagem para o Google Drive")
 st.title("📸 Upload de Imagem para o Google Drive")
 
 # =====================
-# Autenticação por conta de serviço
+# Autenticação por conta de serviço (UPLOAD)
 # =====================
 upload_info = st.secrets["GCP_UPLOAD"]
+
+# ⚠️ Corrige quebras de linha da chave privada
+upload_info["private_key"] = upload_info["private_key"].replace("\\n", "\n")
 
 scopes = ["https://www.googleapis.com/auth/drive"]
 credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
 service = build("drive", "v3", credentials=credentials)
 
+# =====================
 # ID da pasta no Drive onde salvar as imagens
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # <- Substitua pelo ID correto da sua pasta
+# =====================
+PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # <- Substitua se necessário
 
 # =====================
 # Interface do usuário
@@ -55,4 +60,4 @@ if st.button("📤 Enviar imagem para o Drive"):
             st.success(f"✅ Imagem enviada com sucesso para o Google Drive (ID: {uploaded['id']})")
 
         except Exception as e:
-            st.error(f"Erro ao fazer upload: {e}")
+            st.error(f"❌ Erro ao fazer upload: {e}")
