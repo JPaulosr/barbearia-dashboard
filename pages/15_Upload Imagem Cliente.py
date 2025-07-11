@@ -19,7 +19,12 @@ ABA = "clientes_status"
 PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 TOKEN_FILE = "token_drive.pkl"
 CLIENT_SECRET_FILE = "client_secret.json"
+REDIRECT_URI = "https://barbearia-dashboard.streamlit.app"
 SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+
+# ========= Limpa token antigo (força reautenticação) =========
+if os.path.exists(TOKEN_FILE):
+    os.remove(TOKEN_FILE)
 
 # ========= GERA client_secret.json =========
 if not os.path.exists(CLIENT_SECRET_FILE):
@@ -28,14 +33,14 @@ if not os.path.exists(CLIENT_SECRET_FILE):
             "web": {
                 "client_id": st.secrets["GOOGLE_OAUTH"]["client_id"],
                 "client_secret": st.secrets["GOOGLE_OAUTH"]["client_secret"],
-                "redirect_uris": st.secrets["GOOGLE_OAUTH"]["redirect_uris"],
+                "redirect_uris": [REDIRECT_URI],
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "auth_provider_x509_cert_url": "https://www.googleapis.com/v1/certs"
             }
         }, f)
 
-# ========= AUTENTICAÇÃO PARA STREAMLIT CLOUD =========
+# ========= AUTENTICAÇÃO COM REDIRECT FIXO =========
 def autenticar_oauth_streamlit():
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -44,13 +49,13 @@ def autenticar_oauth_streamlit():
 
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        auth_url, _ = flow.authorization_url(prompt='consent')
+        auth_url, _ = flow.authorization_url(prompt='consent', redirect_uri=REDIRECT_URI)
         st.markdown(f"### 🔐 [Clique aqui para autorizar o Google]({auth_url})", unsafe_allow_html=True)
         auth_code = st.text_input("Cole aqui o código da URL após autorizar:")
 
         if auth_code:
             try:
-                flow.fetch_token(code=auth_code)
+                flow.fetch_token(code=auth_code, redirect_uri=REDIRECT_URI)
                 creds = flow.credentials
                 with open(TOKEN_FILE, 'wb') as token:
                     pickle.dump(creds, token)
@@ -84,7 +89,7 @@ except Exception as e:
     st.error(f"Erro ao carregar lista de clientes: {e}")
     st.stop()
 
-# ========= GOOGLE DRIVE =========
+# ========= DRIVE =========
 def buscar_imagem_existente(nome_cliente):
     query = f"'{PASTA_DRIVE_ID}' in parents and name contains '{nome_cliente}' and trashed = false"
     results = drive_service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
