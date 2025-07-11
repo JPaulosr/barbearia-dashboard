@@ -1,6 +1,4 @@
-import ast
 import streamlit as st
-import os
 import io
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -11,15 +9,13 @@ st.set_page_config(page_title="Upload de Imagem", layout="wide")
 st.markdown("## 📸 Upload de Imagem para o Google Drive")
 st.markdown("🔒 Envie o arquivo `.json` da conta de serviço")
 
-# ========= AUTENTICAÇÃO GOOGLE DRIVE via secrets ========= #
+# ========= AUTENTICAÇÃO GOOGLE DRIVE ========= #
 try:
-    raw_secret = str(st.secrets["GCP_UPLOAD"])
-    upload_info = ast.literal_eval(raw_secret.replace('\\n', '\\\\n'))
+    upload_info = dict(st.secrets["GCP_UPLOAD"])
     upload_info["private_key"] = upload_info["private_key"].replace("\\n", "\n")
 
     scopes = ["https://www.googleapis.com/auth/drive"]
     credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
-
     service = build("drive", "v3", credentials=credentials)
 
 except Exception as e:
@@ -28,7 +24,7 @@ except Exception as e:
     st.stop()
 
 # ========= CONFIGURAÇÕES ========= #
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # sua pasta no Drive
+PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # ID da sua pasta no Drive
 TIPOS_PERMITIDOS = ["image/jpeg", "image/png"]
 MAX_MB = 10
 
@@ -68,4 +64,3 @@ if arquivo:
         except Exception as e:
             st.error("Erro ao enviar imagem para o Google Drive")
             st.exception(e)
-
