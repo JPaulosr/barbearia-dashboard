@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import io
+import requests
+from PIL import Image
+from io import BytesIO
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -76,7 +79,12 @@ col1, col2 = st.columns([1.2, 1.8])
 with col1:
     if arquivo_drive:
         link_imagem = f"https://drive.google.com/uc?export=view&id={arquivo_drive['id']}"
-        st.image(link_imagem, width=300, caption="📸 Imagem atual")
+        try:
+            response = requests.get(link_imagem)
+            img = Image.open(BytesIO(response.content))
+            st.image(img, width=300, caption="📸 Imagem atual")
+        except:
+            st.warning("❌ Erro ao carregar a imagem do cliente.")
         if st.button("🗑️ Excluir imagem", use_container_width=True):
             deletar_arquivo_drive(arquivo_drive["id"])
             st.success("Imagem excluída com sucesso!")
