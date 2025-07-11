@@ -12,11 +12,13 @@ st.set_page_config(page_title="Upload de Imagem do Cliente", page_icon="📸")
 st.markdown("# 📸 Upload de Imagem do Cliente")
 
 # ========= CONFIG =========
-CLIENT_SECRET_FILE = "/mnt/data/client_secret.json"  # Caminho corrigido
+CLIENT_SECRET_FILE = "/mnt/data/client_secret.json"
 TOKEN_FILE = "token_drive.pkl"
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
 PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 PLANILHA_URL = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit?usp=sharing"
+SHEET_ID = PLANILHA_URL.split("/")[5]
+ABA = "clientes_status"
 
 # ========= AUTENTICAÇÃO =========
 def autenticar_oauth():
@@ -31,17 +33,16 @@ def autenticar_oauth():
         with open(TOKEN_FILE, 'wb') as token:
             pickle.dump(creds, token)
 
-    service = build('drive', 'v3', credentials=creds)
-    return service
+    drive_service = build('drive', 'v3', credentials=creds)
+    sheets_service = build('sheets', 'v4', credentials=creds)
+    return drive_service, sheets_service
 
-drive_service = autenticar_oauth()
+drive_service, sheets_service = autenticar_oauth()
 
 # ========= CLIENTES =========
 @st.cache_data(ttl=3600)
 def carregar_lista_clientes():
-    sheet_id = PLANILHA_URL.split("/")[5]
-    aba = "clientes_status"
-    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={aba}"
+    csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={ABA}"
     df = pd.read_csv(csv_url)
     return df
 
@@ -51,7 +52,8 @@ try:
     if not coluna_nome:
         st.error("❌ Coluna 'Cliente' não encontrada na planilha.")
         st.stop()
-    nomes_clientes = df_clientes[coluna_nome[0]].dropna().sort_values().unique().tolist()
+    col_cliente = coluna_nome[0]
+    nomes_clientes = df_clientes[col_cliente].dropna().sort_values().unique().tolist()
     cliente = st.selectbox("Selecione o cliente:", nomes_clientes)
 except Exception as e:
     st.error(f"Erro ao carregar lista de clientes: {e}")
@@ -74,39 +76,66 @@ def fazer_upload_drive(file, filename):
         "parents": [PASTA_DRIVE_ID]
     }
     media = MediaFileUpload(temp_file.name, mimetype="image/png", resumable=True)
-    drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    result = drive_service.files().create(body=file_metadata, media_body=media, fields="id, webViewLink").execute()
     os.remove(temp_file.name)
+    return result["id"], result["webViewLink"]
 
 def substituir_imagem_cliente(cliente_nome, arquivo_novo):
     existente = buscar_imagem_existente(cliente_nome)
     if existente:
         drive_service.files().delete(fileId=existente["id"]).execute()
-    fazer_upload_drive(arquivo_novo, f"{cliente_nome}.png")
+    file_id, link = fazer_upload_drive(arquivo_novo, f"{cliente_nome}.png")
+    atualizar_link_na_planilha(cliente_nome, link)
+    return file_id, link
+
+# ========= PLANILHA: ATUALIZAR LINK =========
+def atualizar_link_na_planilha(cliente_nome, novo_link):
+    valores = df_clientes[col_cliente].fillna("").tolist()
+    try:
+        index = valores.index(cliente_nome)
+        linha = index + 2  # índice começa em 0 + cabeçalho
+        body = {
+            "values": [[novo_link]]
+        }
+        range_ = f"{ABA}!C{linha}"
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID,
+            range=range_,
+            valueInputOption="RAW",
+            body=body
+        ).execute()
+    except ValueError:
+        st.warning(f"Cliente '{cliente_nome}' não encontrado para atualizar link.")
 
 # ========= UI =========
 uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
-# Preview da imagem atual (se existir)
+# Preview atual
 imagem_atual = buscar_imagem_existente(cliente)
 if imagem_atual:
     st.markdown("**Imagem atual do cliente:**")
     st.image(f"https://drive.google.com/uc?id={imagem_atual['id']}", width=300)
+    st.markdown(f"[🔗 Abrir no Drive]({imagem_atual['webViewLink']})", unsafe_allow_html=True)
 else:
     st.info("Nenhuma imagem encontrada para este cliente.")
 
+# Substituir imagem
 if uploaded_file and cliente:
     if st.button("📸 Substituir imagem"):
         try:
-            substituir_imagem_cliente(cliente, uploaded_file)
-            st.success("✅ Imagem enviada com sucesso!")
+            _, link = substituir_imagem_cliente(cliente, uploaded_file)
+            st.success("✅ Imagem enviada e atualizada com sucesso!")
+            st.markdown(f"[🔗 Ver no Drive]({link})", unsafe_allow_html=True)
             st.rerun()
         except Exception as e:
             st.error(f"Erro ao fazer upload: {e}")
 
+# Excluir imagem
 if st.button("🚫 Excluir imagem"):
     existente = buscar_imagem_existente(cliente)
     if existente:
         drive_service.files().delete(fileId=existente["id"]).execute()
+        atualizar_link_na_planilha(cliente, "")
         st.success("✅ Imagem excluída com sucesso.")
         st.rerun()
     else:
