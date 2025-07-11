@@ -34,7 +34,7 @@ def carregar_nomes_clientes():
 
 def buscar_arquivo_drive(nome_arquivo):
     query = f"name='{nome_arquivo}' and '{PASTA_ID}' in parents and trashed = false"
-    response = drive_service.files().list(q=query, fields="files(id, webContentLink)").execute()
+    response = drive_service.files().list(q=query, fields="files(id)").execute()
     files = response.get("files", [])
     return files[0] if files else None
 
@@ -75,6 +75,7 @@ with col1:
         st.image(link_imagem, width=300, caption="📸 Imagem atual")
         if st.button("🗑️ Excluir imagem", use_container_width=True):
             deletar_arquivo_drive(arquivo_drive["id"])
+            atualizar_link_planilha(cliente_nome, "")
             st.success("Imagem excluída com sucesso!")
     else:
         st.info("Nenhuma imagem encontrada para este cliente.")
@@ -90,7 +91,7 @@ with col2:
         novo_arquivo = drive_service.files().create(
             body=file_metadata,
             media_body=media,
-            fields="id, webContentLink"
+            fields="id"
         ).execute()
         link_final = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
         atualizar_link_planilha(cliente_nome, link_final)
