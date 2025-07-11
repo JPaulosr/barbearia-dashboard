@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import pickle
 import tempfile
+import json
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -12,15 +13,30 @@ st.set_page_config(page_title="Upload de Imagem do Cliente", page_icon="📸")
 st.markdown("# 📸 Upload de Imagem do Cliente")
 
 # ========= CONFIG =========
-CLIENT_SECRET_FILE = "/mnt/data/client_secret.json"
-TOKEN_FILE = "token_drive.pkl"
-SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
-PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-PLANILHA_URL = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit?usp=sharing"
+PLANILHA_URL = st.secrets["PLANILHA_URL"]
 SHEET_ID = PLANILHA_URL.split("/")[5]
 ABA = "clientes_status"
+PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
+TOKEN_FILE = "token_drive.pkl"
+CLIENT_SECRET_FILE = "client_secret.json"
 
-# ========= AUTENTICAÇÃO =========
+# ========= GERA ARQUIVO client_secret.json DO OAUTH =========
+if not os.path.exists(CLIENT_SECRET_FILE):
+    with open(CLIENT_SECRET_FILE, "w") as f:
+        json.dump({
+            "web": {
+                "client_id": st.secrets["GOOGLE_OAUTH"]["client_id"],
+                "client_secret": st.secrets["GOOGLE_OAUTH"]["client_secret"],
+                "redirect_uris": st.secrets["GOOGLE_OAUTH"]["redirect_uris"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/v1/certs"
+            }
+        }, f)
+
+# ========= AUTENTICAÇÃO OAUTH =========
+SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+
 def autenticar_oauth():
     creds = None
     if os.path.exists(TOKEN_FILE):
@@ -48,11 +64,7 @@ def carregar_lista_clientes():
 
 try:
     df_clientes = carregar_lista_clientes()
-    coluna_nome = [col for col in df_clientes.columns if col.lower() == "cliente"]
-    if not coluna_nome:
-        st.error("❌ Coluna 'Cliente' não encontrada na planilha.")
-        st.stop()
-    col_cliente = coluna_nome[0]
+    col_cliente = [col for col in df_clientes.columns if col.lower() == "cliente"][0]
     nomes_clientes = df_clientes[col_cliente].dropna().sort_values().unique().tolist()
     cliente = st.selectbox("Selecione o cliente:", nomes_clientes)
 except Exception as e:
@@ -88,7 +100,7 @@ def substituir_imagem_cliente(cliente_nome, arquivo_novo):
     atualizar_link_na_planilha(cliente_nome, link)
     return file_id, link
 
-# ========= PLANILHA: ATUALIZAR LINK =========
+# ========= ATUALIZAÇÃO NA PLANILHA =========
 def atualizar_link_na_planilha(cliente_nome, novo_link):
     valores = df_clientes[col_cliente].fillna("").tolist()
     try:
@@ -110,7 +122,6 @@ def atualizar_link_na_planilha(cliente_nome, novo_link):
 # ========= UI =========
 uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
 
-# Preview atual
 imagem_atual = buscar_imagem_existente(cliente)
 if imagem_atual:
     st.markdown("**Imagem atual do cliente:**")
@@ -119,18 +130,16 @@ if imagem_atual:
 else:
     st.info("Nenhuma imagem encontrada para este cliente.")
 
-# Substituir imagem
 if uploaded_file and cliente:
     if st.button("📸 Substituir imagem"):
         try:
             _, link = substituir_imagem_cliente(cliente, uploaded_file)
-            st.success("✅ Imagem enviada e atualizada com sucesso!")
+            st.success("✅ Imagem enviada com sucesso!")
             st.markdown(f"[🔗 Ver no Drive]({link})", unsafe_allow_html=True)
             st.rerun()
         except Exception as e:
             st.error(f"Erro ao fazer upload: {e}")
 
-# Excluir imagem
 if st.button("🚫 Excluir imagem"):
     existente = buscar_imagem_existente(cliente)
     if existente:
