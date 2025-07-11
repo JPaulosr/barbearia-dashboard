@@ -7,7 +7,6 @@ import os
 import tempfile
 
 st.set_page_config(page_title="Upload de Imagem do Cliente", page_icon="📸")
-
 st.markdown("# 📸 Upload de Imagem do Cliente")
 
 # ===============================
@@ -16,7 +15,9 @@ st.markdown("# 📸 Upload de Imagem do Cliente")
 @st.cache_resource
 def autenticar_drive():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    creds = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
+    creds = service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/drive"]
+    )
     service = build("drive", "v3", credentials=creds)
     return service
 
@@ -36,7 +37,14 @@ def carregar_lista_clientes():
 
 try:
     df_clientes = carregar_lista_clientes()
-    nomes_clientes = df_clientes["Nome"].dropna().sort_values().unique().tolist()
+
+    # Detecta automaticamente a coluna 'Cliente', ignorando maiúsculas/minúsculas
+    coluna_nome = [col for col in df_clientes.columns if col.lower() == "cliente"]
+    if not coluna_nome:
+        st.error("❌ Coluna 'Cliente' não encontrada na aba 'clientes_status'.")
+        st.stop()
+
+    nomes_clientes = df_clientes[coluna_nome[0]].dropna().sort_values().unique().tolist()
     cliente = st.selectbox("Selecione o cliente:", nomes_clientes)
 except Exception as e:
     st.error(f"Erro ao carregar lista de clientes: {e}")
@@ -79,7 +87,7 @@ if uploaded_file and cliente:
     if st.button("📸 Substituir imagem"):
         try:
             substituir_imagem_cliente(cliente, uploaded_file)
-            st.success("Imagem enviada com sucesso!")
+            st.success("✅ Imagem enviada com sucesso!")
         except Exception as e:
             st.error(f"Erro ao fazer upload: {e}")
 
@@ -90,6 +98,6 @@ if st.button("🚫 Excluir imagem"):
     existente_id = buscar_imagem_existente(cliente)
     if existente_id:
         drive_service.files().delete(fileId=existente_id).execute()
-        st.success("Imagem excluída com sucesso.")
+        st.success("✅ Imagem excluída com sucesso.")
     else:
         st.warning("Nenhuma imagem encontrada para este cliente.")
