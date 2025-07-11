@@ -11,7 +11,7 @@ st.markdown("🔒 Envie o arquivo `.json` da conta de serviço")
 
 # ========= AUTENTICAÇÃO GOOGLE DRIVE ========= #
 try:
-    upload_info = dict(st.secrets["GCP_UPLOAD"])  # Usando o bloco correto
+    upload_info = dict(st.secrets["GCP_UPLOAD"])  # Usando secrets sem .replace()
 
     scopes = ["https://www.googleapis.com/auth/drive"]
     credentials = Credentials.from_service_account_info(upload_info, scopes=scopes)
@@ -23,7 +23,7 @@ except Exception as e:
     st.stop()
 
 # ========= CONFIGURAÇÕES ========= #
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # ID da pasta no seu Drive
+PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # ID da pasta no Drive
 TIPOS_PERMITIDOS = ["image/jpeg", "image/png"]
 MAX_MB = 10
 
