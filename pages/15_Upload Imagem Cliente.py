@@ -19,8 +19,9 @@ ABA = "clientes_status"
 PASTA_DRIVE_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 TOKEN_FILE = "token_drive.pkl"
 CLIENT_SECRET_FILE = "client_secret.json"
+SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
 
-# ========= GERA ARQUIVO client_secret.json DO OAUTH =========
+# ========= GERA client_secret.json =========
 if not os.path.exists(CLIENT_SECRET_FILE):
     with open(CLIENT_SECRET_FILE, "w") as f:
         json.dump({
@@ -34,10 +35,8 @@ if not os.path.exists(CLIENT_SECRET_FILE):
             }
         }, f)
 
-# ========= AUTENTICAÇÃO OAUTH =========
-SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
-
-def autenticar_oauth():
+# ========= AUTENTICAÇÃO PARA STREAMLIT CLOUD =========
+def autenticar_oauth_streamlit():
     creds = None
     if os.path.exists(TOKEN_FILE):
         with open(TOKEN_FILE, 'rb') as token:
@@ -45,15 +44,29 @@ def autenticar_oauth():
 
     if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-        creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'wb') as token:
-            pickle.dump(creds, token)
+        auth_url, _ = flow.authorization_url(prompt='consent')
+        st.markdown(f"### 🔐 [Clique aqui para autorizar o Google]({auth_url})", unsafe_allow_html=True)
+        auth_code = st.text_input("Cole aqui o código da URL após autorizar:")
+
+        if auth_code:
+            try:
+                flow.fetch_token(code=auth_code)
+                creds = flow.credentials
+                with open(TOKEN_FILE, 'wb') as token:
+                    pickle.dump(creds, token)
+                st.success("✅ Autenticado com sucesso! Recarregue a página.")
+                st.stop()
+            except Exception as e:
+                st.error(f"Erro ao autenticar: {e}")
+                st.stop()
+        else:
+            st.stop()
 
     drive_service = build('drive', 'v3', credentials=creds)
     sheets_service = build('sheets', 'v4', credentials=creds)
     return drive_service, sheets_service
 
-drive_service, sheets_service = autenticar_oauth()
+drive_service, sheets_service = autenticar_oauth_streamlit()
 
 # ========= CLIENTES =========
 @st.cache_data(ttl=3600)
@@ -100,15 +113,13 @@ def substituir_imagem_cliente(cliente_nome, arquivo_novo):
     atualizar_link_na_planilha(cliente_nome, link)
     return file_id, link
 
-# ========= ATUALIZAÇÃO NA PLANILHA =========
+# ========= PLANILHA =========
 def atualizar_link_na_planilha(cliente_nome, novo_link):
     valores = df_clientes[col_cliente].fillna("").tolist()
     try:
         index = valores.index(cliente_nome)
-        linha = index + 2  # índice começa em 0 + cabeçalho
-        body = {
-            "values": [[novo_link]]
-        }
+        linha = index + 2
+        body = {"values": [[novo_link]]}
         range_ = f"{ABA}!C{linha}"
         sheets_service.spreadsheets().values().update(
             spreadsheetId=SHEET_ID,
@@ -117,7 +128,7 @@ def atualizar_link_na_planilha(cliente_nome, novo_link):
             body=body
         ).execute()
     except ValueError:
-        st.warning(f"Cliente '{cliente_nome}' não encontrado para atualizar link.")
+        st.warning(f"Cliente '{cliente_nome}' não encontrado na planilha.")
 
 # ========= UI =========
 uploaded_file = st.file_uploader("Selecione a imagem do cliente (JPG ou PNG):", type=["jpg", "jpeg", "png"])
