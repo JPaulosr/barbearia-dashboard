@@ -11,7 +11,7 @@ import gspread
 CLIENT_ID = st.secrets["GOOGLE_OAUTH"]["client_id"]
 CLIENT_SECRET = st.secrets["GOOGLE_OAUTH"]["client_secret"]
 REDIRECT_URI = st.secrets["GOOGLE_OAUTH"]["redirect_uris"][0]
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # pasta do seu Drive
+PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # ID da pasta no Google Drive
 PLANILHA_URL = st.secrets["PLANILHA_URL"]
 
 # ===== AUTENTICAÇÃO GOOGLE =====
@@ -32,7 +32,7 @@ def iniciar_autenticacao():
         ],
     )
     flow.redirect_uri = REDIRECT_URI
-    auth_url, _ = flow.authorization_url(prompt="consent")
+    auth_url, _ = flow.authorization_url(prompt="consent", include_granted_scopes="true")
     return flow, auth_url
 
 def trocar_codigo_por_token(flow, codigo):
@@ -59,9 +59,9 @@ def upload_imagem(drive, nome_arquivo, imagem):
     link_publico = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
     return link_publico
 
-def atualizar_link_na_planilha(nome_cliente, link, flow):
+def atualizar_link_na_planilha(nome_cliente, link, credentials):
     try:
-        gc = gspread.authorize(flow.credentials)
+        gc = gspread.authorize(credentials)
         sh = gc.open_by_url(PLANILHA_URL)
         aba = sh.worksheet("clientes_status")
 
@@ -86,28 +86,31 @@ def excluir_imagem(drive, nome_arquivo):
 st.title("📷 Upload Imagem Cliente")
 st.markdown("Faça upload da imagem do cliente. O nome do arquivo será salvo como `nome_cliente.jpg`.")
 
-flow = None
-if "flow" not in st.session_state:
+# ===== AUTENTICAÇÃO (Fluxo completo) =====
+if "flow" not in st.session_state or "credentials" not in st.session_state:
     flow, auth_url = iniciar_autenticacao()
     st.session_state["flow"] = flow
+
     st.markdown(f"[🔐 Clique aqui para autenticar com Google]({auth_url})")
     codigo = st.text_input("Cole aqui o código de autenticação:")
+
     if codigo:
         try:
-            flow = trocar_codigo_por_token(flow, codigo)
-            st.session_state["flow"] = flow
+            flow = trocar_codigo_por_token(st.session_state["flow"], codigo)
+            st.session_state["credentials"] = flow.credentials
             st.success("Autenticação realizada com sucesso!")
-            st.rerun()
+            st.experimental_rerun()
         except Exception as e:
             st.error(f"Erro na autenticação: {e}")
     st.stop()
 
-flow = st.session_state["flow"]
-drive = build("drive", "v3", credentials=flow.credentials)
+# Constrói o cliente do Drive com token OAuth pessoal
+credentials = st.session_state["credentials"]
+drive = build("drive", "v3", credentials=credentials)
 
 # ===== CLIENTES DA PLANILHA =====
 try:
-    gc = gspread.authorize(flow.credentials)
+    gc = gspread.authorize(credentials)
     aba = gc.open_by_url(PLANILHA_URL).worksheet("clientes_status")
     nomes = aba.col_values(1)
     nomes = sorted(list(set(n for n in nomes if n.strip() and n.lower() not in ["brasileiro", "boliviano", "menino"])))
@@ -133,18 +136,18 @@ if link_existente:
         if st.button("🗑️ Excluir imagem"):
             if excluir_imagem(drive, nome_arquivo):
                 st.success("Imagem excluída.")
-                st.rerun()
+                st.experimental_rerun()
     with col2:
         imagem = st.file_uploader("Substituir imagem", type=["jpg", "jpeg"])
         if imagem:
             link = upload_imagem(drive, nome_arquivo, imagem)
-            atualizar_link_na_planilha(nome_cliente, link, flow)
+            atualizar_link_na_planilha(nome_cliente, link, credentials)
             st.success("Imagem substituída com sucesso.")
             st.image(link, width=250)
 else:
     imagem = st.file_uploader("Escolher imagem", type=["jpg", "jpeg"])
     if imagem:
         link = upload_imagem(drive, nome_arquivo, imagem)
-        atualizar_link_na_planilha(nome_cliente, link, flow)
+        atualizar_link_na_planilha(nome_cliente, link, credentials)
         st.success("Imagem enviada com sucesso.")
         st.image(link, width=250)
