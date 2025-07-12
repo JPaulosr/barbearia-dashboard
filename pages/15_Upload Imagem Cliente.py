@@ -106,11 +106,14 @@ with col2:
             fields="id, webContentLink"
         ).execute()
 
-        # Torna o arquivo público
-        drive_service.permissions().create(
-            fileId=novo_arquivo['id'],
-            body={"role": "reader", "type": "anyone"},
-        ).execute()
+        # Torna o arquivo público (com tratamento de erro)
+        try:
+            drive_service.permissions().create(
+                fileId=novo_arquivo['id'],
+                body={"role": "reader", "type": "anyone"},
+            ).execute()
+        except Exception as e:
+            st.warning("⚠️ Imagem enviada, mas não foi possível torná-la pública. Verifique as permissões da pasta no Google Drive.")
 
         link_final = f"https://drive.google.com/uc?export=view&id={novo_arquivo['id']}"
         atualizar_link_planilha(cliente_nome, link_final)
