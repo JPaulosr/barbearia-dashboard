@@ -1,135 +1,93 @@
 import streamlit as st
-import pandas as pd
-import io
 import requests
+import io
 from PIL import Image
-from io import BytesIO
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from urllib.parse import urlencode
 
-# ========== CONFIG ==========
+# ========= CONFIGURAR SEUS DADOS =========
+CLIENT_ID = st.secrets["OAUTH_CLIENT_ID"]
+CLIENT_SECRET = st.secrets["OAUTH_CLIENT_SECRET"]
+REDIRECT_URI = st.secrets["OAUTH_REDIRECT_URI"]
+FOLDER_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
 
-PLANILHA_URL = st.secrets["PLANILHA_URL"]
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
+SCOPE = "https://www.googleapis.com/auth/drive.file"
 
-# ========== AUTENTICAÇÃO ==========
+# ========= FUNÇÕES =========
 
-cred_upload = Credentials.from_service_account_info(
-    st.secrets["GCP_UPLOAD"],
-    scopes=["https://www.googleapis.com/auth/drive"]
-)
-drive_service = build("drive", "v3", credentials=cred_upload)
+def gerar_link_autenticacao():
+    params = {
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "response_type": "code",
+        "scope": SCOPE,
+        "access_type": "offline",
+        "prompt": "consent"
+    }
+    return f"https://accounts.google.com/o/oauth2/auth?{urlencode(params)}"
 
-cred_sheets = Credentials.from_service_account_info(
-    st.secrets["GCP_SERVICE_ACCOUNT"],
-    scopes=["https://www.googleapis.com/auth/spreadsheets"]
-)
-sheets_service = build("sheets", "v4", credentials=cred_sheets)
+def trocar_codigo_por_token(auth_code):
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "code": auth_code,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "redirect_uri": REDIRECT_URI,
+        "grant_type": "authorization_code"
+    }
+    response = requests.post(token_url, data=data)
+    return response.json()
 
-# ========== FUNÇÕES ==========
+def upload_para_drive(access_token, file_bytes, nome_arquivo, mimetype):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    metadata = {
+        "name": nome_arquivo,
+        "parents": [FOLDER_ID]
+    }
 
-@st.cache_data(ttl=300)
-def carregar_nomes_clientes():
-    sheet = sheets_service.spreadsheets().values().get(
-        spreadsheetId=PLANILHA_URL.split("/")[5],
-        range="clientes_status!A2:A"
-    ).execute()
-    valores = sheet.get("values", [])
-    return sorted([linha[0] for linha in valores if linha])
+    files = {
+        "data": ("metadata", io.BytesIO(str(metadata).encode()), "application/json"),
+        "file": (nome_arquivo, file_bytes, mimetype)
+    }
 
-def buscar_arquivo_drive(nome_arquivo):
-    query = f"name='{nome_arquivo}' and '{PASTA_ID}' in parents and trashed = false"
-    response = drive_service.files().list(q=query, fields="files(id, webContentLink)").execute()
-    files = response.get("files", [])
-    return files[0] if files else None
+    upload_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+    response = requests.post(upload_url, headers=headers, files=files)
+    return response.json()
 
-def deletar_arquivo_drive(file_id):
-    drive_service.files().delete(fileId=file_id).execute()
+# ========= INTERFACE =========
 
-def atualizar_link_planilha(nome_cliente, link):
-    valores = sheets_service.spreadsheets().values().get(
-        spreadsheetId=PLANILHA_URL.split("/")[5],
-        range="clientes_status!A2:C"
-    ).execute().get("values", [])
+st.set_page_config("Upload de Imagem", layout="wide")
+st.title("📸 Upload com Google OAuth (pessoal)")
 
-    for idx, linha in enumerate(valores):
-        if linha[0].strip().lower() == nome_cliente.strip().lower():
-            sheets_service.spreadsheets().values().update(
-                spreadsheetId=PLANILHA_URL.split("/")[5],
-                range=f"clientes_status!C{idx + 2}",
-                valueInputOption="RAW",
-                body={"values": [[link]]}
-            ).execute()
-            break
+st.markdown("1️⃣ Clique abaixo para autenticar com sua conta Google:")
+st.markdown(f"[👉 Autenticar com Google]({gerar_link_autenticacao()})")
 
-# ========== INTERFACE ==========
+auth_code = st.text_input("2️⃣ Cole aqui o código de autorização que o Google te deu:", type="default")
 
-st.set_page_config(page_title="Upload de Imagem para o Google Drive", layout="wide")
-st.title("📸 Upload de Imagem para o Google Drive")
-st.markdown("Selecione o cliente abaixo para visualizar, substituir ou excluir a imagem:")
+if auth_code:
+    token_info = trocar_codigo_por_token(auth_code)
 
-nomes_clientes = carregar_nomes_clientes()
-cliente_nome = st.selectbox("🔍 Nome do cliente", nomes_clientes, label_visibility="visible")
+    if "access_token" in token_info:
+        st.success("✅ Autenticação concluída!")
+        access_token = token_info["access_token"]
 
-# Tentativa de localizar imagem atual
-extensoes_possiveis = ["jpg", "jpeg", "png"]
-arquivo_drive = None
-for ext in extensoes_possiveis:
-    tentativa_nome = f"{cliente_nome.strip().lower()}.{ext}"
-    arquivo_drive = buscar_arquivo_drive(tentativa_nome)
-    if arquivo_drive:
-        nome_arquivo = tentativa_nome
-        break
+        cliente_nome = st.text_input("Nome do cliente:")
+        imagem = st.file_uploader("Selecione a imagem", type=["jpg", "jpeg", "png"])
 
-col1, col2 = st.columns([1.2, 1.8])
-with col1:
-    if arquivo_drive:
-        link_imagem = f"https://drive.google.com/uc?export=view&id={arquivo_drive['id']}"
-        try:
-            response = requests.get(link_imagem)
-            img = Image.open(BytesIO(response.content))
-            st.image(img, width=300, caption="📸 Imagem atual")
-        except:
-            st.warning("❌ Erro ao carregar a imagem do cliente.")
-        if st.button("🗑️ Excluir imagem", use_container_width=True):
-            deletar_arquivo_drive(arquivo_drive["id"])
-            st.success("Imagem excluída com sucesso!")
+        if cliente_nome and imagem:
+            extensao = imagem.name.split(".")[-1].lower()
+            mimetype = imagem.type
+            nome_arquivo = f"{cliente_nome.strip().lower()}.{extensao}"
+            file_bytes = imagem.read()
+
+            resultado = upload_para_drive(access_token, file_bytes, nome_arquivo, mimetype)
+
+            if "id" in resultado:
+                link_final = f"https://drive.google.com/uc?export=view&id={resultado['id']}"
+                st.image(Image.open(io.BytesIO(file_bytes)), width=300)
+                st.success(f"Imagem enviada com sucesso!\n[🔗 Ver imagem]({link_final})")
+            else:
+                st.error("❌ Falha no upload. Detalhes:")
+                st.json(resultado)
     else:
-        st.info("Nenhuma imagem encontrada para este cliente.")
-
-with col2:
-    st.markdown("📤 **Substituir ou enviar nova imagem**")
-    nova_imagem = st.file_uploader("Selecione uma imagem", type=["jpg", "jpeg", "png"])
-    if nova_imagem:
-        if arquivo_drive:
-            deletar_arquivo_drive(arquivo_drive["id"])
-
-        # Detecta extensão e tipo MIME automaticamente
-        extensao = nova_imagem.name.split(".")[-1].lower()
-        nome_arquivo = f"{cliente_nome.strip().lower()}.{extensao}"
-        imagem_bytes = nova_imagem.read()
-        mimetype = nova_imagem.type or "image/jpeg"
-
-        # Faz upload para o Drive
-        media = MediaIoBaseUpload(io.BytesIO(imagem_bytes), mimetype=mimetype)
-        file_metadata = {"name": nome_arquivo, "parents": [PASTA_ID]}
-        novo_arquivo = drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, webContentLink"
-        ).execute()
-
-        # Torna o arquivo público
-        try:
-            drive_service.permissions().create(
-                fileId=novo_arquivo['id'],
-                body={"role": "reader", "type": "anyone"},
-            ).execute()
-        except Exception as e:
-            st.warning("⚠️ Imagem enviada, mas não foi possível torná-la pública. Verifique as permissões da pasta no Google Drive.")
-
-        # Atualiza link na planilha
-        link_final = f"https://drive.google.com/uc?export=view&id={novo_arquivo['id']}"
-        atualizar_link_planilha(cliente_nome, link_final)
-        st.success("✅ Imagem enviada e link atualizado com sucesso!")
+        st.error("❌ Código inválido ou expirado.")
+        st.json(token_info)
