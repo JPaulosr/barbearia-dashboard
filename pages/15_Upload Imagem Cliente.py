@@ -1,132 +1,150 @@
 import streamlit as st
-import os
-import pickle
-import requests
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload
+import io
+import os
+import pandas as pd
+import gspread
 
-# ---------- CONFIG ---------- #
-CLIENT_ID = st.secrets["OAUTH_CLIENT_ID"]
-CLIENT_SECRET = st.secrets["OAUTH_CLIENT_SECRET"]
-REDIRECT_URI = st.secrets["OAUTH_REDIRECT_URI"]
+# ===== VARIÁVEIS =====
+CLIENT_ID = st.secrets["GOOGLE_OAUTH"]["client_id"]
+CLIENT_SECRET = st.secrets["GOOGLE_OAUTH"]["client_secret"]
+REDIRECT_URI = st.secrets["GOOGLE_OAUTH"]["redirect_uris"][0]
+PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # pasta do seu Drive
+PLANILHA_URL = st.secrets["PLANILHA_URL"]
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-CREDENTIALS_FILE = 'client_oauth.json'
-TOKEN_FILE = 'token_drive.pkl'
-
-DRIVE_FOLDER_ID = '1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS'  # Pasta no seu Drive
-
-# ---------- FUNÇÕES ---------- #
-
-def salvar_client_oauth_json():
-    data = {
-        "installed": {
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [REDIRECT_URI]
-        }
-    }
-    with open(CREDENTIALS_FILE, "w") as f:
-        import json
-        json.dump(data, f)
-
-
-def criar_flow():
-    salvar_client_oauth_json()
-    return Flow.from_client_secrets_file(
-        CREDENTIALS_FILE,
-        scopes=SCOPES,
-        redirect_uri=REDIRECT_URI
+# ===== AUTENTICAÇÃO GOOGLE =====
+def iniciar_autenticacao():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "redirect_uris": [REDIRECT_URI],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+        },
+        scopes=[
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets",
+        ],
     )
+    flow.redirect_uri = REDIRECT_URI
+    auth_url, _ = flow.authorization_url(prompt="consent")
+    return flow, auth_url
 
+def trocar_codigo_por_token(flow, codigo):
+    flow.fetch_token(code=codigo)
+    return flow
 
-def get_credentials_from_code(code):
-    flow = criar_flow()
-    flow.fetch_token(code=code)
-    creds = flow.credentials
-    with open(TOKEN_FILE, "wb") as token:
-        pickle.dump(creds, token)
-    return creds
+# ===== FUNÇÕES DE DRIVE E PLANILHA =====
+def listar_arquivos(drive):
+    arquivos = drive.files().list(q=f"'{PASTA_ID}' in parents and trashed = false").execute()
+    return arquivos.get("files", [])
 
+def upload_imagem(drive, nome_arquivo, imagem):
+    arquivos_existentes = listar_arquivos(drive)
+    for arq in arquivos_existentes:
+        if arq["name"] == nome_arquivo:
+            drive.files().delete(fileId=arq["id"]).execute()
 
-def carregar_credenciais():
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, "rb") as token:
-            return pickle.load(token)
-    return None
-
-
-def fazer_upload_arquivo(nome_arquivo, caminho_local, mime_type="image/jpeg"):
-    creds = carregar_credenciais()
-    if not creds:
-        st.warning("Credenciais não encontradas. Autentique primeiro.")
-        return None
-
-    service = build('drive', 'v3', credentials=creds)
-    media = MediaFileUpload(caminho_local, mimetype=mime_type)
-    file_metadata = {
-        'name': nome_arquivo,
-        'parents': [DRIVE_FOLDER_ID]
-    }
-
-    results = service.files().list(
-        q=f"'{DRIVE_FOLDER_ID}' in parents and name='{nome_arquivo}' and trashed=false",
-        spaces='drive',
-        fields='files(id, name)'
+    media = MediaIoBaseUpload(io.BytesIO(imagem.read()), mimetype="image/jpeg")
+    novo_arquivo = drive.files().create(
+        body={"name": nome_arquivo, "parents": [PASTA_ID]},
+        media_body=media,
+        fields="id"
     ).execute()
+    link_publico = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
+    return link_publico
 
-    # Se já existe, substitui
-    if results.get('files'):
-        file_id = results['files'][0]['id']
-        service.files().update(fileId=file_id, media_body=media).execute()
-        return file_id
-    else:
-        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-        return file.get("id")
-
-
-# ---------- INTERFACE ---------- #
-
-st.title("📸 Upload de Imagem do Cliente")
-
-code_param = st.experimental_get_query_params().get("code", [None])[0]
-
-if code_param:
+def atualizar_link_na_planilha(nome_cliente, link, flow):
     try:
-        get_credentials_from_code(code_param)
-        st.success("✅ Autenticação concluída com sucesso!")
-        st.experimental_set_query_params()  # Remove ?code=... da URL
+        gc = gspread.authorize(flow.credentials)
+        sh = gc.open_by_url(PLANILHA_URL)
+        aba = sh.worksheet("clientes_status")
+
+        nomes = aba.col_values(1)
+        if nome_cliente in nomes:
+            row_index = nomes.index(nome_cliente) + 1
+            aba.update_cell(row_index, 3, link)
+        else:
+            st.warning("Cliente não encontrado na planilha.")
     except Exception as e:
-        st.error(f"Erro na autenticação: {e}")
-        st.stop()
+        st.error(f"Erro ao atualizar planilha: {e}")
 
-creds = carregar_credenciais()
+def excluir_imagem(drive, nome_arquivo):
+    arquivos = listar_arquivos(drive)
+    for arq in arquivos:
+        if arq["name"] == nome_arquivo:
+            drive.files().delete(fileId=arq["id"]).execute()
+            return True
+    return False
 
-if not creds:
-    flow = criar_flow()
-    auth_url, _ = flow.authorization_url(prompt='consent')
-    st.info("🔐 Você precisa se autenticar com sua conta Google para subir imagens.")
-    st.markdown(f"[Clique aqui para autenticar]({auth_url})")
+# ===== INTERFACE =====
+st.title("📷 Upload Imagem Cliente")
+st.markdown("Faça upload da imagem do cliente. O nome do arquivo será salvo como `nome_cliente.jpg`.")
+
+flow = None
+if "flow" not in st.session_state:
+    flow, auth_url = iniciar_autenticacao()
+    st.session_state["flow"] = flow
+    st.markdown(f"[🔐 Clique aqui para autenticar com Google]({auth_url})")
+    codigo = st.text_input("Cole aqui o código de autenticação:")
+    if codigo:
+        try:
+            flow = trocar_codigo_por_token(flow, codigo)
+            st.session_state["flow"] = flow
+            st.success("Autenticação realizada com sucesso!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Erro na autenticação: {e}")
     st.stop()
 
-nome_cliente = st.text_input("Digite o nome do cliente (sem espaços):")
+flow = st.session_state["flow"]
+drive = build("drive", "v3", credentials=flow.credentials)
 
-arquivo = st.file_uploader("📤 Envie uma imagem (.jpg ou .png)", type=["jpg", "jpeg", "png"])
+# ===== CLIENTES DA PLANILHA =====
+try:
+    gc = gspread.authorize(flow.credentials)
+    aba = gc.open_by_url(PLANILHA_URL).worksheet("clientes_status")
+    nomes = aba.col_values(1)
+    nomes = sorted(list(set(n for n in nomes if n.strip() and n.lower() not in ["brasileiro", "boliviano", "menino"])))
+except Exception as e:
+    st.error(f"Erro ao carregar clientes: {e}")
+    st.stop()
 
-if arquivo and nome_cliente:
-    with open("temp_img.jpg", "wb") as f:
-        f.write(arquivo.read())
+nome_cliente = st.selectbox("Selecione o cliente", nomes)
+nome_arquivo = f"{nome_cliente}.jpg"
+arquivos = listar_arquivos(drive)
 
-    id_img = fazer_upload_arquivo(f"{nome_cliente}.jpg", "temp_img.jpg")
+# ===== PRÉVIA SE EXISTE IMAGEM =====
+link_existente = None
+for arq in arquivos:
+    if arq["name"] == nome_arquivo:
+        link_existente = f"https://drive.google.com/uc?id={arq['id']}"
+        break
 
-    if id_img:
-        link = f"https://drive.google.com/uc?id={id_img}"
-        st.success("✅ Imagem enviada com sucesso!")
-        st.image(link, caption="Prévia da Imagem", width=300)
-        st.markdown(f"[🔗 Link da Imagem]({link})")
-    else:
-        st.error("❌ Falha ao enviar imagem.")
-
+if link_existente:
+    st.image(link_existente, width=250)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🗑️ Excluir imagem"):
+            if excluir_imagem(drive, nome_arquivo):
+                st.success("Imagem excluída.")
+                st.rerun()
+    with col2:
+        imagem = st.file_uploader("Substituir imagem", type=["jpg", "jpeg"])
+        if imagem:
+            link = upload_imagem(drive, nome_arquivo, imagem)
+            atualizar_link_na_planilha(nome_cliente, link, flow)
+            st.success("Imagem substituída com sucesso.")
+            st.image(link, width=250)
+else:
+    imagem = st.file_uploader("Escolher imagem", type=["jpg", "jpeg"])
+    if imagem:
+        link = upload_imagem(drive, nome_arquivo, imagem)
+        atualizar_link_na_planilha(nome_cliente, link, flow)
+        st.success("Imagem enviada com sucesso.")
+        st.image(link, width=250)
