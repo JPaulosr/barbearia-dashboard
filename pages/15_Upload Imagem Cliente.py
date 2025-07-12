@@ -72,8 +72,15 @@ st.markdown("Selecione o cliente abaixo para visualizar, substituir ou excluir a
 nomes_clientes = carregar_nomes_clientes()
 cliente_nome = st.selectbox("🔍 Nome do cliente", nomes_clientes, label_visibility="visible")
 
-nome_arquivo = f"{cliente_nome.strip().lower()}.jpg"
-arquivo_drive = buscar_arquivo_drive(nome_arquivo)
+# Tentativa de localizar imagem atual
+extensoes_possiveis = ["jpg", "jpeg", "png"]
+arquivo_drive = None
+for ext in extensoes_possiveis:
+    tentativa_nome = f"{cliente_nome.strip().lower()}.{ext}"
+    arquivo_drive = buscar_arquivo_drive(tentativa_nome)
+    if arquivo_drive:
+        nome_arquivo = tentativa_nome
+        break
 
 col1, col2 = st.columns([1.2, 1.8])
 with col1:
@@ -98,7 +105,14 @@ with col2:
         if arquivo_drive:
             deletar_arquivo_drive(arquivo_drive["id"])
 
-        media = MediaIoBaseUpload(io.BytesIO(nova_imagem.read()), mimetype="image/jpeg")
+        # Detecta extensão e tipo MIME automaticamente
+        extensao = nova_imagem.name.split(".")[-1].lower()
+        nome_arquivo = f"{cliente_nome.strip().lower()}.{extensao}"
+        imagem_bytes = nova_imagem.read()
+        mimetype = nova_imagem.type or "image/jpeg"
+
+        # Faz upload para o Drive
+        media = MediaIoBaseUpload(io.BytesIO(imagem_bytes), mimetype=mimetype)
         file_metadata = {"name": nome_arquivo, "parents": [PASTA_ID]}
         novo_arquivo = drive_service.files().create(
             body=file_metadata,
@@ -106,7 +120,7 @@ with col2:
             fields="id, webContentLink"
         ).execute()
 
-        # Torna o arquivo público (com tratamento de erro)
+        # Torna o arquivo público
         try:
             drive_service.permissions().create(
                 fileId=novo_arquivo['id'],
@@ -115,6 +129,7 @@ with col2:
         except Exception as e:
             st.warning("⚠️ Imagem enviada, mas não foi possível torná-la pública. Verifique as permissões da pasta no Google Drive.")
 
+        # Atualiza link na planilha
         link_final = f"https://drive.google.com/uc?export=view&id={novo_arquivo['id']}"
         atualizar_link_planilha(cliente_nome, link_final)
         st.success("✅ Imagem enviada e link atualizado com sucesso!")
