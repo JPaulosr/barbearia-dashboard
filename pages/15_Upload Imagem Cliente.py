@@ -1,131 +1,132 @@
 import streamlit as st
+import os
+import pickle
 import requests
-import io
-from PIL import Image
-from urllib.parse import urlencode
-from google.oauth2.service_account import Credentials
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
-# ========== CONFIGS ==========
+# ---------- CONFIG ---------- #
 CLIENT_ID = st.secrets["OAUTH_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["OAUTH_CLIENT_SECRET"]
 REDIRECT_URI = st.secrets["OAUTH_REDIRECT_URI"]
-FOLDER_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"
-PLANILHA_ID = st.secrets["PLANILHA_URL"].split("/")[5]
 
-SCOPE = "https://www.googleapis.com/auth/drive.file"
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+CREDENTIALS_FILE = 'client_oauth.json'
+TOKEN_FILE = 'token_drive.pkl'
 
-# ========== PLANILHA (usando conta de serviço só para leitura e escrita) ==========
-cred_sheets = Credentials.from_service_account_info(
-    st.secrets["GCP_SERVICE_ACCOUNT"],
-    scopes=["https://www.googleapis.com/auth/spreadsheets"]
-)
-sheets_service = build("sheets", "v4", credentials=cred_sheets)
+DRIVE_FOLDER_ID = '1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS'  # Pasta no seu Drive
 
-@st.cache_data(ttl=300)
-def carregar_nomes_clientes():
-    sheet = sheets_service.spreadsheets().values().get(
-        spreadsheetId=PLANILHA_ID,
-        range="clientes_status!A2:A"
-    ).execute()
-    valores = sheet.get("values", [])
-    return sorted([linha[0] for linha in valores if linha])
+# ---------- FUNÇÕES ---------- #
 
-def atualizar_link_planilha(nome_cliente, link_imagem):
-    valores = sheets_service.spreadsheets().values().get(
-        spreadsheetId=PLANILHA_ID,
-        range="clientes_status!A2:C"
-    ).execute().get("values", [])
-    for idx, linha in enumerate(valores):
-        if linha[0].strip().lower() == nome_cliente.strip().lower():
-            sheets_service.spreadsheets().values().update(
-                spreadsheetId=PLANILHA_ID,
-                range=f"clientes_status!C{idx + 2}",
-                valueInputOption="RAW",
-                body={"values": [[link_imagem]]}
-            ).execute()
-            break
-
-# ========== FUNÇÕES DE AUTENTICAÇÃO ==========
-def gerar_link_autenticacao():
-    params = {
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "response_type": "code",
-        "scope": SCOPE,
-        "access_type": "offline",
-        "prompt": "consent"
-    }
-    return f"https://accounts.google.com/o/oauth2/auth?{urlencode(params)}"
-
-def trocar_codigo_por_token(auth_code):
-    token_url = "https://oauth2.googleapis.com/token"
+def salvar_client_oauth_json():
     data = {
-        "code": auth_code,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "redirect_uri": REDIRECT_URI,
-        "grant_type": "authorization_code"
+        "installed": {
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [REDIRECT_URI]
+        }
     }
-    response = requests.post(token_url, data=data)
-    return response.json()
+    with open(CREDENTIALS_FILE, "w") as f:
+        import json
+        json.dump(data, f)
 
-def upload_para_drive(access_token, file_bytes, nome_arquivo, mimetype):
-    headers = {"Authorization": f"Bearer {access_token}"}
-    metadata = {
-        "name": nome_arquivo,
-        "parents": [FOLDER_ID]
+
+def criar_flow():
+    salvar_client_oauth_json()
+    return Flow.from_client_secrets_file(
+        CREDENTIALS_FILE,
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI
+    )
+
+
+def get_credentials_from_code(code):
+    flow = criar_flow()
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    with open(TOKEN_FILE, "wb") as token:
+        pickle.dump(creds, token)
+    return creds
+
+
+def carregar_credenciais():
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, "rb") as token:
+            return pickle.load(token)
+    return None
+
+
+def fazer_upload_arquivo(nome_arquivo, caminho_local, mime_type="image/jpeg"):
+    creds = carregar_credenciais()
+    if not creds:
+        st.warning("Credenciais não encontradas. Autentique primeiro.")
+        return None
+
+    service = build('drive', 'v3', credentials=creds)
+    media = MediaFileUpload(caminho_local, mimetype=mime_type)
+    file_metadata = {
+        'name': nome_arquivo,
+        'parents': [DRIVE_FOLDER_ID]
     }
-    files = {
-        "data": ("metadata", io.BytesIO(str(metadata).encode()), "application/json"),
-        "file": (nome_arquivo, file_bytes, mimetype)
-    }
-    upload_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
-    response = requests.post(upload_url, headers=headers, files=files)
-    return response.json()
 
-# ========== INTERFACE ==========
-st.set_page_config("Upload de Imagem Cliente", layout="wide")
-st.title("📸 Upload de Imagem com Google OAuth")
-st.markdown("1️⃣ Clique no link abaixo para autenticar com sua conta Google:")
+    results = service.files().list(
+        q=f"'{DRIVE_FOLDER_ID}' in parents and name='{nome_arquivo}' and trashed=false",
+        spaces='drive',
+        fields='files(id, name)'
+    ).execute()
 
-st.markdown(f"[👉 Autenticar com Google]({gerar_link_autenticacao()})")
-
-auth_code = st.text_input("2️⃣ Cole aqui o código de autorização gerado pelo Google:")
-
-if auth_code:
-    token_info = trocar_codigo_por_token(auth_code)
-
-    if "access_token" in token_info:
-        st.success("✅ Autenticação concluída com sucesso!")
-        access_token = token_info["access_token"]
-
-        nomes_clientes = carregar_nomes_clientes()
-        cliente_nome = st.selectbox("🧍 Nome do cliente", nomes_clientes)
-
-        imagem = st.file_uploader("📤 Selecione a imagem do cliente", type=["jpg", "jpeg", "png"])
-
-        if cliente_nome and imagem:
-            extensao = imagem.name.split(".")[-1].lower()
-            mimetype = imagem.type
-            nome_arquivo = f"{cliente_nome.strip().lower()}.{extensao}"
-            file_bytes = imagem.read()
-
-            resultado = upload_para_drive(access_token, file_bytes, nome_arquivo, mimetype)
-
-            if "id" in resultado:
-                link_final = f"https://drive.google.com/uc?export=view&id={resultado['id']}"
-                atualizar_link_planilha(cliente_nome, link_final)
-                st.image(Image.open(io.BytesIO(file_bytes)), width=300, caption="Imagem enviada")
-                st.success(f"✅ Imagem enviada e planilha atualizada com sucesso!")
-                st.markdown(f"[🔗 Ver imagem no Drive]({link_final})")
-            else:
-                st.error("❌ Erro ao fazer upload. Resposta da API:")
-                st.json(resultado)
-        elif not imagem:
-            st.info("📎 Envie uma imagem para continuar.")
-        elif not cliente_nome:
-            st.info("🔍 Selecione um cliente.")
+    # Se já existe, substitui
+    if results.get('files'):
+        file_id = results['files'][0]['id']
+        service.files().update(fileId=file_id, media_body=media).execute()
+        return file_id
     else:
-        st.error("❌ Código de autenticação inválido ou expirado.")
-        st.json(token_info)
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return file.get("id")
+
+
+# ---------- INTERFACE ---------- #
+
+st.title("📸 Upload de Imagem do Cliente")
+
+code_param = st.experimental_get_query_params().get("code", [None])[0]
+
+if code_param:
+    try:
+        get_credentials_from_code(code_param)
+        st.success("✅ Autenticação concluída com sucesso!")
+        st.experimental_set_query_params()  # Remove ?code=... da URL
+    except Exception as e:
+        st.error(f"Erro na autenticação: {e}")
+        st.stop()
+
+creds = carregar_credenciais()
+
+if not creds:
+    flow = criar_flow()
+    auth_url, _ = flow.authorization_url(prompt='consent')
+    st.info("🔐 Você precisa se autenticar com sua conta Google para subir imagens.")
+    st.markdown(f"[Clique aqui para autenticar]({auth_url})")
+    st.stop()
+
+nome_cliente = st.text_input("Digite o nome do cliente (sem espaços):")
+
+arquivo = st.file_uploader("📤 Envie uma imagem (.jpg ou .png)", type=["jpg", "jpeg", "png"])
+
+if arquivo and nome_cliente:
+    with open("temp_img.jpg", "wb") as f:
+        f.write(arquivo.read())
+
+    id_img = fazer_upload_arquivo(f"{nome_cliente}.jpg", "temp_img.jpg")
+
+    if id_img:
+        link = f"https://drive.google.com/uc?id={id_img}"
+        st.success("✅ Imagem enviada com sucesso!")
+        st.image(link, caption="Prévia da Imagem", width=300)
+        st.markdown(f"[🔗 Link da Imagem]({link})")
+    else:
+        st.error("❌ Falha ao enviar imagem.")
+
