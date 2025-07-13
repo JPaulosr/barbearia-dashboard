@@ -1,90 +1,58 @@
 import streamlit as st
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import cloudinary
 import cloudinary.uploader
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+from PIL import Image
 
-# ===== CONFIGURAÇÕES =====
-PLANILHA_URL = st.secrets["PLANILHA_URL"]
-
-# ===== AUTENTICAÇÃO GOOGLE VIA CONTA DE SERVIÇO =====
-scope = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(
-    st.secrets["GCP_SERVICE_ACCOUNT"], scopes=scope
-)
-
-# ===== CONECTA À PLANILHA =====
-try:
-    gc = gspread.authorize(credentials)
-    aba = gc.open_by_url(PLANILHA_URL).worksheet("clientes_status")
-    nomes = aba.col_values(1)
-    nomes = sorted(list(set(n for n in nomes if n.strip() and n.lower() not in ["brasileiro", "boliviano", "menino"])))
-except Exception as e:
-    st.error(f"Erro ao carregar clientes: {e}")
-    st.stop()
-
-# ===== CONFIGURAÇÃO CLOUDINARY =====
+# ===== Configuração Cloudinary =====
 cloudinary.config(
     cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
     api_key=st.secrets["CLOUDINARY"]["api_key"],
     api_secret=st.secrets["CLOUDINARY"]["api_secret"]
 )
 
-def upload_imagem_cloudinary(imagem, nome_cliente):
-    resultado = cloudinary.uploader.upload(
-        imagem,
-        public_id=nome_cliente,
-        overwrite=True,
-        resource_type="image"
-    )
-    return resultado["secure_url"]
+# ===== Planilha Google Sheets =====
+PLANILHA_URL = st.secrets["PLANILHA_URL"]
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_info(st.secrets["GCP_SERVICE_ACCOUNT"], scopes=SCOPE)
+gc = gspread.authorize(creds)
+sheet = gc.open_by_url(PLANILHA_URL).worksheet("clientes_status")
 
-def excluir_imagem_cloudinary(nome_cliente):
-    try:
-        cloudinary.uploader.destroy(nome_cliente, resource_type="image")
-        return True
-    except Exception as e:
-        st.error(f"Erro ao excluir imagem: {e}")
-        return False
+# ===== Interface =====
+st.title("📷 Upload Imagem Cliente")
+st.markdown("Envie ou substitua a imagem do cliente. O nome do arquivo será `nome_cliente.jpg`.")
 
-def atualizar_link_na_planilha(nome_cliente, link):
-    try:
-        nomes = aba.col_values(1)
-        if nome_cliente in nomes:
-            row_index = nomes.index(nome_cliente) + 1
-            aba.update_cell(row_index, 3, link)
+# Lista de clientes
+clientes = sheet.col_values(1)
+clientes = sorted([c for c in clientes if c.strip() and c.lower() not in ["brasileiro", "boliviano", "menino"]])
+cliente = st.selectbox("Selecione o cliente", clientes)
+nome_arquivo = f"{cliente}.jpg"
+
+# Verificar se já existe link
+linhas = sheet.get_all_values()
+links = {linha[0]: linha[2] if len(linha) > 2 else "" for linha in linhas}
+link_existente = links.get(cliente, "")
+
+# Mostrar imagem existente
+if link_existente:
+    st.markdown("**Prévia atual:**")
+    st.image(link_existente, width=250)
+
+# ===== Upload =====
+imagem = st.file_uploader("Escolher nova imagem", type=["jpg", "jpeg"])
+if imagem:
+    with st.spinner("Enviando imagem..."):
+        resultado = cloudinary.uploader.upload(imagem, public_id=nome_arquivo, overwrite=True, resource_type="image")
+        link_novo = resultado["secure_url"]
+
+        # Atualizar planilha
+        celulas = sheet.col_values(1)
+        if cliente in celulas:
+            row = celulas.index(cliente) + 1
+            sheet.update_cell(row, 3, link_novo)
+            st.success("Imagem enviada com sucesso!")
+            st.image(link_novo, width=250)
         else:
             st.warning("Cliente não encontrado na planilha.")
-    except Exception as e:
-        st.error(f"Erro ao atualizar planilha: {e}")
-
-# ===== INTERFACE =====
-st.title("📷 Upload Imagem Cliente")
-st.markdown("Faça upload da imagem do cliente. O nome do arquivo será salvo como `nome_cliente.jpg` no Cloudinary.")
-
-nome_cliente = st.selectbox("Selecione o cliente", nomes)
-link_existente = f"https://res.cloudinary.com/{st.secrets['CLOUDINARY']['cloud_name']}/image/upload/{nome_cliente}.jpg"
-
-# ===== PRÉVIA DA IMAGEM EXISTENTE =====
-st.markdown("### Prévia atual:")
-st.image(link_existente, width=250)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button("🗑️ Excluir imagem"):
-        if excluir_imagem_cloudinary(nome_cliente):
-            st.success("Imagem excluída com sucesso.")
-            aba.update_cell(nomes.index(nome_cliente)+1, 3, "")
-            st.experimental_rerun()
-
-with col2:
-    imagem = st.file_uploader("Substituir imagem", type=["jpg", "jpeg"])
-    if imagem:
-        link = upload_imagem_cloudinary(imagem, nome_cliente)
-        atualizar_link_na_planilha(nome_cliente, link)
-        st.success("Imagem atualizada com sucesso!")
-        st.image(link, width=250)
