@@ -1,114 +1,22 @@
 import streamlit as st
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-import io
-import os
-import pandas as pd
 import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import cloudinary
+import cloudinary.uploader
 
-# ===== VARIÁVEIS =====
-CLIENT_ID = st.secrets["GOOGLE_OAUTH"]["client_id"]
-CLIENT_SECRET = st.secrets["GOOGLE_OAUTH"]["client_secret"]
-REDIRECT_URI = st.secrets["GOOGLE_OAUTH"]["redirect_uris"][0]
-PASTA_ID = "1-OrY7dPYJeXu3WVo-PVn8tV0tbxPtnWS"  # ID da pasta no Google Drive
+# ===== CONFIGURAÇÕES =====
 PLANILHA_URL = st.secrets["PLANILHA_URL"]
 
-# ===== AUTENTICAÇÃO GOOGLE =====
-def iniciar_autenticacao():
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "redirect_uris": [REDIRECT_URI],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
-        scopes=[
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets",
-        ],
-    )
-    flow.redirect_uri = REDIRECT_URI
-    auth_url, _ = flow.authorization_url(prompt="consent", include_granted_scopes="true")
-    return flow, auth_url
+# ===== AUTENTICAÇÃO GOOGLE VIA CONTA DE SERVIÇO =====
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(
+    st.secrets["GCP_SERVICE_ACCOUNT"], scopes=scope
+)
 
-def trocar_codigo_por_token(flow, codigo):
-    flow.fetch_token(code=codigo)
-    return flow
-
-# ===== FUNÇÕES DE DRIVE E PLANILHA =====
-def listar_arquivos(drive):
-    arquivos = drive.files().list(q=f"'{PASTA_ID}' in parents and trashed = false").execute()
-    return arquivos.get("files", [])
-
-def upload_imagem(drive, nome_arquivo, imagem):
-    arquivos_existentes = listar_arquivos(drive)
-    for arq in arquivos_existentes:
-        if arq["name"] == nome_arquivo:
-            drive.files().delete(fileId=arq["id"]).execute()
-
-    media = MediaIoBaseUpload(io.BytesIO(imagem.read()), mimetype="image/jpeg")
-    novo_arquivo = drive.files().create(
-        body={"name": nome_arquivo, "parents": [PASTA_ID]},
-        media_body=media,
-        fields="id"
-    ).execute()
-    link_publico = f"https://drive.google.com/uc?id={novo_arquivo['id']}"
-    return link_publico
-
-def atualizar_link_na_planilha(nome_cliente, link, credentials):
-    try:
-        gc = gspread.authorize(credentials)
-        sh = gc.open_by_url(PLANILHA_URL)
-        aba = sh.worksheet("clientes_status")
-
-        nomes = aba.col_values(1)
-        if nome_cliente in nomes:
-            row_index = nomes.index(nome_cliente) + 1
-            aba.update_cell(row_index, 3, link)
-        else:
-            st.warning("Cliente não encontrado na planilha.")
-    except Exception as e:
-        st.error(f"Erro ao atualizar planilha: {e}")
-
-def excluir_imagem(drive, nome_arquivo):
-    arquivos = listar_arquivos(drive)
-    for arq in arquivos:
-        if arq["name"] == nome_arquivo:
-            drive.files().delete(fileId=arq["id"]).execute()
-            return True
-    return False
-
-# ===== INTERFACE =====
-st.title("📷 Upload Imagem Cliente")
-st.markdown("Faça upload da imagem do cliente. O nome do arquivo será salvo como `nome_cliente.jpg`.")
-
-# ===== AUTENTICAÇÃO (Fluxo completo) =====
-if "flow" not in st.session_state or "credentials" not in st.session_state:
-    flow, auth_url = iniciar_autenticacao()
-    st.session_state["flow"] = flow
-
-    st.markdown(f"[🔐 Clique aqui para autenticar com Google]({auth_url})")
-    codigo = st.text_input("Cole aqui o código de autenticação:")
-
-    if codigo:
-        try:
-            flow = trocar_codigo_por_token(st.session_state["flow"], codigo)
-            st.session_state["credentials"] = flow.credentials
-            st.success("Autenticação realizada com sucesso!")
-            st.experimental_rerun()
-        except Exception as e:
-            st.error(f"Erro na autenticação: {e}")
-    st.stop()
-
-# Constrói o cliente do Drive com token OAuth pessoal
-credentials = st.session_state["credentials"]
-drive = build("drive", "v3", credentials=credentials)
-
-# ===== CLIENTES DA PLANILHA =====
+# ===== CONECTA À PLANILHA =====
 try:
     gc = gspread.authorize(credentials)
     aba = gc.open_by_url(PLANILHA_URL).worksheet("clientes_status")
@@ -118,36 +26,65 @@ except Exception as e:
     st.error(f"Erro ao carregar clientes: {e}")
     st.stop()
 
+# ===== CONFIGURAÇÃO CLOUDINARY =====
+cloudinary.config(
+    cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
+    api_key=st.secrets["CLOUDINARY"]["api_key"],
+    api_secret=st.secrets["CLOUDINARY"]["api_secret"]
+)
+
+def upload_imagem_cloudinary(imagem, nome_cliente):
+    resultado = cloudinary.uploader.upload(
+        imagem,
+        public_id=nome_cliente,
+        overwrite=True,
+        resource_type="image"
+    )
+    return resultado["secure_url"]
+
+def excluir_imagem_cloudinary(nome_cliente):
+    try:
+        cloudinary.uploader.destroy(nome_cliente, resource_type="image")
+        return True
+    except Exception as e:
+        st.error(f"Erro ao excluir imagem: {e}")
+        return False
+
+def atualizar_link_na_planilha(nome_cliente, link):
+    try:
+        nomes = aba.col_values(1)
+        if nome_cliente in nomes:
+            row_index = nomes.index(nome_cliente) + 1
+            aba.update_cell(row_index, 3, link)
+        else:
+            st.warning("Cliente não encontrado na planilha.")
+    except Exception as e:
+        st.error(f"Erro ao atualizar planilha: {e}")
+
+# ===== INTERFACE =====
+st.title("📷 Upload Imagem Cliente")
+st.markdown("Faça upload da imagem do cliente. O nome do arquivo será salvo como `nome_cliente.jpg` no Cloudinary.")
+
 nome_cliente = st.selectbox("Selecione o cliente", nomes)
-nome_arquivo = f"{nome_cliente}.jpg"
-arquivos = listar_arquivos(drive)
+link_existente = f"https://res.cloudinary.com/{st.secrets['CLOUDINARY']['cloud_name']}/image/upload/{nome_cliente}.jpg"
 
-# ===== PRÉVIA SE EXISTE IMAGEM =====
-link_existente = None
-for arq in arquivos:
-    if arq["name"] == nome_arquivo:
-        link_existente = f"https://drive.google.com/uc?id={arq['id']}"
-        break
+# ===== PRÉVIA DA IMAGEM EXISTENTE =====
+st.markdown("### Prévia atual:")
+st.image(link_existente, width=250)
 
-if link_existente:
-    st.image(link_existente, width=250)
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🗑️ Excluir imagem"):
-            if excluir_imagem(drive, nome_arquivo):
-                st.success("Imagem excluída.")
-                st.experimental_rerun()
-    with col2:
-        imagem = st.file_uploader("Substituir imagem", type=["jpg", "jpeg"])
-        if imagem:
-            link = upload_imagem(drive, nome_arquivo, imagem)
-            atualizar_link_na_planilha(nome_cliente, link, credentials)
-            st.success("Imagem substituída com sucesso.")
-            st.image(link, width=250)
-else:
-    imagem = st.file_uploader("Escolher imagem", type=["jpg", "jpeg"])
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🗑️ Excluir imagem"):
+        if excluir_imagem_cloudinary(nome_cliente):
+            st.success("Imagem excluída com sucesso.")
+            aba.update_cell(nomes.index(nome_cliente)+1, 3, "")
+            st.experimental_rerun()
+
+with col2:
+    imagem = st.file_uploader("Substituir imagem", type=["jpg", "jpeg"])
     if imagem:
-        link = upload_imagem(drive, nome_arquivo, imagem)
-        atualizar_link_na_planilha(nome_cliente, link, credentials)
-        st.success("Imagem enviada com sucesso.")
+        link = upload_imagem_cloudinary(imagem, nome_cliente)
+        atualizar_link_na_planilha(nome_cliente, link)
+        st.success("Imagem atualizada com sucesso!")
         st.image(link, width=250)
