@@ -39,10 +39,11 @@ if 'Cliente' not in df_status.columns:
     st.error("A coluna 'Cliente' não foi encontrada na aba 'clientes_status'.")
     st.stop()
 
-nomes_clientes = df_status['Cliente'].dropna().unique().tolist()
+# Remove clientes vazios
+nomes_clientes = sorted([nome for nome in df_status['Cliente'].dropna() if nome.strip() != ""])
 
 # =============== SELEÇÃO DO CLIENTE ===============
-nome_cliente = st.selectbox("Selecione o cliente", sorted(nomes_clientes), placeholder="Digite para buscar...")
+nome_cliente = st.selectbox("Selecione o cliente", nomes_clientes, placeholder="Digite para buscar...")
 nome_arquivo = nome_cliente.lower().replace(" ", "_") + ".jpg"
 pasta = "Fotos clientes"
 
@@ -127,7 +128,7 @@ st.subheader("🖼️ Galeria de imagens salvas")
 colunas = st.columns(5)
 contador = 0
 
-for nome in sorted(nomes_clientes):
+for nome in nomes_clientes:
     nome_arquivo = nome.lower().replace(" ", "_") + ".jpg"
     try:
         response = cloudinary.api.resource(f"{pasta}/{nome_arquivo}")
