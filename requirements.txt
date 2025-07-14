@@ -12,3 +12,4 @@ google-api-python-client
 requests
 cloudinary
 streamlit-aggrid
+streamlit-searchbox
