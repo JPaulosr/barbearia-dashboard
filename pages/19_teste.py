@@ -14,15 +14,17 @@ st.title("📅 Frequência dos Clientes")
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
+LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
 
 # === Funções auxiliares ===
 def carregar_imagem(link):
+    url = link if link and isinstance(link, str) and link.startswith("http") else LOGO_PADRAO
     try:
-        response = requests.get(link)
+        response = requests.get(url)
         if response.status_code == 200:
             return Image.open(BytesIO(response.content))
         else:
-            st.warning(f"🔗 Erro ao carregar imagem ({response.status_code}): {link}")
+            st.warning(f"🔗 Erro ao carregar imagem ({response.status_code}): {url}")
     except Exception as e:
         st.error(f"❌ Erro ao carregar imagem: {e}")
     return None
@@ -137,8 +139,6 @@ def exibir_clientes_em_galeria(df_input, titulo):
             imagem = carregar_imagem(row["Imagem"])
             if imagem:
                 st.image(imagem, width=80)
-            else:
-                st.markdown("📷❌")
             st.markdown(f"**{row['Cliente']}**")
             st.markdown(
                 f"🗓️ Último: {row['Último Atendimento']}  \n"
