@@ -1,108 +1,111 @@
 import streamlit as st
 import pandas as pd
-import requests
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
+import requests
 from io import BytesIO
 from PIL import Image
+from google.oauth2.service_account import Credentials
+import gspread
+import base64
 
-# ----------- CONFIG -----------
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
+st.set_page_config(page_title="Upload Imagem Cliente")
+st.markdown("""
+    <h1 style='text-align: center;'>📸 Upload Imagem Cliente</h1>
+    <p style='text-align: center;'>Envie ou substitua a imagem do cliente. O nome do arquivo será <code>nome_cliente.jpg</code>.</p>
+""", unsafe_allow_html=True)
 
-# Planilha Google Sheets
-PLANILHA_URL = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit?usp=sharing"
-SHEET_ID = PLANILHA_URL.split("/")[5]
-ABA_CLIENTES = "clientes_status"
-
-# Conta de serviço para acessar Google Sheets
-credenciais_dict = {
-    "type": "service_account",
-    "project_id": "barbearia-dashboard",
-    "private_key_id": "7c71bcbfaa1a8d935e1474fcabbe0c7c7ea8cae5",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhki...\n-----END PRIVATE KEY-----\n",
-    "client_email": "streamlit-reader@barbearia-dashboard.iam.gserviceaccount.com",
-    "client_id": "102292204018013167995",
-    "token_uri": "https://oauth2.googleapis.com/token",
-}
-
-# Cloudinary
+# =============== CONFIGURAR CLOUDINARY ===============
 cloudinary.config(
-    cloud_name="db8ipmete",
-    api_key="144536432264916",
-    api_secret="eVwo_kpkphpGDi4djTzNYGC5qJQ"
+    cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
+    api_key=st.secrets["CLOUDINARY"]["api_key"],
+    api_secret=st.secrets["CLOUDINARY"]["api_secret"]
 )
 
-PASTA_CLOUDINARY = "Fotos clientes"
-
-# ----------- FUNÇÕES -----------
+# =============== FUNÇÃO PARA CARREGAR PLANILHA CLIENTES ===============
 def carregar_clientes_status():
-    creds = service_account.Credentials.from_service_account_info(credenciais_dict)
-    service = build('sheets', 'v4', credentials=creds)
-    sheet = service.spreadsheets()
-    result = sheet.values().get(spreadsheetId=SHEET_ID, range=ABA_CLIENTES).execute()
-    valores = result.get("values", [])
-    df = pd.DataFrame(valores[1:], columns=valores[0])
-    return df
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"])
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_url(st.secrets["PLANILHA_URL"])
+    aba = spreadsheet.worksheet("clientes_status")
+    dados = aba.get_all_records()
+    return pd.DataFrame(dados), aba
 
-def imagem_existe(nome_arquivo):
+df_status, aba_status = carregar_clientes_status()
+nomes_clientes = df_status['Nome'].dropna().unique().tolist()
+
+# =============== SELEÇÃO COM AUTOCOMPLETE ===============
+nome_cliente = st.selectbox("Selecione o cliente", sorted(nomes_clientes), placeholder="Digite para buscar...")
+
+nome_arquivo = nome_cliente.lower().replace(" ", "_") + ".jpg"
+pasta = "Fotos clientes"
+
+# =============== FUNÇÃO PARA VERIFICAR SE IMAGEM EXISTE ===============
+def imagem_existe(nome):
     try:
-        cloudinary.api.resource(f"{PASTA_CLOUDINARY}/{nome_arquivo}")
-        return True
+        response = cloudinary.api.resource(f"{pasta}/{nome}")
+        return True, response['secure_url']
     except:
-        return False
+        return False, None
 
-def deletar_imagem(nome_arquivo):
-    try:
-        cloudinary.uploader.destroy(f"{PASTA_CLOUDINARY}/{nome_arquivo}")
-        return True
-    except:
-        return False
+# =============== VERIFICAR SE JÁ EXISTE ===============
+existe, url_existente = imagem_existe(nome_arquivo)
 
-def gerar_url_imagem(nome_arquivo):
-    return f"https://res.cloudinary.com/{cloudinary.config().cloud_name}/image/upload/{PASTA_CLOUDINARY}/{nome_arquivo}"
+# =============== MOSTRAR PRÉVIA SE EXISTIR ===============
+if existe:
+    st.image(url_existente, width=250, caption="Imagem atual do cliente")
+    st.warning("Este cliente já possui uma imagem cadastrada.")
 
-# ----------- INTERFACE -----------
-st.title("📸 Upload Imagem Cliente")
-st.caption("Envie ou substitua a imagem do cliente. O nome do arquivo será *nome_cliente.jpg*.")
+# =============== UPLOAD DE NOVA IMAGEM ===============
+arquivo = st.file_uploader("Envie a nova imagem", type=['jpg', 'jpeg', 'png'])
 
-# Carregar nomes de clientes
-df_status = carregar_clientes_status()
-nomes_clientes = sorted(df_status["Nome"].dropna().unique())
-nome = st.selectbox("Selecione o cliente", nomes_clientes, placeholder="Digite para buscar...")
+# =============== SUBSTITUIÇÃO COM CONFIRMAÇÃO ===============
+if arquivo is not None:
+    if existe:
+        if not st.checkbox("Confirmo que desejo substituir a imagem existente."):
+            st.stop()
 
-if nome:
+    if st.button("📤 Enviar imagem"):
+        try:
+            resultado = cloudinary.uploader.upload(arquivo,
+                folder=pasta,
+                public_id=nome_arquivo.replace(".jpg", ""),
+                overwrite=True,
+                resource_type="image"
+            )
+            url = resultado['secure_url']
+
+            # Atualiza a planilha
+            idx = df_status[df_status['Nome'] == nome_cliente].index[0]
+            aba_status.update_cell(idx + 2, df_status.columns.get_loc("Link") + 1, url)
+
+            st.success("Imagem enviada com sucesso!")
+            st.image(url, width=300)
+        except Exception as e:
+            st.error(f"Erro ao enviar imagem: {e}")
+
+# =============== BOTÃO DELETAR ===============
+if existe:
+    if st.button("🗑️ Deletar imagem"):
+        try:
+            cloudinary.uploader.destroy(f"{pasta}/{nome_arquivo.replace('.jpg', '')}", resource_type="image")
+            st.success("Imagem deletada com sucesso.")
+            st.experimental_rerun()
+        except:
+            st.error("Erro ao deletar imagem.")
+
+# =============== GALERIA DE PRÉ-VISUALIZAÇÕES ===============
+st.markdown("---")
+st.subheader("🖼️ Galeria de imagens salvas")
+
+colunas = st.columns(5)
+contador = 0
+
+for i, nome in enumerate(sorted(nomes_clientes)):
     nome_arquivo = nome.lower().replace(" ", "_") + ".jpg"
-    url = gerar_url_imagem(nome_arquivo)
-    imagem_existe_flag = imagem_existe(nome_arquivo)
-
-    col1, col2 = st.columns([1, 1])
-
-    if imagem_existe_flag:
-        col1.success("Imagem já existe para este cliente.")
-        col1.image(url, width=200, caption="Imagem atual")
-
-        if col2.button("🗑️ Deletar imagem"):
-            if deletar_imagem(nome_arquivo):
-                st.success("Imagem deletada com sucesso!")
-            else:
-                st.error("Erro ao deletar imagem.")
-
-    uploaded_file = st.file_uploader("Selecione uma nova imagem para enviar", type=["jpg", "jpeg", "png"])
-
-    if uploaded_file:
-        imagem = Image.open(uploaded_file)
-        st.image(imagem, width=200, caption="Prévia da nova imagem")
-
-        if not imagem_existe_flag or st.button("🔁 Substituir imagem existente"):
-            with st.spinner("Enviando imagem para o Cloudinary..."):
-                buffer = BytesIO()
-                imagem.save(buffer, format="JPEG")
-                buffer.seek(0)
-                resposta = cloudinary.uploader.upload(buffer, public_id=f"{PASTA_CLOUDINARY}/{nome_arquivo}", overwrite=True)
-                if resposta.get("secure_url"):
-                    st.success("Imagem enviada com sucesso!")
-                    st.image(resposta["secure_url"], width=200)
-                else:
-                    st.error("Erro no upload da imagem.")
+    existe, url = imagem_existe(nome_arquivo)
+    if existe:
+        with colunas[contador % 5]:
+            st.image(url, width=100, caption=nome)
+        contador += 1
