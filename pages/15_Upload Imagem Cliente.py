@@ -36,30 +36,33 @@ def carregar_clientes_status():
 df_status, aba_status = carregar_clientes_status()
 df_status.columns = df_status.columns.str.strip()
 
-# =============== VERIFICA SE COLUNA 'Cliente' EXISTE ===============
 if 'Cliente' not in df_status.columns:
     st.error("A coluna 'Cliente' não foi encontrada na aba 'clientes_status'.")
     st.stop()
 
 nomes_clientes = df_status['Cliente'].dropna().unique().tolist()
 
-# =============== SELEÇÃO COM AUTOCOMPLETE ===============
+# =============== SELEÇÃO DO CLIENTE ===============
 nome_cliente = st.selectbox("Selecione o cliente", sorted(nomes_clientes), placeholder="Digite para buscar...")
-
 nome_arquivo = nome_cliente.lower().replace(" ", "_") + ".jpg"
 pasta = "Fotos clientes"
 
 # =============== VERIFICAR SE IMAGEM EXISTE ===============
 def imagem_existe(nome):
     try:
+        # Tenta encontrar no Cloudinary
         response = cloudinary.api.resource(f"{pasta}/{nome}")
         return True, response['secure_url']
     except:
+        # Fallback: usa link da planilha se houver
+        url_fallback = df_status.loc[df_status['Cliente'] == nome_cliente, 'Foto'].values
+        if len(url_fallback) > 0 and url_fallback[0]:
+            return True, url_fallback[0]
         return False, None
 
 existe, url_existente = imagem_existe(nome_arquivo)
 
-# =============== MOSTRAR PRÉVIA ===============
+# =============== MOSTRAR IMAGEM SE EXISTIR ===============
 if existe:
     st.image(url_existente, width=250, caption="Imagem atual do cliente")
     st.warning("Este cliente já possui uma imagem cadastrada.")
@@ -82,7 +85,7 @@ if arquivo is not None:
             )
             url = resultado['secure_url']
 
-            # Atualiza a planilha
+            # Atualiza a planilha com novo link
             idx = df_status[df_status['Cliente'] == nome_cliente].index[0]
             aba_status.update_cell(idx + 2, df_status.columns.get_loc("Foto") + 1, url)
 
@@ -95,7 +98,7 @@ if arquivo is not None:
 if existe and st.button("🗑️ Deletar imagem"):
     try:
         cloudinary.uploader.destroy(f"{pasta}/{nome_arquivo.replace('.jpg', '')}", resource_type="image")
-        st.success("Imagem deletada com sucesso.")
+        st.success("Imagem deletada do Cloudinary com sucesso.")
         st.experimental_rerun()
     except:
         st.error("Erro ao deletar imagem.")
@@ -107,7 +110,7 @@ st.subheader("🖼️ Galeria de imagens salvas")
 colunas = st.columns(5)
 contador = 0
 
-for i, nome in enumerate(sorted(nomes_clientes)):
+for nome in sorted(nomes_clientes):
     nome_arquivo = nome.lower().replace(" ", "_") + ".jpg"
     existe, url = imagem_existe(nome_arquivo)
     if existe:
