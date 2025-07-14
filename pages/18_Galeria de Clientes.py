@@ -7,7 +7,6 @@ from io import BytesIO
 from google.oauth2.service_account import Credentials
 import cloudinary
 import cloudinary.uploader
-from streamlit_searchbox import st_searchbox
 
 st.set_page_config(page_title="Galeria de Clientes", layout="wide")
 st.title("🌞 Galeria de Clientes")
@@ -41,22 +40,11 @@ df, aba_clientes = carregar_dados()
 if df.empty or "Foto" not in df.columns:
     st.info("Nenhuma imagem encontrada.")
 else:
-    df["Cliente"] = df["Cliente"].astype(str).str.strip()
-    nomes = sorted(df["Cliente"].dropna().unique())
+    nomes = df["Cliente"].dropna().unique()
+    nome_filtrado = st.selectbox("Filtrar por cliente:", ["Todos"] + sorted(nomes.tolist()))
 
-    # Função de busca para autocomplete
-    def search_clientes(termo):
-        return [nome for nome in nomes if termo.lower() in nome.lower()]
-
-    nome_filtrado = st_searchbox(
-        search_function=search_clientes,
-        placeholder="Digite o nome do cliente...",
-        label="🔎 Buscar cliente",
-        key="busca_cliente"
-    )
-
-    if nome_filtrado:
-        df = df[df["Cliente"].str.strip().str.lower() == nome_filtrado.strip().lower()]
+    if nome_filtrado != "Todos":
+        df = df[df["Cliente"] == nome_filtrado]
 
     fotos_validas = df.dropna(subset=["Foto"])
 
@@ -77,7 +65,7 @@ else:
                 with st.expander(f"🛠 Ações para {row['Cliente']}"):
                     if st.button(f"❌ Excluir imagem", key=f"excluir_{idx}"):
                         try:
-                            cell = aba_clientes.find(str(row["Cliente"]).strip())
+                            cell = aba_clientes.find(str(row["Cliente"]))
                             if cell:
                                 col_foto = df.columns.get_loc("Foto") + 1
                                 aba_clientes.update_cell(cell.row, col_foto, "")
@@ -96,7 +84,7 @@ else:
                     nova_foto = st.text_input("🔄 Substituir link da imagem", key=f"edit_{idx}")
                     if nova_foto:
                         try:
-                            cell = aba_clientes.find(str(row["Cliente"]).strip())
+                            cell = aba_clientes.find(str(row["Cliente"]))
                             if cell:
                                 col_foto = df.columns.get_loc("Foto") + 1
                                 aba_clientes.update_cell(cell.row, col_foto, nova_foto)
