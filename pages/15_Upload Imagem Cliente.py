@@ -20,20 +20,9 @@ cloudinary.config(
     api_secret=st.secrets["CLOUDINARY"]["api_secret"]
 )
 
-# =============== CARREGAR PLANILHA VIA URL ABERTA ===============
+# =============== CARREGAR PLANILHA CLIENTES COM URL ABERTA ===============
 def carregar_clientes_status():
-    gc = gspread.service_account_from_dict({
-        "type": "service_account",
-        "project_id": "dummy",
-        "private_key_id": "dummy",
-        "private_key": "dummy",
-        "client_email": "dummy@dummy.iam.gserviceaccount.com",
-        "client_id": "dummy",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/dummy@dummy.iam.gserviceaccount.com"
-    })
+    gc = gspread.oauth()
     spreadsheet = gc.open_by_url(st.secrets["PLANILHA_URL"])
     aba = spreadsheet.worksheet("clientes_status")
     dados = aba.get_all_records()
@@ -48,7 +37,7 @@ nome_cliente = st.selectbox("Selecione o cliente", sorted(nomes_clientes), place
 nome_arquivo = nome_cliente.lower().replace(" ", "_") + ".jpg"
 pasta = "Fotos clientes"
 
-# =============== VERIFICA SE IMAGEM JÁ EXISTE NO CLOUDINARY ===============
+# =============== VERIFICAR SE IMAGEM EXISTE ===============
 def imagem_existe(nome):
     try:
         response = cloudinary.api.resource(f"{pasta}/{nome}")
@@ -56,8 +45,10 @@ def imagem_existe(nome):
     except:
         return False, None
 
+# =============== VERIFICAR SE JÁ EXISTE ===============
 existe, url_existente = imagem_existe(nome_arquivo)
 
+# =============== MOSTRAR PRÉVIA SE EXISTIR ===============
 if existe:
     st.image(url_existente, width=250, caption="Imagem atual do cliente")
     st.warning("Este cliente já possui uma imagem cadastrada.")
@@ -65,9 +56,11 @@ if existe:
 # =============== UPLOAD DE NOVA IMAGEM ===============
 arquivo = st.file_uploader("Envie a nova imagem", type=['jpg', 'jpeg', 'png'])
 
+# =============== SUBSTITUIÇÃO COM CONFIRMAÇÃO ===============
 if arquivo is not None:
-    if existe and not st.checkbox("Confirmo que desejo substituir a imagem existente."):
-        st.stop()
+    if existe:
+        if not st.checkbox("Confirmo que desejo substituir a imagem existente."):
+            st.stop()
 
     if st.button("📤 Enviar imagem"):
         try:
@@ -88,7 +81,7 @@ if arquivo is not None:
         except Exception as e:
             st.error(f"Erro ao enviar imagem: {e}")
 
-# =============== DELETAR IMAGEM ===============
+# =============== BOTÃO DELETAR ===============
 if existe:
     if st.button("🗑️ Deletar imagem"):
         try:
@@ -98,14 +91,14 @@ if existe:
         except:
             st.error("Erro ao deletar imagem.")
 
-# =============== GALERIA COM PRÉ-VISUALIZAÇÕES ===============
+# =============== GALERIA DE PRÉ-VISUALIZAÇÕES ===============
 st.markdown("---")
 st.subheader("🖼️ Galeria de imagens salvas")
 
 colunas = st.columns(5)
 contador = 0
 
-for nome in sorted(nomes_clientes):
+for i, nome in enumerate(sorted(nomes_clientes)):
     nome_arquivo = nome.lower().replace(" ", "_") + ".jpg"
     existe, url = imagem_existe(nome_arquivo)
     if existe:
