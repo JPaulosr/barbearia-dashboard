@@ -3,11 +3,10 @@ import pandas as pd
 import gspread
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
-import json
 import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("🧠 Gestão de Clientes")
+st.title("🧬 Gestão de Clientes")
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -25,7 +24,7 @@ def conectar_sheets():
     planilha = cliente.open_by_key(SHEET_ID)
     return planilha
 
-# ⛔️ Não cachear funções com objetos como argumentos
+# ⛘️ Não cachear funções com objetos como argumentos
 def carregar_base(planilha):
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba, dtype=str).dropna(how="all")
@@ -38,14 +37,26 @@ def carregar_status(planilha):
     try:
         aba = planilha.worksheet(STATUS_ABA)
         df_status = get_as_dataframe(aba).dropna(how="all")
-        return df_status[["Cliente", "Status"]]
+        return df_status
     except:
         return pd.DataFrame(columns=["Cliente", "Status"])
 
-def salvar_status(planilha, df_status):
+def salvar_status(planilha, df_status_atualizado):
     aba = planilha.worksheet(STATUS_ABA)
+    df_status_existente = get_as_dataframe(aba).dropna(how="all")
+    df_status_existente.columns = [str(c).strip() for c in df_status_existente.columns]
+
+    if "Cliente" not in df_status_existente.columns or "Status" not in df_status_existente.columns:
+        st.error("A aba de status precisa conter colunas 'Cliente' e 'Status'.")
+        return
+
+    df_status_existente.set_index("Cliente", inplace=True)
+    df_status_atualizado.set_index("Cliente", inplace=True)
+    df_status_existente.update(df_status_atualizado)
+    df_status_existente.reset_index(inplace=True)
+
     aba.clear()
-    set_with_dataframe(aba, df_status)
+    set_with_dataframe(aba, df_status_existente)
 
 # === CARGA DE DADOS
 planilha = conectar_sheets()
@@ -54,7 +65,7 @@ df_clientes = pd.DataFrame({"Cliente": sorted(df["Cliente"].dropna().unique())})
 df_status = carregar_status(planilha)
 
 # COMBINAÇÃO COM STATUS
-clientes_com_status = df_clientes.merge(df_status, on="Cliente", how="left")
+clientes_com_status = df_clientes.merge(df_status[["Cliente", "Status"]], on="Cliente", how="left")
 clientes_com_status["Status"] = clientes_com_status["Status"].fillna("Ativo")
 
 # === INTERFACE
@@ -93,13 +104,15 @@ for i, row in clientes_filtrados.iterrows():
         novo_status.append(status)
 
 # SALVAR ALTERAÇÕES
-if st.button("💾 Salvar alterações"):
+if st.button("📂 Salvar alterações"):
     clientes_filtrados["Status"] = novo_status
     atualizados = clientes_filtrados.set_index("Cliente")[["Status"]]
     clientes_com_status.set_index("Cliente", inplace=True)
     clientes_com_status.update(atualizados)
     clientes_com_status.reset_index(inplace=True)
-    salvar_status(planilha, clientes_com_status[["Cliente", "Status"]])
+
+    df_para_salvar = clientes_com_status[["Cliente", "Status"]]
+    salvar_status(planilha, df_para_salvar)
     st.success("Status atualizado com sucesso!")
 
 # RESUMO
