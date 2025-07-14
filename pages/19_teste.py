@@ -14,6 +14,8 @@ st.title("📅 Frequência dos Clientes")
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
+
+# === LOGO PADRÃO ===
 LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
 
 # === Funções auxiliares ===
@@ -64,7 +66,6 @@ def carregar_status():
             status["Imagem"] = ""
 
         status["Imagem"] = status["Imagem"].fillna("").str.strip()
-
         return status[["Cliente", "Status", "Imagem"]]
     except:
         return pd.DataFrame(columns=["Cliente", "Status", "Imagem"])
@@ -72,9 +73,12 @@ def carregar_status():
 # === PRÉ-PROCESSAMENTO ===
 df = carregar_dados()
 df_status = carregar_status()
-clientes_validos = df_status[~df_status["Status"].isin(["Inativo", "Ignorado"])]
-clientes_validos = clientes_validos["Cliente"].unique().tolist()
-df = df[df["Cliente"].isin(clientes_validos)]
+
+# Filtra apenas clientes ativos
+df_status = df_status[df_status["Status"] == "Ativo"]
+clientes_ativos = df_status["Cliente"].unique().tolist()
+
+df = df[df["Cliente"].isin(clientes_ativos)]
 atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
 # === CÁLCULO DE FREQUÊNCIA ===
