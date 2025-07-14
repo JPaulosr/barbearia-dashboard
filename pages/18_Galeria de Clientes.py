@@ -1,8 +1,5 @@
-import gspread
-from google.oauth2.service_account import Credentials
-import streamlit as st
-
 def remover_linhas_com_nome_vazio():
+    st.write("Iniciando limpeza...")  # Verifica se função está sendo chamada
     try:
         escopos = ["https://www.googleapis.com/auth/spreadsheets"]
         credenciais = Credentials.from_service_account_info(
@@ -13,17 +10,18 @@ def remover_linhas_com_nome_vazio():
         aba = planilha.worksheet("clientes_status")
 
         dados = aba.get_all_values()
+        st.write("Prévia dos dados carregados:", dados[:5])  # Verifica conteúdo
         header = dados[0]
         linhas = dados[1:]
 
         idx_cliente = header.index("Cliente")
-        st.write(f"🔍 Coluna 'Cliente' localizada na posição {idx_cliente + 1}")
+        st.write(f"Coluna Cliente está na posição {idx_cliente + 1}")
 
         linhas_para_excluir = []
-        for i, linha in enumerate(linhas, start=2):  # linha 2 = primeira linha de dados
+        for i, linha in enumerate(linhas, start=2):
             nome = linha[idx_cliente].strip() if len(linha) > idx_cliente else ""
             if nome == "":
-                st.warning(f"⛔ Linha {i} marcada para exclusão (cliente vazio): {linha}")
+                st.warning(f"⛔ Linha {i} marcada para exclusão: {linha}")
                 linhas_para_excluir.append(i)
 
         if not linhas_para_excluir:
@@ -31,10 +29,10 @@ def remover_linhas_com_nome_vazio():
             return
 
         for linha_index in reversed(linhas_para_excluir):
+            st.info(f"🗑️ Tentando remover linha {linha_index}")
             aba.delete_rows(linha_index)
-            st.info(f"🗑️ Linha {linha_index} removida com sucesso.")
 
-        st.success(f"✅ {len(linhas_para_excluir)} linha(s) foram removidas da planilha.")
+        st.success(f"✅ {len(linhas_para_excluir)} linha(s) removidas com sucesso.")
 
     except Exception as e:
         st.error(f"❌ Erro ao remover linhas: {e}")
