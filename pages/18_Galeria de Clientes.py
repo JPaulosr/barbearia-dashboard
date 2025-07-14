@@ -1,25 +1,8 @@
-import streamlit as st
-import pandas as pd
 import gspread
-import requests
-from PIL import Image
-from io import BytesIO
 from google.oauth2.service_account import Credentials
-import cloudinary
-import cloudinary.uploader
+import streamlit as st
 
-st.set_page_config(page_title="Galeria de Clientes", layout="wide")
-st.title("🌞 Galeria de Clientes")
-
-# ========== CONFIGURAR CLOUDINARY ==========
-cloudinary.config(
-    cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
-    api_key=st.secrets["CLOUDINARY"]["api_key"],
-    api_secret=st.secrets["CLOUDINARY"]["api_secret"]
-)
-
-# ========== CARREGAR DADOS ==========
-def carregar_dados():
+def remover_linhas_com_nome_vazio():
     try:
         escopos = ["https://www.googleapis.com/auth/spreadsheets"]
         credenciais = Credentials.from_service_account_info(
@@ -28,67 +11,29 @@ def carregar_dados():
         cliente = gspread.authorize(credenciais)
         planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"])
         aba = planilha.worksheet("clientes_status")
-        dados = aba.get_all_records()
-        return pd.DataFrame(dados), aba
+
+        dados = aba.get_all_values()
+        header = dados[0]
+        linhas = dados[1:]
+
+        idx_cliente = header.index("Cliente")
+
+        # Identificar as linhas que devem ser excluídas
+        linhas_para_excluir = []
+        for i, linha in enumerate(linhas, start=2):  # começa em 2 por causa do cabeçalho
+            nome = linha[idx_cliente].strip() if len(linha) > idx_cliente else ""
+            if nome == "":
+                linhas_para_excluir.append(i)
+
+        if not linhas_para_excluir:
+            st.success("✅ Nenhuma linha com nome vazio encontrada.")
+            return
+
+        # Excluir as linhas de baixo para cima (para não mudar os índices)
+        for linha_index in reversed(linhas_para_excluir):
+            aba.delete_rows(linha_index)
+
+        st.success(f"✅ {len(linhas_para_excluir)} linha(s) com nome vazio foram removidas da planilha.")
+
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
-        return pd.DataFrame(), None
-
-# ========== EXIBIR GALERIA ==========
-df, aba_clientes = carregar_dados()
-
-if df.empty or "Foto" not in df.columns:
-    st.info("Nenhuma imagem encontrada.")
-else:
-    nomes = df["Cliente"].dropna().unique()
-    nome_filtrado = st.selectbox("Filtrar por cliente:", ["Todos"] + sorted(nomes.tolist()))
-
-    if nome_filtrado != "Todos":
-        df = df[df["Cliente"] == nome_filtrado]
-
-    fotos_validas = df.dropna(subset=["Foto"])
-
-    if fotos_validas.empty:
-        st.warning("Nenhuma imagem disponível para esse filtro.")
-    else:
-        cols = st.columns(3)
-        for i, (idx, row) in enumerate(fotos_validas.iterrows()):
-            with cols[i % 3]:
-                try:
-                    response = requests.get(row["Foto"])
-                    img = Image.open(BytesIO(response.content))
-                    st.image(img, caption=row["Cliente"], use_container_width=True)
-                except:
-                    st.error(f"Erro ao carregar imagem de {row['Cliente']}")
-                    continue
-
-                with st.expander(f"🛠 Ações para {row['Cliente']}"):
-                    if st.button(f"❌ Excluir imagem", key=f"excluir_{idx}"):
-                        try:
-                            cell = aba_clientes.find(str(row["Cliente"]))
-                            if cell:
-                                col_foto = df.columns.get_loc("Foto") + 1
-                                aba_clientes.update_cell(cell.row, col_foto, "")
-                                st.success("✅ Imagem removida da planilha.")
-
-                            if "res.cloudinary.com" in row["Foto"]:
-                                nome_img = row["Foto"].split("/")[-1].split(".")[0]
-                                public_id = f"Fotos clientes/{nome_img}"
-                                cloudinary.uploader.destroy(public_id)
-                                st.success("✅ Imagem deletada do Cloudinary com sucesso.")
-
-                            st.experimental_rerun()
-                        except Exception as e:
-                            st.error(f"❌ Erro ao deletar imagem: {e}")
-
-                    nova_foto = st.text_input("🔄 Substituir link da imagem", key=f"edit_{idx}")
-                    if nova_foto:
-                        try:
-                            cell = aba_clientes.find(str(row["Cliente"]))
-                            if cell:
-                                col_foto = df.columns.get_loc("Foto") + 1
-                                aba_clientes.update_cell(cell.row, col_foto, nova_foto)
-                                st.success("✅ Imagem substituída com sucesso.")
-                                st.experimental_rerun()
-                        except Exception as e:
-                            st.error(f"❌ Erro ao substituir imagem: {e}")
+        st.error(f"❌ Erro ao remover linhas: {e}")
