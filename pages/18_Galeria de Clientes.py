@@ -143,7 +143,9 @@ for nome in nomes_clientes:
         else:
             url = None
 
-    if url:
-        with colunas[contador % 5]:
+    with colunas[contador % 5]:
+        if url:
             st.image(url, width=100, caption=nome)
+        else:
+            st.caption(f"{nome} - Sem imagem cadastrada")
         contador += 1
