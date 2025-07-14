@@ -11,6 +11,7 @@ st.title("🧍‍♂️ Clientes - Receita Total")
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
+STATUS_ABA = "clientes_status"
 
 @st.cache_resource
 def conectar_sheets():
@@ -31,7 +32,34 @@ def carregar_dados():
     df["Ano"] = df["Data"].dt.year.astype(int)
     return df
 
+@st.cache_data
+def carregar_status():
+    try:
+        planilha = conectar_sheets()
+        aba = planilha.worksheet(STATUS_ABA)
+        df_status = get_as_dataframe(aba).dropna(how="all")
+        df_status.columns = [col.strip() for col in df_status.columns]
+        return df_status[["Cliente", "Status"]]
+    except:
+        return pd.DataFrame(columns=["Cliente", "Status"])
+
 df = carregar_dados()
+df_status = carregar_status()
+
+# === Contagem total de clientes únicos e por status ===
+clientes_unicos = df["Cliente"].nunique()
+contagem_status = df_status["Status"].value_counts().to_dict()
+ativos = contagem_status.get("Ativo", 0)
+ignorados = contagem_status.get("Ignorado", 0)
+inativos = contagem_status.get("Inativo", 0)
+
+# === Exibição dos indicadores no topo ===
+st.markdown("### 📊 Indicadores Gerais")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("👥 Clientes únicos", clientes_unicos)
+col2.metric("✅ Ativos", ativos)
+col3.metric("🚫 Ignorados", ignorados)
+col4.metric("🛑 Inativos", inativos)
 
 # === Remove nomes genéricos ===
 nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
