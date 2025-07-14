@@ -11,3 +11,4 @@ oauth2client
 google-api-python-client
 requests
 cloudinary
+streamlit-aggrid
