@@ -1,151 +1,62 @@
-import streamlit as st
-import pandas as pd
-import cloudinary
-import cloudinary.uploader
-import cloudinary.api
-import gspread
-from io import BytesIO
-from PIL import Image
-from google.oauth2.service_account import Credentials
+# ========== EXIBIR GALERIA ==========
 
-st.set_page_config(page_title="Upload Imagem Cliente")
-st.markdown("""
-    <h1 style='text-align: center;'>📸 Upload Imagem Cliente</h1>
-""", unsafe_allow_html=True)
+df, aba_clientes = carregar_dados()
 
-# =============== CONFIGURAR CLOUDINARY ===============
-cloudinary.config(
-    cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
-    api_key=st.secrets["CLOUDINARY"]["api_key"],
-    api_secret=st.secrets["CLOUDINARY"]["api_secret"]
-)
-
-# =============== CONECTAR À PLANILHA =================
-def carregar_clientes_status():
-    creds = Credentials.from_service_account_info(
-        st.secrets["GCP_SERVICE_ACCOUNT"],
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
-    gc = gspread.authorize(creds)
-    spreadsheet = gc.open_by_url(st.secrets["PLANILHA_URL"])
-    aba = spreadsheet.worksheet("clientes_status")
-    dados = aba.get_all_records()
-    return pd.DataFrame(dados), aba
-
-df_status, aba_status = carregar_clientes_status()
-df_status.columns = df_status.columns.str.strip()
-
-if 'Cliente' not in df_status.columns:
-    st.error("A coluna 'Cliente' não foi encontrada na aba 'clientes_status'.")
-    st.stop()
-
-# Remove clientes vazios
-nomes_clientes = sorted([nome for nome in df_status['Cliente'].dropna() if nome.strip() != ""])
-
-# =============== SELEÇÃO DO CLIENTE ===============
-nome_cliente = st.selectbox("Selecione o cliente", nomes_clientes, placeholder="Digite para buscar...")
-nome_arquivo = nome_cliente.lower().replace(" ", "_") + ".jpg"
-pasta = "Fotos clientes"
-
-# =============== VERIFICAR SE IMAGEM EXISTE ===============
-def imagem_existe(nome):
-    try:
-        response = cloudinary.api.resource(f"{pasta}/{nome}")
-        return True, response['secure_url']
-    except:
-        url_fallback = df_status.loc[df_status['Cliente'] == nome_cliente, 'Foto'].values
-        if len(url_fallback) > 0 and url_fallback[0]:
-            url = url_fallback[0]
-            if "drive.google.com" in url and "id=" in url:
-                id_img = url.split("id=")[-1].split("&")[0]
-                url = f"https://drive.google.com/uc?id={id_img}"
-            return True, url
-        return False, None
-
-existe, url_existente = imagem_existe(nome_arquivo)
-
-# =============== MOSTRAR IMAGEM SE EXISTIR ===============
-if existe:
-    st.image(url_existente, width=250, caption="Imagem atual do cliente")
-    st.warning("Este cliente já possui uma imagem cadastrada.")
+if df.empty or "Foto" not in df.columns:
+    st.info("Nenhuma imagem encontrada.")
 else:
-    st.info("Este cliente ainda não possui imagem cadastrada.")
+    df["Cliente"] = df["Cliente"].astype(str).str.strip()  # Remove espaços extras nos nomes
+    nomes = sorted(df["Cliente"].dropna().unique())
 
-# =============== UPLOAD DE NOVA IMAGEM ===============
-arquivo = st.file_uploader("Envie a nova imagem", type=['jpg', 'jpeg', 'png'])
+    nome_filtrado = st.selectbox("Filtrar por cliente:", ["Todos"] + nomes)
+    nome_filtrado = nome_filtrado.strip()  # Remove espaços antes/depois
 
-if arquivo is not None:
-    if existe and not st.checkbox("Confirmo que desejo substituir a imagem existente."):
-        st.stop()
+    if nome_filtrado != "Todos":
+        df = df[df["Cliente"].str.strip() == nome_filtrado]
 
-    if st.button("📤 Enviar imagem"):
-        try:
-            resultado = cloudinary.uploader.upload(
-                arquivo,
-                folder=pasta,
-                public_id=nome_arquivo.replace(".jpg", ""),
-                overwrite=True,
-                resource_type="image"
-            )
-            url = resultado['secure_url']
+    fotos_validas = df.dropna(subset=["Foto"])
 
-            idx = df_status[df_status['Cliente'] == nome_cliente].index[0]
-            aba_status.update_cell(idx + 2, df_status.columns.get_loc("Foto") + 1, url)
+    if fotos_validas.empty:
+        st.warning("Nenhuma imagem disponível para esse filtro.")
+    else:
+        cols = st.columns(3)
+        for i, (idx, row) in enumerate(fotos_validas.iterrows()):
+            with cols[i % 3]:
+                try:
+                    response = requests.get(row["Foto"])
+                    img = Image.open(BytesIO(response.content))
+                    st.image(img, caption=row["Cliente"], use_container_width=True)
+                except:
+                    st.error(f"Erro ao carregar imagem de {row['Cliente']}")
+                    continue
 
-            st.success("Imagem enviada com sucesso!")
-            st.image(url, width=300)
-        except Exception as e:
-            st.error(f"Erro ao enviar imagem: {e}")
+                with st.expander(f"🛠 Ações para {row['Cliente']}"):
+                    if st.button(f"❌ Excluir imagem", key=f"excluir_{idx}"):
+                        try:
+                            cell = aba_clientes.find(str(row["Cliente"]).strip())
+                            if cell:
+                                col_foto = df.columns.get_loc("Foto") + 1
+                                aba_clientes.update_cell(cell.row, col_foto, "")
+                                st.success("✅ Imagem removida da planilha.")
 
-# =============== BOTÃO DELETAR ===============
-if existe and st.button("🗑️ Deletar imagem"):
-    try:
-        cloudinary.uploader.destroy(f"{pasta}/{nome_arquivo.replace('.jpg', '')}", resource_type="image")
-        st.success("Imagem deletada do Cloudinary com sucesso.")
+                            if "res.cloudinary.com" in row["Foto"]:
+                                nome_img = row["Foto"].split("/")[-1].split(".")[0]
+                                public_id = f"Fotos clientes/{nome_img}"
+                                cloudinary.uploader.destroy(public_id)
+                                st.success("✅ Imagem deletada do Cloudinary com sucesso.")
 
-        nomes_planilha = aba_status.col_values(1)
-        linha_cliente = None
-        for i, nome in enumerate(nomes_planilha, start=1):
-            if nome.strip().lower() == nome_cliente.strip().lower():
-                linha_cliente = i
-                break
+                            st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao deletar imagem: {e}")
 
-        if linha_cliente:
-            col_foto = df_status.columns.get_loc("Foto") + 1
-            aba_status.update_cell(linha_cliente, col_foto, "")
-            st.success("Link da imagem removido da planilha com sucesso.")
-        else:
-            st.warning("Cliente não encontrado na planilha para limpar o link.")
-
-        st.experimental_rerun()
-    except Exception as e:
-        st.error(f"Erro ao deletar imagem: {e}")
-
-# =============== GALERIA ===============
-st.markdown("---")
-st.subheader("🖼️ Galeria de imagens salvas")
-
-colunas = st.columns(5)
-contador = 0
-
-for nome in nomes_clientes:
-    nome_arquivo = nome.lower().replace(" ", "_") + ".jpg"
-    try:
-        response = cloudinary.api.resource(f"{pasta}/{nome_arquivo}")
-        url = response['secure_url']
-    except:
-        url = df_status.loc[df_status['Cliente'] == nome, 'Foto'].values
-        if len(url) > 0 and url[0]:
-            url = url[0]
-            if "drive.google.com" in url and "id=" in url:
-                id_img = url.split("id=")[-1].split("&")[0]
-                url = f"https://drive.google.com/uc?id={id_img}"
-        else:
-            url = None
-
-    with colunas[contador % 5]:
-        if url:
-            st.image(url, width=100, caption=nome)
-        else:
-            st.caption(f"{nome} - Sem imagem cadastrada")
-        contador += 1
+                    nova_foto = st.text_input("🔄 Substituir link da imagem", key=f"edit_{idx}")
+                    if nova_foto:
+                        try:
+                            cell = aba_clientes.find(str(row["Cliente"]).strip())
+                            if cell:
+                                col_foto = df.columns.get_loc("Foto") + 1
+                                aba_clientes.update_cell(cell.row, col_foto, nova_foto)
+                                st.success("✅ Imagem substituída com sucesso.")
+                                st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao substituir imagem: {e}")
