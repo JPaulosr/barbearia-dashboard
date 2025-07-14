@@ -54,10 +54,14 @@ def imagem_existe(nome):
         response = cloudinary.api.resource(f"{pasta}/{nome}")
         return True, response['secure_url']
     except:
-        # Fallback: usa link da planilha se houver
+        # Fallback: usa link da planilha, corrigindo formato se for do Google Drive
         url_fallback = df_status.loc[df_status['Cliente'] == nome_cliente, 'Foto'].values
         if len(url_fallback) > 0 and url_fallback[0]:
-            return True, url_fallback[0]
+            url = url_fallback[0]
+            if "drive.google.com" in url and "id=" in url:
+                id_img = url.split("id=")[-1].split("&")[0]
+                url = f"https://drive.google.com/uc?id={id_img}"
+            return True, url
         return False, None
 
 existe, url_existente = imagem_existe(nome_arquivo)
@@ -112,8 +116,22 @@ contador = 0
 
 for nome in sorted(nomes_clientes):
     nome_arquivo = nome.lower().replace(" ", "_") + ".jpg"
-    existe, url = imagem_existe(nome_arquivo)
-    if existe:
+    try:
+        # Cloudinary
+        response = cloudinary.api.resource(f"{pasta}/{nome_arquivo}")
+        url = response['secure_url']
+    except:
+        # Fallback: da planilha
+        url = df_status.loc[df_status['Cliente'] == nome, 'Foto'].values
+        if len(url) > 0 and url[0]:
+            url = url[0]
+            if "drive.google.com" in url and "id=" in url:
+                id_img = url.split("id=")[-1].split("&")[0]
+                url = f"https://drive.google.com/uc?id={id_img}"
+        else:
+            url = None
+
+    if url:
         with colunas[contador % 5]:
             st.image(url, width=100, caption=nome)
         contador += 1
