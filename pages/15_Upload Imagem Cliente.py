@@ -6,6 +6,7 @@ import cloudinary.api
 import gspread
 from io import BytesIO
 from PIL import Image
+from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Upload Imagem Cliente")
 st.markdown("""
@@ -20,9 +21,13 @@ cloudinary.config(
     api_secret=st.secrets["CLOUDINARY"]["api_secret"]
 )
 
-# =============== CARREGAR PLANILHA CLIENTES COM URL ABERTA ===============
+# =============== CARREGAR PLANILHA CLIENTES ===============
 def carregar_clientes_status():
-    gc = gspread.oauth()
+    creds = Credentials.from_service_account_info(
+        st.secrets["GCP_SERVICE_ACCOUNT"],
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
+    gc = gspread.authorize(creds)
     spreadsheet = gc.open_by_url(st.secrets["PLANILHA_URL"])
     aba = spreadsheet.worksheet("clientes_status")
     dados = aba.get_all_records()
@@ -64,7 +69,8 @@ if arquivo is not None:
 
     if st.button("📤 Enviar imagem"):
         try:
-            resultado = cloudinary.uploader.upload(arquivo,
+            resultado = cloudinary.uploader.upload(
+                arquivo,
                 folder=pasta,
                 public_id=nome_arquivo.replace(".jpg", ""),
                 overwrite=True,
