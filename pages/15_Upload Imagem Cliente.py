@@ -1,110 +1,137 @@
 import streamlit as st
+import pandas as pd
 import cloudinary
 import cloudinary.uploader
-import pandas as pd
-import requests
+import cloudinary.api
 from io import BytesIO
 from PIL import Image
 from st_aggrid import AgGrid
+from google.oauth2 import service_account
+import gspread
 
-# 🔐 Configurações da API Cloudinary (a partir do st.secrets)
+# --- Configurar Cloudinary ---
 cloudinary.config(
-    cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
-    api_key=st.secrets["CLOUDINARY"]["api_key"],
-    api_secret=st.secrets["CLOUDINARY"]["api_secret"]
+    cloud_name="db8ipmete",
+    api_key="144536432264916",
+    api_secret="eVwo_kpkphpGDi4djTzNYGC5qJQ"
 )
 
-# 📊 Carregar lista de clientes
-def carregar_clientes():
-    url = st.secrets["PLANILHA_URL"]
-    sheet_id = url.split("/d/")[1].split("/")[0]
-    aba = "clientes_status"
-    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={aba}"
-    df = pd.read_csv(csv_url)
-    df = df[df["Cliente"].notna()]
-    df = df.drop_duplicates(subset=["Cliente"])
-    return df
+# --- Carregar planilha clientes_status via Google Sheets ---
+def carregar_clientes_status():
+    escopo = ["https://spreadsheets.google.com/feeds",'https://www.googleapis.com/auth/spreadsheets',"https://www.googleapis.com/auth/drive.file","https://www.googleapis.com/auth/drive"]
 
-# 🔄 Verifica se já existe uma imagem com o nome do cliente
+    credenciais_dict = {
+        "type": "service_account",
+        "project_id": "barbearia-dashboard",
+        "private_key_id": "7c71bcbfaa1a8d935e1474fcabbe0c7c7ea8cae5",
+        "private_key": """-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC8pdM0rUTx9rd7
+... (chave privada completa) ...
+-----END PRIVATE KEY-----""",
+        "client_email": "streamlit-reader@barbearia-dashboard.iam.gserviceaccount.com",
+        "client_id": "102292204018013167995",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/streamlit-reader@barbearia-dashboard.iam.gserviceaccount.com"
+    }
+
+    creds = service_account.Credentials.from_service_account_info(credenciais_dict, scopes=escopo)
+    cliente = gspread.authorize(creds)
+    planilha = cliente.open_by_url("https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/edit?usp=sharing")
+    aba = planilha.worksheet("clientes_status")
+    dados = aba.get_all_records()
+    return pd.DataFrame(dados), aba
+
+df_status, aba_status = carregar_clientes_status()
+
+# --- Verificar se imagem já existe no Cloudinary ---
 def imagem_existe(nome_arquivo):
     try:
-        response = cloudinary.api.resource(f"Fotos clientes/{nome_arquivo}")
-        return response.get("secure_url")
+        cloudinary.api.resource(f"Fotos clientes/{nome_arquivo}")
+        return True
     except cloudinary.exceptions.NotFound:
-        return None
+        return False
+    except Exception as e:
+        st.error(f"Erro ao verificar imagem: {e}")
+        return False
 
-# ⬆️ Upload de imagem para Cloudinary
-def upload_imagem(imagem, nome_arquivo):
-    return cloudinary.uploader.upload(
-        imagem,
-        public_id=f"Fotos clientes/{nome_arquivo}",
-        overwrite=True,
-        resource_type="image"
-    )
+# --- Excluir imagem do Cloudinary ---
+def excluir_imagem(nome_arquivo):
+    try:
+        cloudinary.uploader.destroy(f"Fotos clientes/{nome_arquivo}", resource_type="image")
+        return True
+    except Exception as e:
+        st.error(f"Erro ao excluir imagem: {e}")
+        return False
 
-# ❌ Excluir imagem do Cloudinary
-def deletar_imagem(nome_arquivo):
-    return cloudinary.uploader.destroy(f"Fotos clientes/{nome_arquivo}")
+# --- Atualizar link na planilha ---
+def atualizar_link(cliente, url):
+    try:
+        celulas = aba_status.findall(cliente)
+        for c in celulas:
+            if aba_status.cell(c.row, 1).value == cliente:
+                aba_status.update_cell(c.row, 4, url)  # Coluna 4 = link imagem
+                break
+    except Exception as e:
+        st.warning(f"Erro ao atualizar link da imagem: {e}")
 
-# 📸 Mostrar imagem a partir da URL
-def mostrar_imagem(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        img = Image.open(BytesIO(response.content))
-        st.image(img, caption="Imagem atual", use_column_width=True)
-
-# ========== UI ========== #
-st.title("📸 Upload Imagem Cliente")
+# --- UI principal ---
+st.header("📸 Upload Imagem Cliente")
 st.caption("Envie ou substitua a imagem do cliente. O nome do arquivo será `nome_cliente.jpg`.")
 
-clientes_df = carregar_clientes()
-nomes_clientes = sorted(clientes_df["Cliente"].unique())
+clientes = sorted(df_status["Cliente"].dropna().unique().tolist())
+cliente = st.selectbox("Selecione o cliente", clientes)
 
-nome_cliente = st.selectbox("Selecione o cliente", nomes_clientes, index=None, placeholder="Digite para buscar...")
+imagem = st.file_uploader("Escolher nova imagem", type=["jpg", "jpeg"])
 
-if nome_cliente:
-    nome_arquivo = f"{nome_cliente}.jpg"
-    url_existente = imagem_existe(nome_arquivo)
+nome_arquivo = f"{cliente}.jpg"
+caminho_cloud = f"Fotos clientes/{nome_arquivo}"
 
-    if url_existente:
-        st.success("Imagem já existente:")
-        mostrar_imagem(url_existente)
-        substituir = st.checkbox("🔁 Substituir imagem existente?")
+if imagem and cliente:
+    if imagem_existe(nome_arquivo):
+        st.warning("⚠️ Já existe uma imagem com esse nome.")
+        confirmar = st.checkbox("Deseja substituir a imagem existente?")
+        if confirmar:
+            resultado = cloudinary.uploader.upload(imagem, public_id=caminho_cloud, overwrite=True, resource_type="image")
+            st.success("Imagem substituída com sucesso!")
+            st.image(resultado["secure_url"], width=300)
+            atualizar_link(cliente, resultado["secure_url"])
     else:
-        substituir = True
-
-    uploaded_file = st.file_uploader("Escolher nova imagem", type=["jpg", "jpeg"])
-
-    if uploaded_file and substituir:
-        resultado = upload_imagem(uploaded_file, nome_arquivo)
+        resultado = cloudinary.uploader.upload(imagem, public_id=caminho_cloud, overwrite=False, resource_type="image")
         st.success("Imagem enviada com sucesso!")
-        mostrar_imagem(resultado["secure_url"])
+        st.image(resultado["secure_url"], width=300)
+        atualizar_link(cliente, resultado["secure_url"])
 
-    if url_existente:
-        if st.button("🗑️ Deletar imagem existente"):
-            deletar_imagem(nome_arquivo)
-            st.warning("Imagem deletada.")
-
-# ========== Galeria ========== #
+# --- Botão para excluir imagem existente ---
 st.divider()
-st.subheader("🖼️ Galeria de Imagens")
+st.subheader("🗑️ Excluir imagem de cliente")
 
-def listar_imagens():
-    try:
-        resultado = cloudinary.api.resources(type="upload", prefix="Fotos clientes/", resource_type="image")
-        return resultado.get("resources", [])
-    except Exception as e:
-        st.error(f"Erro ao listar imagens: {e}")
-        return []
+cliente_excluir = st.selectbox("Cliente para excluir imagem", clientes, key="excluir")
+nome_excluir = f"{cliente_excluir}.jpg"
 
-galeria = listar_imagens()
-if galeria:
-    for img in galeria:
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            st.image(img["secure_url"], use_column_width=True)
-        with col2:
-            st.markdown(f"**{img['public_id'].split('/')[-1]}**")
-            st.caption(f"Última modificação: {img['created_at'][:10]}")
+if imagem_existe(nome_excluir):
+    if st.button("Excluir imagem"):
+        sucesso = excluir_imagem(nome_excluir)
+        if sucesso:
+            st.success("Imagem excluída com sucesso!")
 else:
-    st.info("Nenhuma imagem encontrada na pasta 'Fotos clientes'.")
+    st.info("Esse cliente ainda não possui imagem salva.")
+
+# --- Galeria com preview das imagens ---
+st.divider()
+st.subheader("🖼️ Galeria de Clientes com Imagem")
+
+imagens = []
+for cliente in clientes:
+    nome_img = f"{cliente}.jpg"
+    try:
+        dados = cloudinary.api.resource(f"Fotos clientes/{nome_img}")
+        imagens.append((cliente, dados["secure_url"]))
+    except:
+        continue
+
+colunas = st.columns(4)
+for i, (nome, url) in enumerate(imagens):
+    with colunas[i % 4]:
+        st.image(url, caption=nome, width=150)
