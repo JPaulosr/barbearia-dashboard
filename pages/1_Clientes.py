@@ -6,7 +6,7 @@ from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
-st.title("🦽️ Clientes - Receita Total")
+st.title("🧍‍♂️ Clientes - Receita Total")
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -55,7 +55,6 @@ df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
 # === Agrupamento ===
 ranking = df.groupby("Cliente")["Valor"].sum().reset_index()
 ranking = ranking.sort_values(by="Valor", ascending=False)
-ranking = ranking[ranking["Cliente"].isin(ativos)]
 ranking["Valor Formatado"] = ranking["Valor"].apply(
     lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 )
@@ -75,12 +74,7 @@ col4.metric("🔶 Ignorados", total_ignorados)
 # === Busca dinâmica ===
 st.subheader("📟 Receita total por cliente")
 busca = st.text_input("🔎 Filtrar por nome").lower().strip()
-
-if busca:
-    ranking_exibido = ranking[ranking["Cliente"].str.lower().str.contains(busca)]
-else:
-    ranking_exibido = ranking.copy()
-
+ranking_exibido = ranking[ranking["Cliente"].str.lower().str.contains(busca)] if busca else ranking.copy()
 st.dataframe(ranking_exibido[["Cliente", "Valor Formatado"]], use_container_width=True)
 
 # === Top 5 clientes ===
@@ -100,7 +94,6 @@ st.plotly_chart(fig_top, use_container_width=True)
 
 # === Comparativo entre dois clientes ===
 st.subheader("⚖️ Comparar dois clientes")
-
 clientes_disponiveis = ranking["Cliente"].tolist()
 col1, col2 = st.columns(2)
 c1 = col1.selectbox("👤 Cliente 1", clientes_disponiveis)
@@ -133,14 +126,11 @@ st.dataframe(servicos_comparativo, use_container_width=True)
 # === Comparativo mensal ===
 df_c1["Mês"] = df_c1["Data"].dt.to_period("M").astype(str)
 df_c2["Mês"] = df_c2["Data"].dt.to_period("M").astype(str)
-
 df_comp = pd.concat([
     df_c1.groupby("Mês")["Valor"].sum().reset_index().assign(Cliente=c1),
     df_c2.groupby("Mês")["Valor"].sum().reset_index().assign(Cliente=c2)
 ])
-
-fig_comp = px.bar(df_comp, x="Mês", y="Valor", color="Cliente", barmode="group",
-    labels={"Valor": "Receita (R$)"}, title="📊 Receita mensal comparativa")
+fig_comp = px.bar(df_comp, x="Mês", y="Valor", color="Cliente", barmode="group", labels={"Valor": "Receita (R$)"}, title="📊 Receita mensal comparativa")
 st.plotly_chart(fig_comp, use_container_width=True)
 
 # === Exibir imagem do cliente ===
@@ -157,7 +147,6 @@ if img2:
 # === Navegar para detalhamento ===
 st.subheader("🔍 Ver detalhamento de um cliente")
 cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis)
-
 if st.button("➔ Ver detalhes"):
     st.session_state["cliente"] = cliente_escolhido
     st.switch_page("pages/2_DetalhesCliente.py")
