@@ -6,7 +6,6 @@ from google.oauth2.service_account import Credentials
 from PIL import Image
 import requests
 from io import BytesIO
-import re
 
 st.set_page_config(layout="wide")
 st.title("📅 Frequência dos Clientes")
@@ -17,22 +16,16 @@ BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
 
 # === Funções auxiliares ===
-def padronizar_link(link):
-    if not isinstance(link, str) or link.strip() == "":
-        return ""
-    match = re.search(r"[-\w]{25,}", link)
-    if match:
-        file_id = match.group(0)
-        return f"https://drive.google.com/uc?export=view&id={file_id}"
-    return ""
-
 def carregar_imagem(link):
     try:
         response = requests.get(link)
         if response.status_code == 200:
             return Image.open(BytesIO(response.content))
-    except:
-        return None
+        else:
+            st.warning(f"🔗 Erro ao carregar imagem ({response.status_code}): {link}")
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar imagem: {e}")
+    return None
 
 @st.cache_resource
 def conectar_sheets():
@@ -68,7 +61,8 @@ def carregar_status():
         else:
             status["Imagem"] = ""
 
-        status["Imagem"] = status["Imagem"].fillna("").apply(padronizar_link)
+        status["Imagem"] = status["Imagem"].fillna("").str.strip()
+
         return status[["Cliente", "Status", "Imagem"]]
     except:
         return pd.DataFrame(columns=["Cliente", "Status", "Imagem"])
