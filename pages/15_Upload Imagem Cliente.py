@@ -21,7 +21,7 @@ cloudinary.config(
     api_secret=st.secrets["CLOUDINARY"]["api_secret"]
 )
 
-# =============== CARREGAR PLANILHA CLIENTES ===============
+# =============== CONECTAR À PLANILHA =================
 def carregar_clientes_status():
     creds = Credentials.from_service_account_info(
         st.secrets["GCP_SERVICE_ACCOUNT"],
@@ -34,7 +34,14 @@ def carregar_clientes_status():
     return pd.DataFrame(dados), aba
 
 df_status, aba_status = carregar_clientes_status()
-nomes_clientes = df_status['Nome'].dropna().unique().tolist()
+df_status.columns = df_status.columns.str.strip()
+
+# =============== VERIFICA SE COLUNA 'Cliente' EXISTE ===============
+if 'Cliente' not in df_status.columns:
+    st.error("A coluna 'Cliente' não foi encontrada na aba 'clientes_status'.")
+    st.stop()
+
+nomes_clientes = df_status['Cliente'].dropna().unique().tolist()
 
 # =============== SELEÇÃO COM AUTOCOMPLETE ===============
 nome_cliente = st.selectbox("Selecione o cliente", sorted(nomes_clientes), placeholder="Digite para buscar...")
@@ -50,10 +57,9 @@ def imagem_existe(nome):
     except:
         return False, None
 
-# =============== VERIFICAR SE JÁ EXISTE ===============
 existe, url_existente = imagem_existe(nome_arquivo)
 
-# =============== MOSTRAR PRÉVIA SE EXISTIR ===============
+# =============== MOSTRAR PRÉVIA ===============
 if existe:
     st.image(url_existente, width=250, caption="Imagem atual do cliente")
     st.warning("Este cliente já possui uma imagem cadastrada.")
@@ -61,11 +67,9 @@ if existe:
 # =============== UPLOAD DE NOVA IMAGEM ===============
 arquivo = st.file_uploader("Envie a nova imagem", type=['jpg', 'jpeg', 'png'])
 
-# =============== SUBSTITUIÇÃO COM CONFIRMAÇÃO ===============
 if arquivo is not None:
-    if existe:
-        if not st.checkbox("Confirmo que desejo substituir a imagem existente."):
-            st.stop()
+    if existe and not st.checkbox("Confirmo que desejo substituir a imagem existente."):
+        st.stop()
 
     if st.button("📤 Enviar imagem"):
         try:
@@ -79,8 +83,8 @@ if arquivo is not None:
             url = resultado['secure_url']
 
             # Atualiza a planilha
-            idx = df_status[df_status['Nome'] == nome_cliente].index[0]
-            aba_status.update_cell(idx + 2, df_status.columns.get_loc("Link") + 1, url)
+            idx = df_status[df_status['Cliente'] == nome_cliente].index[0]
+            aba_status.update_cell(idx + 2, df_status.columns.get_loc("Foto") + 1, url)
 
             st.success("Imagem enviada com sucesso!")
             st.image(url, width=300)
@@ -88,16 +92,15 @@ if arquivo is not None:
             st.error(f"Erro ao enviar imagem: {e}")
 
 # =============== BOTÃO DELETAR ===============
-if existe:
-    if st.button("🗑️ Deletar imagem"):
-        try:
-            cloudinary.uploader.destroy(f"{pasta}/{nome_arquivo.replace('.jpg', '')}", resource_type="image")
-            st.success("Imagem deletada com sucesso.")
-            st.experimental_rerun()
-        except:
-            st.error("Erro ao deletar imagem.")
+if existe and st.button("🗑️ Deletar imagem"):
+    try:
+        cloudinary.uploader.destroy(f"{pasta}/{nome_arquivo.replace('.jpg', '')}", resource_type="image")
+        st.success("Imagem deletada com sucesso.")
+        st.experimental_rerun()
+    except:
+        st.error("Erro ao deletar imagem.")
 
-# =============== GALERIA DE PRÉ-VISUALIZAÇÕES ===============
+# =============== GALERIA ===============
 st.markdown("---")
 st.subheader("🖼️ Galeria de imagens salvas")
 
