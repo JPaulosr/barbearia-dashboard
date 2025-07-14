@@ -3,12 +3,9 @@ import pandas as pd
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
-import requests
+import gspread
 from io import BytesIO
 from PIL import Image
-from google.oauth2.service_account import Credentials
-import gspread
-import base64
 
 st.set_page_config(page_title="Upload Imagem Cliente")
 st.markdown("""
@@ -25,9 +22,8 @@ cloudinary.config(
 
 # =============== FUNÇÃO PARA CARREGAR PLANILHA CLIENTES ===============
 def carregar_clientes_status():
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"])
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_url(st.secrets["PLANILHA_URL"])
+    gc = gspread.service_account_from_dict(st.secrets["gspread_key"])
+    spreadsheet = gc.open_by_url(st.secrets["PLANILHA_URL"])
     aba = spreadsheet.worksheet("clientes_status")
     dados = aba.get_all_records()
     return pd.DataFrame(dados), aba
