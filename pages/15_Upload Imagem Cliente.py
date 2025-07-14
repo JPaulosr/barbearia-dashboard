@@ -11,7 +11,6 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="Upload Imagem Cliente")
 st.markdown("""
     <h1 style='text-align: center;'>📸 Upload Imagem Cliente</h1>
-    <p style='text-align: center;'>Envie ou substitua a imagem do cliente. O nome do arquivo será <code>nome_cliente.jpg</code>.</p>
 """, unsafe_allow_html=True)
 
 # =============== CONFIGURAR CLOUDINARY ===============
@@ -68,6 +67,8 @@ existe, url_existente = imagem_existe(nome_arquivo)
 if existe:
     st.image(url_existente, width=250, caption="Imagem atual do cliente")
     st.warning("Este cliente já possui uma imagem cadastrada.")
+else:
+    st.info("Este cliente ainda não possui imagem cadastrada.")
 
 # =============== UPLOAD DE NOVA IMAGEM ===============
 arquivo = st.file_uploader("Envie a nova imagem", type=['jpg', 'jpeg', 'png'])
@@ -101,7 +102,6 @@ if existe and st.button("🗑️ Deletar imagem"):
         cloudinary.uploader.destroy(f"{pasta}/{nome_arquivo.replace('.jpg', '')}", resource_type="image")
         st.success("Imagem deletada do Cloudinary com sucesso.")
 
-        # Tentar remover o link da planilha com correspondência robusta
         nomes_planilha = aba_status.col_values(1)
         linha_cliente = None
         for i, nome in enumerate(nomes_planilha, start=1):
