@@ -1,8 +1,38 @@
-# === Interface Streamlit ===
+import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+
+st.set_page_config(layout="wide")
+st.title("📌 Atualizar Lista de Clientes (clientes_status)")
+
+# === Conectar ao Google Sheets ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+
+@st.cache_resource
+def conectar_sheets():
+    credenciais = Credentials.from_service_account_info(st.secrets["GCP_SERVICE_ACCOUNT"], scopes=SCOPES)
+    cliente = gspread.authorize(credenciais)
+    planilha = cliente.open_by_key(SHEET_ID)
+    return planilha
+
+def carregar_abas():
+    try:
+        planilha = conectar_sheets()
+        base_dados = planilha.worksheet("Base de Dados")
+        clientes_status = planilha.worksheet("clientes_status")
+        return base_dados, clientes_status
+    except Exception as e:
+        st.error(f"Erro ao carregar planilhas: {e}")
+        return None, None
+
+# === Interface ===
 st.markdown("### 🧩 Parâmetros")
 status_padrao = st.selectbox("Status padrão para novos clientes:", ["Ativo", "Inativo"])
 
 if st.button("🔄 Atualizar Lista de Clientes"):
+
     def atualizar_clientes_com_status(status_inicial="Ativo"):
         base_dados, clientes_status = carregar_abas()
         if base_dados is None or clientes_status is None:
@@ -58,14 +88,15 @@ if st.button("🔄 Atualizar Lista de Clientes"):
 
             # 👁️ Mostrar clientes adicionados
             with st.expander("👤 Ver clientes adicionados"):
-                st.write(pd.DataFrame(novos_clientes, columns=["Cliente"]))
+                st.dataframe(df_novos, use_container_width=True)
         except Exception as e:
             st.error(f"Erro ao atualizar a aba clientes_status: {e}")
             return None
 
         return df_final
 
-    # 🔄 Executa com o status selecionado
+    # ▶️ Executar
     resultado = atualizar_clientes_com_status(status_padrao)
     if resultado is not None:
+        st.markdown("### 📋 Lista final consolidada")
         st.dataframe(resultado, use_container_width=True)
