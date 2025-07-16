@@ -1,58 +1,9 @@
-import streamlit as st
-import pandas as pd
-import gspread
-import requests
-from PIL import Image
-from io import BytesIO
-from google.oauth2.service_account import Credentials
-import cloudinary
-import cloudinary.uploader
-
-st.set_page_config(page_title="Galeria de Clientes", layout="wide")
-st.title("🌞 Galeria de Clientes")
-
-# ========== CONFIGURAR CLOUDINARY ==========
-cloudinary.config(
-    cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
-    api_key=st.secrets["CLOUDINARY"]["api_key"],
-    api_secret=st.secrets["CLOUDINARY"]["api_secret"]
-)
-
-# ========== CARREGAR DADOS ==========
-def carregar_dados():
-    try:
-        escopos = ["https://www.googleapis.com/auth/spreadsheets"]
-        credenciais = Credentials.from_service_account_info(
-            st.secrets["GCP_SERVICE_ACCOUNT"], scopes=escopos
-        )
-        cliente = gspread.authorize(credenciais)
-        planilha = cliente.open_by_url(st.secrets["PLANILHA_URL"])
-        aba = planilha.worksheet("clientes_status")
-        dados = aba.get_all_records()
-        return pd.DataFrame(dados), aba
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
-        return pd.DataFrame(), None
-
-# ========== EXIBIR GALERIA ==========
-df, aba_clientes = carregar_dados()
-
-if df.empty or "Foto" not in df.columns:
-    st.info("Nenhuma imagem encontrada.")
-else:
-    nomes = df["Cliente"].dropna().unique()
-    nome_filtrado = st.selectbox("Filtrar por cliente:", ["Todos"] + sorted(nomes.tolist()))
-
-    if nome_filtrado != "Todos":
-        df = df[df["Cliente"] == nome_filtrado]
-
-    fotos_validas = df.dropna(subset=["Foto"])
-
-    if fotos_validas.empty:
-        st.warning("Nenhuma imagem disponível para esse filtro.")
-    else:
+for letra, grupo in grupos:
+    total = len(grupo)
+    with st.expander(f"🔤 {letra} ({total} cliente{'s' if total > 1 else ''})", expanded=True):
         cols = st.columns(3)
-        for i, (idx, row) in enumerate(fotos_validas.iterrows()):
+
+        for i, (idx, row) in enumerate(grupo.iterrows()):
             with cols[i % 3]:
                 try:
                     response = requests.get(row["Foto"])
