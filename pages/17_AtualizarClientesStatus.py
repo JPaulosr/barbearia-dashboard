@@ -47,7 +47,10 @@ if st.button("🔄 Atualizar Lista de Clientes"):
             return None
 
         df["Cliente"] = df["Cliente"].astype(str).str.strip()
-        clientes_base = sorted(df["Cliente"].dropna().unique())
+        clientes_base = sorted([
+            nome for nome in df["Cliente"].dropna().unique()
+            if nome.strip() != ""
+        ])
 
         # 🔍 Recupera dados atuais da aba clientes_status
         try:
@@ -80,6 +83,11 @@ if st.button("🔄 Atualizar Lista de Clientes"):
         # 🧩 Junta os dados antigos com os novos
         df_final = pd.concat([df_atual, df_novos], ignore_index=True)
 
+        # 🧹 Limpeza: remove entradas em branco ou duplicadas
+        df_final["Cliente"] = df_final["Cliente"].astype(str).str.strip()
+        df_final = df_final[df_final["Cliente"] != ""]
+        df_final = df_final.drop_duplicates(subset="Cliente", keep="first").reset_index(drop=True)
+
         # ✅ Atualiza aba
         try:
             clientes_status.clear()
@@ -88,7 +96,7 @@ if st.button("🔄 Atualizar Lista de Clientes"):
 
             # 👁️ Mostrar clientes adicionados
             with st.expander("👤 Ver clientes adicionados"):
-                st.dataframe(df_novos, use_container_width=True)
+                st.dataframe(df_novos[df_novos["Cliente"] != ""].reset_index(drop=True), use_container_width=True)
         except Exception as e:
             st.error(f"Erro ao atualizar a aba clientes_status: {e}")
             return None
