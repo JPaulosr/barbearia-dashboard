@@ -16,7 +16,7 @@ BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
 
 # === LOGO PADRÃO ===
-LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
+LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752708088/Imagem_do_WhatsApp_de_2025-07-16_%C3%A0_s_11.20.50_cbeb2873_nlhddx.jpg"
 
 # === Funções auxiliares ===
 def carregar_imagem(link):
