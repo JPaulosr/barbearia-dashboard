@@ -11,6 +11,9 @@ import cloudinary.uploader
 st.set_page_config(page_title="Galeria de Clientes", layout="wide")
 st.title("🌞 Galeria de Clientes")
 
+# === LOGO PADRÃO ===
+LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752708088/Imagem_do_WhatsApp_de_2025-07-16_%C3%A0_s_11.20.50_cbeb2873_nlhddx.jpg"
+
 # ========== CONFIGURAR CLOUDINARY ==========
 cloudinary.config(
     cloud_name=st.secrets["CLOUDINARY"]["cloud_name"],
@@ -51,7 +54,6 @@ else:
     if fotos_validas.empty:
         st.warning("Nenhuma imagem disponível para esse filtro.")
     else:
-        # Agrupamento e ordenação
         fotos_validas["Cliente"] = fotos_validas["Cliente"].astype(str)
         fotos_validas = fotos_validas.sort_values(by="Cliente", key=lambda x: x.str.lower())
         grupos = fotos_validas.groupby(fotos_validas["Cliente"].str[0].str.upper())
@@ -78,13 +80,14 @@ else:
 
                 for i, (idx, row) in enumerate(grupo.iterrows()):
                     with cols[i % 3]:
+                        # === EXIBE IMAGEM (ou LOGO PADRÃO) ===
+                        url_imagem = row["Foto"] if pd.notna(row["Foto"]) and "http" in row["Foto"] else LOGO_PADRAO
                         try:
-                            response = requests.get(row["Foto"])
+                            response = requests.get(url_imagem)
                             img = Image.open(BytesIO(response.content))
                             st.image(img, caption=row["Cliente"], use_container_width=True)
                         except:
-                            st.error(f"Erro ao carregar imagem de {row['Cliente']}")
-                            continue
+                            st.image(LOGO_PADRAO, caption=f"{row['Cliente']} (imagem padrão)", use_container_width=True)
 
                         with st.expander(f"🛠 Ações para {row['Cliente']}"):
                             if st.button(f"❌ Excluir imagem", key=f"excluir_{idx}"):
