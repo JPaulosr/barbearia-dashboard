@@ -35,7 +35,6 @@ def carregar_dados():
     df = df[df["Cliente"].str.lower().str.contains("boliviano|brasileiro|menino|sem preferencia|funcionário") == False]
     df = df[df["Cliente"].str.strip() != ""]
     df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
-    df = df.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
     return df
 
 @st.cache_data
@@ -48,19 +47,18 @@ def carregar_fotos():
 df = carregar_dados()
 df_fotos = carregar_fotos()
 
-# === Função de ranking por valor gasto ===
+# === Função de ranking por quantidade de atendimentos únicos ===
 def gerar_top3(df_base, titulo):
     col1, col2, col3 = st.columns([0.05, 0.15, 0.8])
     col1.markdown("### ")
     col2.markdown(f"#### {titulo}")
 
-    total_por_cliente = df_base.groupby("Cliente")["Valor"].sum()
-    top3 = total_por_cliente.sort_values(ascending=False).head(3).index.tolist()
-
+    df_base = df_base.drop_duplicates(subset=["Cliente", "Data"])
+    top3 = df_base["Cliente"].value_counts().head(3).index.tolist()
     medalhas = ["🥇", "🥈", "🥉"]
 
     for i, cliente in enumerate(top3):
-        total_gasto = df_base[df_base["Cliente"] == cliente]["Valor"].sum()
+        qtd = df_base[df_base["Cliente"] == cliente]["Data"].nunique()
         linha = st.columns([0.05, 0.12, 0.83])
         linha[0].markdown(f"### {medalhas[i]}")
 
@@ -75,7 +73,7 @@ def gerar_top3(df_base, titulo):
         else:
             linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-        linha[2].markdown(f"**{cliente.lower()}** — R$ {total_gasto:.2f}")
+        linha[2].markdown(f"**{cliente.lower()}** — {qtd} atendimentos")
 
 # === Top 3 Geral ===
 st.subheader("Top 3 Geral")
