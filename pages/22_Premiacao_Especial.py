@@ -156,4 +156,6 @@ else:
 st.subheader("✨ Cliente Revelação")
 data_corte = pd.to_datetime("2025-01-01")
 recentes = df[df["Data"] >= data_corte]
-novatos = recentes
+novatos = recentes.groupby("Cliente")["Data"].nunique().sort_values(ascending=False).head(1)
+for cliente, dias in novatos.items():
+    mostrar_cliente(cliente, f"Novo cliente com **{dias} visitas recentes** desde 2025.")
