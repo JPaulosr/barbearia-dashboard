@@ -112,10 +112,8 @@ st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 3 Grupos")
 df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
-# Remove atendimentos duplicados por cliente + data
+# Remove duplicatas de atendimento (cliente + data), mas mantém "Família"
 atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
-atendimentos_unicos = atendimentos_unicos.merge(
-    df_familia[["Cliente", "Família"]].drop_duplicates(), on="Cliente", how="left"
 )
 
 # Conta total de atendimentos únicos por família
