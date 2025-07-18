@@ -106,6 +106,7 @@ gerar_top3(df[df["Funcionário"] == "Vinicius"], "", excluir_clientes=clientes_p
 
 # === Cliente Família - Top 3 Grupos ===
 # === Cliente Família - Top 3 Grupos (sem valor) ===
+# === Cliente Família - Top 3 Grupos ===
 st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 3 Grupos")
 
 # Junta dados com 'Família'
@@ -127,17 +128,17 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
 
-    nome_pai = familia.replace("Família ", "").strip()
+    nome_pai = familia.replace("Família ", "").strip().lower()
+    nome_pai_formatado = nome_pai.capitalize()
     membro_foto = None
 
-    # Lógica exata: procura cliente cujo nome contenha o nome do pai
-    for cliente_nome, foto in zip(membros["Cliente"], membros["Foto"]):
-        if pd.isna(cliente_nome):
-            continue
-        if nome_pai.lower() in cliente_nome.strip().lower():
-            if pd.notna(foto):
-                membro_foto = foto
-                break
+    # Tenta encontrar o cliente cujo nome seja exatamente igual ao nome do pai
+    for idx, row in membros.iterrows():
+        cliente_nome = str(row["Cliente"]).strip().lower()
+        foto = row["Foto"]
+        if cliente_nome == nome_pai and pd.notna(foto):
+            membro_foto = foto
+            break
 
     # Se não achou o pai, usa a primeira foto válida
     if not membro_foto and membros["Foto"].notna().any():
@@ -156,4 +157,5 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    linha[2].markdown(f"**{familia}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
+    linha[2].markdown(f"Família **{nome_pai_formatado}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
+
