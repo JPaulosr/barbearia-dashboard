@@ -8,7 +8,7 @@ from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
-st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 10 Grupos")
+st.subheader("👨‍👩‍👧‍👦 Cliente Família — Todas as Famílias")
 
 # === GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -51,18 +51,15 @@ df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
 # Agrupa por Família e soma valores
-familia_valores = df_familia.groupby("Família")["Valor"].sum().sort_values(ascending=False).head(10)
-top_familias = familia_valores.index.tolist()
+familia_valores = df_familia.groupby("Família")["Valor"].sum()
+familia_valores = familia_valores[familia_valores > 0].sort_values(ascending=False)
 
 # Conta atendimentos únicos por cliente + data
 atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 familia_atendimentos = atendimentos_unicos.groupby("Família").size()
 dias_distintos = df_familia.drop_duplicates(subset=["Família", "Data"]).groupby("Família").size()
 
-# Medalhas para top 3
-medalhas = ["🥇", "🥈", "🥉"] + [""] * 7
-
-for i, familia in enumerate(top_familias):
+for idx, familia in enumerate(familia_valores.index):
     valor_total = familia_valores[familia]
     qtd_atendimentos = familia_atendimentos.get(familia, 0)
     qtd_dias = dias_distintos.get(familia, 0)
@@ -74,7 +71,7 @@ for i, familia in enumerate(top_familias):
     nome_pai_formatado = nome_pai.capitalize()
     membro_foto = None
 
-    for idx, row in membros.iterrows():
+    for i, row in membros.iterrows():
         cliente_nome = str(row["Cliente"]).strip().lower()
         foto = row["Foto"]
         if cliente_nome == nome_pai and pd.notna(foto):
@@ -85,7 +82,7 @@ for i, familia in enumerate(top_familias):
         membro_foto = membros["Foto"].dropna().values[0]
 
     linha = st.columns([0.05, 0.12, 0.83])
-    linha[0].markdown(f"### {medalhas[i]}")
+    linha[0].markdown(f"### {idx + 1}")
 
     if membro_foto:
         try:
