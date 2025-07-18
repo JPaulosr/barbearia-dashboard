@@ -157,4 +157,3 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
     linha[2].markdown(f"**{familia}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
-
