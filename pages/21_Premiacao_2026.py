@@ -105,31 +105,32 @@ st.subheader("Top 3 Vinicius")
 gerar_top3(df[df["Funcionário"] == "Vinicius"], "", excluir_clientes=clientes_premiados)
 
 # === Cliente Família - Top 3 Grupos ===
+# === Cliente Família - Top 3 Grupos (sem valor) ===
 st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 3 Grupos")
 
-# Junta os dados de atendimento com a coluna 'Família'
+# Junta dados com 'Família'
 df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
-# Agrupa por Cliente + Data para evitar duplicidade
-grupo_unico = df_familia.groupby(["Cliente", "Data"], as_index=False)["Valor"].sum()
-grupo_unico = grupo_unico.merge(df_familia[["Cliente", "Família"]].drop_duplicates(), on="Cliente", how="left")
+# Agrupa por Cliente + Data
+atendimentos_unicos = df_familia.groupby(["Cliente", "Data"], as_index=False)["Valor"].sum()
+atendimentos_unicos = atendimentos_unicos.merge(
+    df_familia[["Cliente", "Família"]].drop_duplicates(), on="Cliente", how="left"
+)
 
-# Soma total gasto por família
-familia_gasto = grupo_unico.groupby("Família")["Valor"].sum().sort_values(ascending=False).head(3)
+# Conta total de atendimentos únicos por família
+familia_atendimentos = atendimentos_unicos.groupby("Família")["Data"].nunique().sort_values(ascending=False).head(3)
 
 medalhas = ["🥇", "🥈", "🥉"]
 
-for i, (familia, total) in enumerate(familia_gasto.items()):
+for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     membros = df_fotos[df_fotos["Família"] == familia]
-    nome_membros = membros["Cliente"].tolist()
+    qtd_membros = len(membros)
     membro_foto = membros["Foto"].dropna().values[0] if membros["Foto"].dropna().shape[0] > 0 else None
-    qtd_membros = len(nome_membros)
 
     linha = st.columns([0.05, 0.12, 0.83])
     linha[0].markdown(f"### {medalhas[i]}")
 
-    # Foto representativa
     if membro_foto:
         try:
             response = requests.get(membro_foto)
@@ -140,5 +141,4 @@ for i, (familia, total) in enumerate(familia_gasto.items()):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    linha[2].markdown(f"**Família {familia}** — R$ {total:,.2f} | {qtd_membros} membros")
-
+    linha[2].markdown(f"**Família {familia}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
