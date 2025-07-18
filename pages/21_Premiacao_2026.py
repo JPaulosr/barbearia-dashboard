@@ -127,15 +127,22 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
 
-    nome_pai = familia.replace("Família ", "").strip()
+        nome_pai = familia.replace("Família ", "").strip()
     membro_foto = None
 
-    # Agora busca por qualquer nome que contenha o nome do pai (ignora maiúsculas/minúsculas)
-    linha_pai = membros[membros["Cliente"].str.lower().str.contains(nome_pai.lower(), na=False)]
-    if not linha_pai.empty and not linha_pai["Foto"].isna().all():
-        membro_foto = linha_pai["Foto"].dropna().values[0]
-    elif membros["Foto"].notna().any():
+    # Lógica exata: procura cliente cujo nome final seja igual ao nome do pai
+    for cliente_nome, foto in zip(membros["Cliente"], membros["Foto"]):
+        if pd.isna(cliente_nome):
+            continue
+        if nome_pai.lower() in cliente_nome.strip().lower():
+            if pd.notna(foto):
+                membro_foto = foto
+                break
+
+    # Se não achou o pai, usa a primeira foto válida
+    if not membro_foto and membros["Foto"].notna().any():
         membro_foto = membros["Foto"].dropna().values[0]
+
 
     linha = st.columns([0.05, 0.12, 0.83])
     linha[0].markdown(f"### {medalhas[i]}")
