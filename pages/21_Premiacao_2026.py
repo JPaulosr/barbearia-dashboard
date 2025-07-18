@@ -127,10 +127,10 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
 
-        nome_pai = familia.replace("Família ", "").strip()
+    nome_pai = familia.replace("Família ", "").strip()
     membro_foto = None
 
-    # Lógica exata: procura cliente cujo nome final seja igual ao nome do pai
+    # Lógica exata: procura cliente cujo nome contenha o nome do pai
     for cliente_nome, foto in zip(membros["Cliente"], membros["Foto"]):
         if pd.isna(cliente_nome):
             continue
@@ -142,7 +142,6 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     # Se não achou o pai, usa a primeira foto válida
     if not membro_foto and membros["Foto"].notna().any():
         membro_foto = membros["Foto"].dropna().values[0]
-
 
     linha = st.columns([0.05, 0.12, 0.83])
     linha[0].markdown(f"### {medalhas[i]}")
