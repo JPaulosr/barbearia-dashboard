@@ -114,7 +114,7 @@ df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"]
 
 # Remove duplicatas de atendimento (cliente + data), mas mantém "Família"
 atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
-)
+
 
 # Conta total de atendimentos únicos por família
 familia_atendimentos = atendimentos_unicos.groupby("Família")["Data"].nunique().sort_values(ascending=False).head(3)
