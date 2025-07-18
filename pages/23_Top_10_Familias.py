@@ -1,34 +1,70 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import gspread
-from gspread_dataframe import get_as_dataframe
-from google.oauth2.service_account import Credentials
 import requests
 from PIL import Image
 from io import BytesIO
-# === Cliente Família - Top 10 Grupos com barra colorida ===
+import gspread
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
+
+st.set_page_config(layout="wide")
 st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 10 Grupos")
+
+# === GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+ABA_BASE = "Base de Dados"
+ABA_STATUS = "clientes_status"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
+
+@st.cache_data
+def carregar_dados():
+    planilha = conectar_sheets()
+    df = get_as_dataframe(planilha.worksheet(ABA_BASE)).dropna(how="all")
+    df.columns = [c.strip() for c in df.columns]
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df = df.dropna(subset=["Cliente", "Funcionário"])
+    df = df[df["Cliente"].str.lower().str.contains("boliviano|brasileiro|menino|sem preferencia|funcionário") == False]
+    df = df[df["Cliente"].str.strip() != ""]
+    df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
+    return df
+
+@st.cache_data
+def carregar_fotos():
+    planilha = conectar_sheets()
+    df_status = get_as_dataframe(planilha.worksheet(ABA_STATUS)).dropna(how="all")
+    df_status.columns = [c.strip() for c in df_status.columns]
+    return df_status[["Cliente", "Foto", "Família"]].dropna(subset=["Cliente"])
+
+df = carregar_dados()
+df_fotos = carregar_fotos()
 
 # Junta dados com 'Família'
 df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
-# Remove duplicatas de atendimento (cliente + data)
-df_familia = df_familia.drop_duplicates(subset=["Cliente", "Data"])
+# Agrupa por Família e soma valores
+familia_valores = df_familia.groupby("Família")["Valor"].sum().sort_values(ascending=False).head(10)
+top_familias = familia_valores.index.tolist()
 
-# Soma valor total gasto por todos os membros da família
-familia_valores = df_familia.groupby("Família")["Valor"].sum().sort_values(ascending=False)
+# Conta atendimentos únicos por cliente + data
+atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
+familia_atendimentos = atendimentos_unicos.groupby("Família").size()
 
-# Pega Top 10 por valor gasto
-top_familias = familia_valores.head(10)
-max_valor = top_familias.max()
+# Cores para top 3, restante usa cinza
+cores = ["#FFD700", "#C0C0C0", "#CD7F32"] + ["#666666"] * 7
+medalhas = ["🥇", "🥈", "🥉"] + [""] * 7
+max_atendimentos = familia_atendimentos.max()
 
-# Cores padrão (alternadas) se passar do top 3
-cores_top3 = ["#FFD700", "#C0C0C0", "#CD7F32"]
-cor_default = "#FF914D"
-
-for i, (familia, valor_total) in enumerate(top_familias.items()):
+for i, familia in enumerate(top_familias):
+    qtd_atendimentos = familia_atendimentos.get(familia, 0)
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
 
@@ -47,9 +83,8 @@ for i, (familia, valor_total) in enumerate(top_familias.items()):
         membro_foto = membros["Foto"].dropna().values[0]
 
     linha = st.columns([0.05, 0.12, 0.83])
-    pos_emoji = f"{i+1}º" if i > 2 else ["🥇", "🥈", "🥉"][i]
-    linha[0].markdown(f"### {pos_emoji}")
-
+    linha[0].markdown(f"### {medalhas[i]}")
+    
     if membro_foto:
         try:
             response = requests.get(membro_foto)
@@ -60,10 +95,9 @@ for i, (familia, valor_total) in enumerate(top_familias.items()):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    # Texto e barra de progresso
-    texto = f"Família **{nome_pai_formatado}** — R$ {valor_total:.2f} | {qtd_membros} membros"
-    progresso_pct = int((valor_total / max_valor) * 100)
-    cor_barra = cores_top3[i] if i < 3 else cor_default
+    texto = f"Família **{nome_pai_formatado}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros"
+    progresso_pct = int((qtd_atendimentos / max_atendimentos) * 100)
+    cor_barra = cores[i]
 
     linha[2].markdown(texto)
     barra_html = f"""
