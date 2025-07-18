@@ -120,7 +120,11 @@ atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 atendimentos_por_membro = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 
 # Agrupa por Família e conta total de atendimentos somando todos os membros
-familia_atendimentos = atendimentos_por_membro.groupby("Família")["Data"].count().sort_values(ascending=False).head(3)
+# Soma do valor total gasto por todos os membros de cada família
+familia_valores = df_familia.groupby("Família")["Valor"].sum().sort_values(ascending=False).head(3)
+
+# Para cada família do Top 3, contar os atendimentos únicos e membros
+top_familias = familia_valores.index.tolist()
 
 medalhas = ["🥇", "🥈", "🥉"]
 cores = ["#FFD700", "#C0C0C0", "#CD7F32"]  # dourado, prata, bronze
