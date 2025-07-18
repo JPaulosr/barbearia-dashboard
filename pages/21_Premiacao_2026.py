@@ -47,10 +47,8 @@ def carregar_fotos():
 df = carregar_dados()
 df_fotos = carregar_fotos()
 
-# === Variável global para evitar duplicação de premiados ===
 clientes_premiados = set()
 
-# === Função de ranking ===
 def gerar_top3(df_base, titulo, excluir_clientes=None):
     if excluir_clientes is None:
         excluir_clientes = set()
@@ -61,14 +59,8 @@ def gerar_top3(df_base, titulo, excluir_clientes=None):
 
     df_base = df_base.copy()
     df_base["Valor"] = pd.to_numeric(df_base["Valor"], errors="coerce").fillna(0)
-
-    # Agrupar por Cliente + Data
     valor_por_atendimento = df_base.groupby(["Cliente", "Data"], as_index=False)["Valor"].sum()
-
-    # Total gasto por cliente
     total_gasto_por_cliente = valor_por_atendimento.groupby("Cliente")["Valor"].sum()
-
-    # Ordenar, excluir premiados e pegar Top 3
     ranking = total_gasto_por_cliente.sort_values(ascending=False)
     ranking = ranking[~ranking.index.isin(excluir_clientes)]
     top3 = ranking.head(3).index.tolist()
@@ -94,7 +86,6 @@ def gerar_top3(df_base, titulo, excluir_clientes=None):
 
         linha[2].markdown(f"**{cliente.lower()}** — {atendimentos_unicos} atendimentos")
 
-# === Premiação ===
 st.subheader("Top 3 Geral")
 gerar_top3(df, "")
 
@@ -104,50 +95,38 @@ gerar_top3(df[df["Funcionário"] == "JPaulo"], "", excluir_clientes=clientes_pre
 st.subheader("Top 3 Vinicius")
 gerar_top3(df[df["Funcionário"] == "Vinicius"], "", excluir_clientes=clientes_premiados)
 
-# === Cliente Família - Top 3 Grupos ===
-# === Cliente Família - Top 3 Grupos com barra colorida ===
-st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 3 Grupos")
+st.subheader("👨‍👩‍👧 Cliente Família — Top 3 Grupos")
 
-# Junta dados com 'Família'
 df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
-
-# Remove duplicatas de atendimento (cliente + data), mas mantém "Família"
 atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 
-
-# Conta atendimentos únicos (por Cliente + Data)
-atendimentos_por_membro = df_familia.drop_duplicates(subset=["Cliente", "Data"])
-
-# Agrupa por Família e conta total de atendimentos somando todos os membros
-# Soma do valor total gasto por todos os membros de cada família
+# Total de valor gasto por família
 familia_valores = df_familia.groupby("Família")["Valor"].sum().sort_values(ascending=False).head(3)
-
-# Para cada família do Top 3, contar os atendimentos únicos e membros
 top_familias = familia_valores.index.tolist()
+
+# Contar atendimentos de cada família
+familia_atendimentos = atendimentos_unicos[atendimentos_unicos["Família"].isin(top_familias)]
+familia_atendimentos = familia_atendimentos.groupby("Família").size()
 
 medalhas = ["🥇", "🥈", "🥉"]
 cores = ["#FFD700", "#C0C0C0", "#CD7F32"]  # dourado, prata, bronze
+max_valor = familia_valores.max()
 
-max_atendimentos = familia_atendimentos.max()
-
-for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
+for i, familia in enumerate(top_familias):
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
-
+    qtd_atendimentos = familia_atendimentos[familia]
     nome_pai = familia.replace("Família ", "").strip().lower()
     nome_pai_formatado = nome_pai.capitalize()
     membro_foto = None
 
-    # Tenta encontrar o cliente cujo nome seja exatamente igual ao nome do pai
     for idx, row in membros.iterrows():
         cliente_nome = str(row["Cliente"]).strip().lower()
         foto = row["Foto"]
         if cliente_nome == nome_pai and pd.notna(foto):
             membro_foto = foto
             break
-
-    # Se não achou o pai, usa a primeira foto válida
     if not membro_foto and membros["Foto"].notna().any():
         membro_foto = membros["Foto"].dropna().values[0]
 
@@ -164,9 +143,8 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    # Texto e barra de progresso colorida
     texto = f"Família **{nome_pai_formatado}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros"
-    progresso_pct = int((qtd_atendimentos / max_atendimentos) * 100)
+    progresso_pct = int((familia_valores[familia] / max_valor) * 100)
     cor_barra = cores[i]
 
     linha[2].markdown(texto)
