@@ -100,19 +100,32 @@ servicos_var = df.groupby("Cliente")["Serviço"].nunique().sort_values(ascending
 for cliente, qtd in servicos_var.items():
     mostrar_cliente(cliente, f"Usou **{qtd} tipos diferentes de serviços**.")
 
-# 👨‍👩‍👧‍👦 Cliente Família
+# 👨‍👩‍👧‍👦 Cliente Família (corrigido)
 st.subheader("👨‍👩‍👧‍👦 Cliente Família")
-familia = df_status[df_status["Família"].str.lower() == "sim"]
-mais_familia = df[df["Cliente"].isin(familia["Cliente"])].groupby("Cliente")["Data"].nunique().sort_values(ascending=False).head(1)
-for cliente, qtd in mais_familia.items():
-    mostrar_cliente(cliente, f"Trouxe a família em **{qtd} dias diferentes**.")
+df_familia = df.merge(df_status[["Cliente", "Família"]], on="Cliente", how="left")
+df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"] != "")]
+dias_familia = df_familia.drop_duplicates(subset=["Família", "Data"])
+ranking_familias = dias_familia.groupby("Família")["Data"].count().sort_values(ascending=False)
 
-# 💺 Cliente do Primeiro Mês
+if not ranking_familias.empty:
+    familia_top = ranking_familias.index[0]
+    membros = df_status[df_status["Família"] == familia_top]["Cliente"].tolist()
+    membro = membros[0]
+    mostrar_cliente(membro, f"Família **{familia_top}** teve atendimentos em **{ranking_familias.iloc[0]} dias diferentes**.")
+else:
+    st.info("Nenhuma família com atendimentos foi encontrada.")
+
+# 💺 Cliente do Primeiro Mês (corrigido)
 st.subheader("💺 Cliente do Primeiro Mês")
 primeiro_mes = df[df["Data"].dt.to_period("M") == pd.Period("2023-03")]
+primeiro_mes = primeiro_mes[primeiro_mes["Cliente"].apply(limpar_nomes)]
 clientes_primeiros = primeiro_mes["Cliente"].value_counts().head(1)
-for cliente, qtd in clientes_primeiros.items():
-    mostrar_cliente(cliente, f"Fez **{qtd} atendimentos no mês de estreia**.")
+
+if not clientes_primeiros.empty:
+    for cliente, qtd in clientes_primeiros.items():
+        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos no mês de estreia**.")
+else:
+    st.info("Nenhum cliente válido encontrado em março de 2023.")
 
 # ✨ Cliente Revelação
 st.subheader("✨ Cliente Revelação")
