@@ -7,7 +7,6 @@ from google.oauth2.service_account import Credentials
 import requests
 from PIL import Image
 from io import BytesIO
-
 # === Cliente Família - Top 10 Grupos com barra colorida ===
 st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 10 Grupos")
 
