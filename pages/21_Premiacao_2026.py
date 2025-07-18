@@ -116,8 +116,11 @@ df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"]
 atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 
 
-# Conta total de atendimentos únicos por família
-familia_atendimentos = atendimentos_unicos.groupby("Família")["Data"].nunique().sort_values(ascending=False).head(3)
+# Conta atendimentos únicos (por Cliente + Data)
+atendimentos_por_membro = df_familia.drop_duplicates(subset=["Cliente", "Data"])
+
+# Agrupa por Família e conta total de atendimentos somando todos os membros
+familia_atendimentos = atendimentos_por_membro.groupby("Família")["Data"].count().sort_values(ascending=False).head(3)
 
 medalhas = ["🥇", "🥈", "🥉"]
 cores = ["#FFD700", "#C0C0C0", "#CD7F32"]  # dourado, prata, bronze
