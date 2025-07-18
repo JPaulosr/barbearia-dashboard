@@ -1,6 +1,6 @@
-
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
@@ -9,10 +9,12 @@ from PIL import Image
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("🎉 Premiação Anual - 2025")
+st.title("\U0001F3C6 Top 3 Clientes por Categoria")
 
+# === GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-BASE_ABA = "Base de Dados"
+ABA_BASE = "Base de Dados"
+ABA_STATUS = "clientes_status"
 
 @st.cache_resource
 def conectar_sheets():
@@ -25,88 +27,85 @@ def conectar_sheets():
 @st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
-    aba = planilha.worksheet(BASE_ABA)
-    df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
+    df = get_as_dataframe(planilha.worksheet(ABA_BASE)).dropna(how="all")
+    df.columns = [c.strip() for c in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
+    df = df.dropna(subset=["Cliente", "Funcionário"])
+    df = df[df["Cliente"].str.lower().str.contains("boliviano|brasileiro|menino|sem preferencia|funcionário") == False]
+    df = df[df["Cliente"].str.strip() != ""]
+    df = df.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
     return df
 
 @st.cache_data
-def carregar_fotos_clientes():
-    try:
-        planilha = conectar_sheets()
-        aba_status = planilha.worksheet("clientes_status")
-        df_status = get_as_dataframe(aba_status).dropna(how="all")
-        df_status.columns = [str(col).strip() for col in df_status.columns]
-        return df_status.set_index("Cliente")["Foto"].to_dict()
-    except:
-        return {}
+def carregar_fotos():
+    planilha = conectar_sheets()
+    df_status = get_as_dataframe(planilha.worksheet(ABA_STATUS)).dropna(how="all")
+    df_status.columns = [c.strip() for c in df_status.columns]
+    return df_status[["Cliente", "Foto", "Família"]].dropna(subset=["Cliente"])
 
-def gerar_top3(df):
-    df = df.groupby(["Cliente", "Data"]).agg({"Valor": "sum"}).reset_index()
-    soma_valores = df.groupby("Cliente")["Valor"].sum().reset_index(name="Total_Gasto")
-    atendimentos_por_dia = df.groupby("Cliente")["Data"].nunique().reset_index(name="Qtd_Atendimentos")
-    ranking = pd.merge(soma_valores, atendimentos_por_dia, on="Cliente")
-    nomes_invalidos = ["boliviano", "brasileiro", "menino", "cliente", "moicano", "morador", "menina"]
-    ranking = ranking[~ranking["Cliente"].str.lower().isin(nomes_invalidos)]
-    ranking = ranking[~ranking["Cliente"].str.lower().str.contains("sem nome|desconhecido|teste")]
-    ranking = ranking.sort_values("Total_Gasto", ascending=False).reset_index(drop=True)
-    return ranking.head(3)
-
-def exibir_top3(titulo, ranking, fotos_clientes):
-    st.markdown(f"### {titulo}")
-    for i, row in ranking.iterrows():
-        cliente = row["Cliente"]
-        qtd = row["Qtd_Atendimentos"]
-        foto_url = fotos_clientes.get(cliente, "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png")
-        col1, col2, col3 = st.columns([1, 2, 10])
-        with col1:
-            medalha = "🥇" if i == 0 else "🥈" if i == 1 else "🥉"
-            st.markdown(medalha)
-        with col2:
-            try:
-                response = requests.get(foto_url)
-                img = Image.open(BytesIO(response.content))
-                st.image(img, width=60)
-            except:
-                st.image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=60)
-        with col3:
-            st.markdown(f"**{cliente}** — {qtd} atendimentos")
-
-# Dados e imagens
 df = carregar_dados()
-fotos = carregar_fotos_clientes()
+df_fotos = carregar_fotos()
 
-# Título geral
-st.markdown("## 🏆 Top 3 Clientes por Categoria")
+# === Função de ranking ===
+def gerar_top3(df_base, titulo):
+    col1, col2, col3 = st.columns([0.05, 0.15, 0.8])
+    col1.markdown("### ")
+    col2.markdown(f"#### {titulo}")
 
-# Três colunas
-col1, col2, col3 = st.columns(3)
+    total_por_cliente = df_base.groupby("Cliente")["Valor"].sum()
+    top3 = total_por_cliente.sort_values(ascending=False).head(3).index.tolist()
 
-with col1:
-    exibir_top3("Top 3 Geral", gerar_top3(df), fotos)
+    medalhas = ["🥇", "🥈", "🥉"]
 
-with col2:
-    exibir_top3("Top 3 JPaulo", gerar_top3(df[df["Funcionário"] == "JPaulo"]), fotos)
+    for i, cliente in enumerate(top3):
+        qtd = df_base[df_base["Cliente"] == cliente]["Data"].nunique()
+        linha = st.columns([0.05, 0.12, 0.83])
+        linha[0].markdown(f"### {medalhas[i]}")
 
-with col3:
-    exibir_top3("Top 3 Vinicius", gerar_top3(df[df["Funcionário"] == "Vinicius"]), fotos)
+        link_foto = df_fotos[df_fotos["Cliente"] == cliente]["Foto"].dropna().values
+        if len(link_foto):
+            try:
+                response = requests.get(link_foto[0])
+                img = Image.open(BytesIO(response.content))
+                linha[1].image(img, width=50)
+            except:
+                linha[1].text("[sem imagem]")
+        else:
+            linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-# Cliente Família
-st.markdown("## 👨‍👩‍👧 Cliente Família")
+        linha[2].markdown(f"**{cliente.lower()}** — {qtd} atendimentos")
 
-clientes_familia = ["João Pantanal", "Pedro Pantanal", "Lucas Pantanal"]
+# === Top 3 Geral ===
+st.subheader("Top 3 Geral")
+gerar_top3(df, "")
 
-for nome in clientes_familia:
-    col1, col2 = st.columns([1, 9])
-    with col1:
-        try:
-            foto = fotos.get(nome, "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png")
-            response = requests.get(foto)
-            img = Image.open(BytesIO(response.content))
-            st.image(img, width=60)
-        except:
-            st.image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=60)
-    with col2:
-        st.markdown(f"**{nome}** — Membro da Família Pantanal 💈")
+# === Top 3 JPaulo ===
+st.subheader("Top 3 JPaulo")
+gerar_top3(df[df["Funcionário"] == "JPaulo"], "")
+
+# === Top 3 Vinicius ===
+st.subheader("Top 3 Vinicius")
+gerar_top3(df[df["Funcionário"] == "Vinicius"], "")
+
+# === Cliente Família ===
+st.subheader("\U0001F468‍\U0001F469‍\U0001F467 Cliente Família")
+familia_df = df_fotos[df_fotos["Família"].notna() & (df_fotos["Família"] != "")]
+familias = familia_df["Família"].unique()
+
+for grupo in familias:
+    membros = familia_df[familia_df["Família"] == grupo]
+    for _, row in membros.iterrows():
+        linha = st.columns([0.05, 0.12, 0.83])
+        linha[0].text("")
+        if pd.notna(row["Foto"]):
+            try:
+                response = requests.get(row["Foto"])
+                img = Image.open(BytesIO(response.content))
+                linha[1].image(img, width=50)
+            except:
+                linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
+        else:
+            linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
+
+        linha[2].markdown(f"**{row['Cliente']}** — Membro da Família {grupo} 🍷")
