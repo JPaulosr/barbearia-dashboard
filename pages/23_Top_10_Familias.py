@@ -57,14 +57,16 @@ top_familias = familia_valores.index.tolist()
 # Conta atendimentos únicos por cliente + data
 atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 familia_atendimentos = atendimentos_unicos.groupby("Família").size()
+dias_distintos = df_familia.drop_duplicates(subset=["Família", "Data"]).groupby("Família").size()
 
-# Cores para top 3, restante usa cinza
-cores = ["#FFD700", "#C0C0C0", "#CD7F32"] + ["#666666"] * 7
+# Medalhas para top 3
 medalhas = ["🥇", "🥈", "🥉"] + [""] * 7
-max_atendimentos = familia_atendimentos.max()
 
 for i, familia in enumerate(top_familias):
+    valor_total = familia_valores[familia]
     qtd_atendimentos = familia_atendimentos.get(familia, 0)
+    qtd_dias = dias_distintos.get(familia, 0)
+
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
 
@@ -84,7 +86,7 @@ for i, familia in enumerate(top_familias):
 
     linha = st.columns([0.05, 0.12, 0.83])
     linha[0].markdown(f"### {medalhas[i]}")
-    
+
     if membro_foto:
         try:
             response = requests.get(membro_foto)
@@ -95,15 +97,11 @@ for i, familia in enumerate(top_familias):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    texto = f"Família **{nome_pai_formatado}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros"
-    progresso_pct = int((qtd_atendimentos / max_atendimentos) * 100)
-    cor_barra = cores[i]
-
-    linha[2].markdown(texto)
-    barra_html = f"""
-    <div style="background-color:#333;border-radius:10px;height:14px;width:100%;margin-top:4px;margin-bottom:4px;">
-      <div style="background-color:{cor_barra};width:{progresso_pct}%;height:100%;border-radius:10px;"></div>
-    </div>
-    <small style="color:gray;">{progresso_pct}% do líder</small>
+    texto = f"""
+    Família **{nome_pai_formatado}**  
+    💰 Total gasto: R$ {valor_total:,.2f}  
+    📆 Dias distintos: {qtd_dias}  
+    🧼 Atendimentos: {qtd_atendimentos}  
+    👥 Membros: {qtd_membros}
     """
-    linha[2].markdown(barra_html, unsafe_allow_html=True)
+    linha[2].markdown(texto)
