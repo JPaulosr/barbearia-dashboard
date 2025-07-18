@@ -60,6 +60,7 @@ def mostrar_cliente(nome, legenda):
         st.markdown(f"### 🏅 {nome.title()}")
         st.markdown(legenda)
 
+# === Carregamento de dados ===
 df = carregar_dados()
 df_status = carregar_status()
 df = df[df["Cliente"].notna() & df["Cliente"].apply(limpar_nomes)]
@@ -102,16 +103,35 @@ for cliente, qtd in servicos_var.items():
 
 # 👨‍👩‍👧‍👦 Cliente Família (corrigido)
 st.subheader("👨‍👩‍👧‍👦 Cliente Família")
+
 df_familia = df.merge(df_status[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"] != "")]
+
 dias_familia = df_familia.drop_duplicates(subset=["Família", "Data"])
 ranking_familias = dias_familia.groupby("Família")["Data"].count().sort_values(ascending=False)
 
 if not ranking_familias.empty:
     familia_top = ranking_familias.index[0]
-    membros = df_status[df_status["Família"] == familia_top]["Cliente"].tolist()
-    membro = membros[0]
-    mostrar_cliente(membro, f"Família **{familia_top}** teve atendimentos em **{ranking_familias.iloc[0]} dias diferentes**.")
+    total_dias = ranking_familias.iloc[0]
+    membros_df = df_status[df_status["Família"] == familia_top]
+
+    st.markdown(f"### 🏅 Família {familia_top.title()}")
+    st.markdown(f"Família **{familia_top.lower()}** teve atendimentos em **{total_dias} dias diferentes**.")
+
+    for _, row in membros_df.iterrows():
+        col1, col2 = st.columns([1, 5])
+        with col1:
+            try:
+                if pd.notna(row["Foto"]):
+                    response = requests.get(row["Foto"])
+                    img = Image.open(BytesIO(response.content))
+                    st.image(img, width=100)
+                else:
+                    raise Exception("sem imagem")
+            except:
+                st.image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=100)
+        with col2:
+            st.markdown(f"**{row['Cliente']}**")
 else:
     st.info("Nenhuma família com atendimentos foi encontrada.")
 
@@ -119,9 +139,9 @@ else:
 st.subheader("💺 Cliente do Primeiro Mês")
 primeiro_mes = df[df["Data"].dt.to_period("M") == pd.Period("2023-03")]
 primeiro_mes = primeiro_mes[primeiro_mes["Cliente"].apply(limpar_nomes)]
-clientes_primeiros = primeiro_mes["Cliente"].value_counts().head(1)
 
-if not clientes_primeiros.empty:
+if not primeiro_mes.empty and "Cliente" in primeiro_mes.columns:
+    clientes_primeiros = primeiro_mes["Cliente"].value_counts().head(1)
     for cliente, qtd in clientes_primeiros.items():
         mostrar_cliente(cliente, f"Fez **{qtd} atendimentos no mês de estreia**.")
 else:
