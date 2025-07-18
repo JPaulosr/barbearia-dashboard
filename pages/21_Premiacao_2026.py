@@ -126,7 +126,20 @@ medalhas = ["🥇", "🥈", "🥉"]
 for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     membros = df_fotos[df_fotos["Família"] == familia]
     qtd_membros = len(membros)
-    membro_foto = membros["Foto"].dropna().values[0] if membros["Foto"].dropna().shape[0] > 0 else None
+
+    # Nome do pai: retira o prefixo "Família " do nome da família
+    nome_pai = familia.replace("Família ", "").strip()
+
+    # Tenta encontrar a foto do pai entre os membros da família
+    membro_foto = None
+    if nome_pai in membros["Cliente"].values:
+        linha_pai = membros[membros["Cliente"] == nome_pai]
+        if not linha_pai["Foto"].isna().all():
+            membro_foto = linha_pai["Foto"].dropna().values[0]
+
+    # Se não encontrar a foto do pai, pega a primeira disponível
+    if not membro_foto and membros["Foto"].notna().any():
+        membro_foto = membros["Foto"].dropna().values[0]
 
     linha = st.columns([0.05, 0.12, 0.83])
     linha[0].markdown(f"### {medalhas[i]}")
@@ -141,4 +154,4 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    linha[2].markdown(f"**Família {familia}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
+    linha[2].markdown(f"**{familia}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
