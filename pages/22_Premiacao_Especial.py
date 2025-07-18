@@ -53,14 +53,13 @@ def mostrar_cliente(nome, legenda):
                 img = Image.open(BytesIO(response.content))
                 st.image(img, width=100)
             except:
-                st.write("📷")
+                st.image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=100)
         else:
-            st.write("📷")
+            st.image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=100)
     with col2:
         st.markdown(f"### 🏅 {nome.title()}")
         st.markdown(legenda)
 
-# === Carregamento de dados ===
 df = carregar_dados()
 df_status = carregar_status()
 df = df[df["Cliente"].notna() & df["Cliente"].apply(limpar_nomes)]
@@ -103,22 +102,22 @@ for cliente, qtd in servicos_var.items():
 
 # 👨‍👩‍👧‍👦 Cliente Família
 st.subheader("👨‍👩‍👧‍👦 Cliente Família")
-
 df_familia = df.merge(df_status[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"] != "")]
-dias_familia = df_familia.drop_duplicates(subset=["Família", "Data"])
-ranking_familias = dias_familia.groupby("Família")["Data"].count().sort_values(ascending=False)
 
-if not ranking_familias.empty:
-    familia_top = ranking_familias.index[0]
-    total_dias = ranking_familias.iloc[0]
-    total_atendimentos = df_familia[df_familia["Família"] == familia_top].shape[0]
+if not df_familia.empty:
+    atendimentos_total = df_familia.groupby("Família").size().sort_values(ascending=False)
+    dias_familia = df_familia.drop_duplicates(subset=["Família", "Data"])
+    dias_por_familia = dias_familia.groupby("Família")["Data"].count()
+    familia_top = atendimentos_total.index[0]
+    total_atendimentos = atendimentos_total.iloc[0]
+    total_dias = dias_por_familia.get(familia_top, 0)
     membros_df = df_status[df_status["Família"] == familia_top]
 
     st.markdown(f"### 🏅 Família {familia_top.title()}")
     st.markdown(
-        f"Família **{familia_top.lower()}** teve atendimentos em **{total_dias} dias diferentes** "
-        f"com um total de **{total_atendimentos} atendimentos** somando todos os membros."
+        f"Família **{familia_top.lower()}** teve atendimentos em **{total_dias} dias diferentes**, "
+        f"somando **{total_atendimentos} atendimentos individuais** entre todos os membros."
     )
 
     for _, row in membros_df.iterrows():
@@ -138,18 +137,17 @@ if not ranking_familias.empty:
 else:
     st.info("Nenhuma família com atendimentos foi encontrada.")
 
-# 🗓️ Cliente do Mês (NOVO)
+# 🗓️ Cliente do Mês
 st.subheader("🗓️ Cliente do Mês")
-mes_atual = pd.Timestamp.today().to_period("M")
-df_mes = df[df["Data"].dt.to_period("M") == mes_atual]
-df_mes = df_mes[df_mes["Cliente"].apply(limpar_nomes)]
-
-if not df_mes.empty:
-    cliente_mes = df_mes["Cliente"].value_counts().head(1)
+mes_atual = pd.Timestamp.now().month
+ano_atual = pd.Timestamp.now().year
+df_mes = df[(df["Data"].dt.month == mes_atual) & (df["Data"].dt.year == ano_atual)]
+cliente_mes = df_mes["Cliente"].value_counts().head(1)
+if not cliente_mes.empty:
     for cliente, qtd in cliente_mes.items():
-        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos no mês de {mes_atual.strftime('%B/%Y')}**.")
+        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos** no mês atual.")
 else:
-    st.info(f"Nenhum atendimento registrado em {mes_atual.strftime('%B/%Y')}.")
+    st.info("Nenhum cliente válido encontrado neste mês.")
 
 # ✨ Cliente Revelação
 st.subheader("✨ Cliente Revelação")
