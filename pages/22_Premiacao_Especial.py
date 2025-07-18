@@ -101,22 +101,25 @@ servicos_var = df.groupby("Cliente")["Serviço"].nunique().sort_values(ascending
 for cliente, qtd in servicos_var.items():
     mostrar_cliente(cliente, f"Usou **{qtd} tipos diferentes de serviços**.")
 
-# 👨‍👩‍👧‍👦 Cliente Família (corrigido)
+# 👨‍👩‍👧‍👦 Cliente Família
 st.subheader("👨‍👩‍👧‍👦 Cliente Família")
 
 df_familia = df.merge(df_status[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"] != "")]
-
 dias_familia = df_familia.drop_duplicates(subset=["Família", "Data"])
 ranking_familias = dias_familia.groupby("Família")["Data"].count().sort_values(ascending=False)
 
 if not ranking_familias.empty:
     familia_top = ranking_familias.index[0]
     total_dias = ranking_familias.iloc[0]
+    total_atendimentos = df_familia[df_familia["Família"] == familia_top].shape[0]
     membros_df = df_status[df_status["Família"] == familia_top]
 
     st.markdown(f"### 🏅 Família {familia_top.title()}")
-    st.markdown(f"Família **{familia_top.lower()}** teve atendimentos em **{total_dias} dias diferentes**.")
+    st.markdown(
+        f"Família **{familia_top.lower()}** teve atendimentos em **{total_dias} dias diferentes** "
+        f"com um total de **{total_atendimentos} atendimentos** somando todos os membros."
+    )
 
     for _, row in membros_df.iterrows():
         col1, col2 = st.columns([1, 5])
@@ -135,17 +138,18 @@ if not ranking_familias.empty:
 else:
     st.info("Nenhuma família com atendimentos foi encontrada.")
 
-# 💺 Cliente do Primeiro Mês (corrigido)
-st.subheader("💺 Cliente do Primeiro Mês")
-primeiro_mes = df[df["Data"].dt.to_period("M") == pd.Period("2023-03")]
-primeiro_mes = primeiro_mes[primeiro_mes["Cliente"].apply(limpar_nomes)]
+# 🗓️ Cliente do Mês (NOVO)
+st.subheader("🗓️ Cliente do Mês")
+mes_atual = pd.Timestamp.today().to_period("M")
+df_mes = df[df["Data"].dt.to_period("M") == mes_atual]
+df_mes = df_mes[df_mes["Cliente"].apply(limpar_nomes)]
 
-if not primeiro_mes.empty and "Cliente" in primeiro_mes.columns:
-    clientes_primeiros = primeiro_mes["Cliente"].value_counts().head(1)
-    for cliente, qtd in clientes_primeiros.items():
-        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos no mês de estreia**.")
+if not df_mes.empty:
+    cliente_mes = df_mes["Cliente"].value_counts().head(1)
+    for cliente, qtd in cliente_mes.items():
+        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos no mês de {mes_atual.strftime('%B/%Y')}**.")
 else:
-    st.info("Nenhum cliente válido encontrado em março de 2023.")
+    st.info(f"Nenhum atendimento registrado em {mes_atual.strftime('%B/%Y')}.")
 
 # ✨ Cliente Revelação
 st.subheader("✨ Cliente Revelação")
