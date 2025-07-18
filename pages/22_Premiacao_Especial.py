@@ -112,12 +112,13 @@ if not df_familia.empty:
     familia_top = atendimentos_total.index[0]
     total_atendimentos = atendimentos_total.iloc[0]
     total_dias = dias_por_familia.get(familia_top, 0)
+    valor_total_familia = df_familia[df_familia["Família"] == familia_top]["Valor"].sum()
     membros_df = df_status[df_status["Família"] == familia_top]
 
     st.markdown(f"### 🏅 Família {familia_top.title()}")
     st.markdown(
         f"Família **{familia_top.lower()}** teve atendimentos em **{total_dias} dias diferentes**, "
-        f"somando **{total_atendimentos} atendimentos individuais** entre todos os membros."
+        f"somando **{total_atendimentos} atendimentos individuais** e **R$ {valor_total_familia:.2f} gastos** entre todos os membros."
     )
 
     for _, row in membros_df.iterrows():
@@ -143,9 +144,11 @@ mes_atual = pd.Timestamp.now().month
 ano_atual = pd.Timestamp.now().year
 df_mes = df[(df["Data"].dt.month == mes_atual) & (df["Data"].dt.year == ano_atual)]
 cliente_mes = df_mes["Cliente"].value_counts().head(1)
-if not cliente_mes.empty:
+
+if not df_mes.empty and not cliente_mes.empty:
     for cliente, qtd in cliente_mes.items():
-        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos** no mês atual.")
+        valor_total = df_mes[df_mes["Cliente"] == cliente]["Valor"].sum()
+        mostrar_cliente(cliente, f"Fez **{qtd} atendimentos** no mês atual, com **R$ {valor_total:.2f} gastos**.")
 else:
     st.info("Nenhum cliente válido encontrado neste mês.")
 
@@ -153,6 +156,4 @@ else:
 st.subheader("✨ Cliente Revelação")
 data_corte = pd.to_datetime("2025-01-01")
 recentes = df[df["Data"] >= data_corte]
-novatos = recentes.groupby("Cliente")["Data"].nunique().sort_values(ascending=False).head(1)
-for cliente, dias in novatos.items():
-    mostrar_cliente(cliente, f"Novo cliente com **{dias} visitas recentes** desde 2025.")
+novatos = recentes
