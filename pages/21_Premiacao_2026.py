@@ -105,16 +105,15 @@ st.subheader("Top 3 Vinicius")
 gerar_top3(df[df["Funcionário"] == "Vinicius"], "", excluir_clientes=clientes_premiados)
 
 # === Cliente Família - Top 3 Grupos ===
-# === Cliente Família - Top 3 Grupos (sem valor) ===
-# === Cliente Família - Top 3 Grupos ===
+# === Cliente Família - Top 3 Grupos com barra colorida ===
 st.subheader("👨‍👩‍👧‍👦 Cliente Família — Top 3 Grupos")
 
 # Junta dados com 'Família'
 df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
-# Agrupa por Cliente + Data
-atendimentos_unicos = df_familia.groupby(["Cliente", "Data"], as_index=False)["Valor"].sum()
+# Remove atendimentos duplicados por cliente + data
+atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
 atendimentos_unicos = atendimentos_unicos.merge(
     df_familia[["Cliente", "Família"]].drop_duplicates(), on="Cliente", how="left"
 )
@@ -123,6 +122,9 @@ atendimentos_unicos = atendimentos_unicos.merge(
 familia_atendimentos = atendimentos_unicos.groupby("Família")["Data"].nunique().sort_values(ascending=False).head(3)
 
 medalhas = ["🥇", "🥈", "🥉"]
+cores = ["#FFD700", "#C0C0C0", "#CD7F32"]  # dourado, prata, bronze
+
+max_atendimentos = familia_atendimentos.max()
 
 for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     membros = df_fotos[df_fotos["Família"] == familia]
@@ -157,5 +159,16 @@ for i, (familia, qtd_atendimentos) in enumerate(familia_atendimentos.items()):
     else:
         linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-    linha[2].markdown(f"Família **{nome_pai_formatado}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros")
+    # Texto e barra de progresso colorida
+    texto = f"Família **{nome_pai_formatado}** — {qtd_atendimentos} atendimentos | {qtd_membros} membros"
+    progresso_pct = int((qtd_atendimentos / max_atendimentos) * 100)
+    cor_barra = cores[i]
 
+    linha[2].markdown(texto)
+    barra_html = f"""
+    <div style="background-color:#333;border-radius:10px;height:14px;width:100%;margin-top:4px;margin-bottom:4px;">
+      <div style="background-color:{cor_barra};width:{progresso_pct}%;height:100%;border-radius:10px;"></div>
+    </div>
+    <small style="color:gray;">{progresso_pct}% do líder</small>
+    """
+    linha[2].markdown(barra_html, unsafe_allow_html=True)
