@@ -43,20 +43,23 @@ def carregar_dados():
     }
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
+    # Verifica se coluna de duração está vazia
     if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
-        if "Hora Chegada" in df.columns and ("Hora Saída do Salão" in df.columns or "Hora Saída" in df.columns):
+        if set(["Hora Chegada", "Hora Saída do Salão", "Hora Saída"]).intersection(df.columns):
             def calcular_duracao(row):
                 try:
-                    chegada = pd.to_datetime(str(row["Hora Chegada"]), format="%H:%M:%S", errors="coerce")
-                    saida_salao = pd.to_datetime(str(row.get("Hora Saída do Salão")), format="%H:%M:%S", errors="coerce")
-                    saida = pd.to_datetime(str(row.get("Hora Saída")), format="%H:%M:%S", errors="coerce")
-                    fim = saida_salao if pd.notnull(saida_salao) else saida
-                    return (fim - chegada).total_seconds() / 60 if pd.notnull(chegada) and pd.notnull(fim) and fim > chegada else None
-                except:
+                    h1 = pd.to_datetime(row["Hora Chegada"], format="%H:%M:%S", errors="coerce")
+                    h2 = pd.to_datetime(row.get("Hora Saída do Salão", None), format="%H:%M:%S", errors="coerce")
+                    h3 = pd.to_datetime(row.get("Hora Saída", None), format="%H:%M:%S", errors="coerce")
+                    fim = h2 if pd.notnull(h2) else h3
+                    return (fim - h1).total_seconds() / 60 if pd.notnull(fim) and pd.notnull(h1) and fim > h1 else None
+                except Exception as e:
                     return None
             df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+
     return df
 
+# === TENTATIVA DE CARREGAR DADOS COM PROTEÇÃO ===
 try:
     df = carregar_dados()
 except Exception as e:
@@ -66,3 +69,14 @@ except Exception as e:
 if df.empty:
     st.error("Erro: A base de dados está vazia ou não foi carregada.")
     st.stop()
+
+# == CONTINUA A LÓGICA NORMAL ===
+clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+cliente_default = (
+    st.session_state.get("cliente") 
+    if "cliente" in st.session_state and st.session_state["cliente"] in clientes_disponiveis
+    else clientes_disponiveis[0]
+)
+cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
+
+st.success("Dados carregados com sucesso e cliente selecionado!")
