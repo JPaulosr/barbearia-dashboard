@@ -13,3 +13,4 @@ requests
 cloudinary
 streamlit-aggrid
 streamlit-searchbox
+babel
