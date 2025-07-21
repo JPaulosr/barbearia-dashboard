@@ -44,22 +44,17 @@ def carregar_dados():
     }
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
-    # Cálculo da duração em minutos de forma robusta
-    def calcular_duracao(row):
-        h1 = row.get("Hora Chegada")
-        h2 = row.get("Hora Saída do Salão")
-        try:
-            h1 = pd.to_datetime(str(h1), errors="coerce").time()
-            h2 = pd.to_datetime(str(h2), errors="coerce").time()
-            if pd.isna(h1) or pd.isna(h2):
-                return None
-            dt1 = datetime.datetime.combine(datetime.date.today(), h1)
-            dt2 = datetime.datetime.combine(datetime.date.today(), h2)
-            return (dt2 - dt1).total_seconds() / 60 if dt2 > dt1 else None
-        except:
-            return None
-
-    if {"Hora Chegada", "Hora Saída do Salão"}.issubset(df.columns):
-        df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+    if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
+        if set(["Hora Chegada", "Hora Saída do Salão"]).issubset(df.columns):
+            def calcular_duracao(row):
+                try:
+                    h1 = pd.to_datetime(row["Hora Chegada"], format="%H:%M:%S", errors="coerce")
+                    h2 = pd.to_datetime(row["Hora Saída do Salão"], format="%H:%M:%S", errors="coerce")
+                    if pd.isna(h1) or pd.isna(h2):
+                        return None
+                    return (h2 - h1).total_seconds() / 60 if h2 > h1 else None
+                except:
+                    return None
+            df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
 
     return df
