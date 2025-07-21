@@ -64,7 +64,6 @@ df = carregar_dados()
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
-st.success("Dados carregados com sucesso e cliente selecionado!")
 
 # === Mostrar imagem do cliente ===
 def buscar_link_foto(nome):
