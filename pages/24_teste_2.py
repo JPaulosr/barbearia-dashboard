@@ -142,20 +142,6 @@ fig_receita.update_traces(textposition="inside")
 fig_receita.update_layout(height=400)
 st.plotly_chart(fig_receita, use_container_width=True)
 
-receita_mensal["Mês_Ano"] = receita_mensal["Mês_Ano"].astype(str)
-
-fig_receita = px.bar(
-    receita_mensal,
-    x="Mês_Ano",
-    y="Valor",
-    text=receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
-    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
-    category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}  # força a ordem desejada
-)
-
-fig_receita.update_traces(textposition="inside")
-fig_receita.update_layout(height=400)
-st.plotly_chart(fig_receita, use_container_width=True)
 
 st.subheader("📊 Receita por Serviço e Produto")
 df_tipos = df_cliente[["Serviço", "Tipo", "Valor"]].copy()
