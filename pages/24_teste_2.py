@@ -58,3 +58,7 @@ def carregar_dados():
             df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
 
     return df
+
+# === Análises complementares de tempo ===
+df = carregar_dados()
+clientes_disponiveis = sorted(df["Cliente"].dropna()
