@@ -117,26 +117,30 @@ st.dataframe(
 
 st.subheader("📊 Receita mensal")
 
-# Cria coluna de referência mensal a partir de Data
+# Cria coluna de referência mensal a partir da Data
 df_cliente["Data_Ref_Mensal"] = df_cliente["Data"].dt.to_period("M").dt.to_timestamp()
 
 # Agrupa pela nova coluna de referência mensal
 receita_mensal = df_cliente.groupby("Data_Ref_Mensal")["Valor"].sum().reset_index()
 
-# Cria coluna Mês_Ano para exibição
-receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].dt.strftime("%B/%Y")
+# Usa Babel para formatar os meses em português
+receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].apply(
+    lambda d: format_date(d, format="MMMM 'de' y", locale="pt_BR").capitalize()
+)
 
-# Formata valores
-receita_mensal["Valor_str"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+# Formata os valores para exibição
+receita_mensal["Valor_str"] = receita_mensal["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
-# Gera gráfico com ordem correta
+# Gera o gráfico com ordem correta
 fig_receita = px.bar(
     receita_mensal,
     x="Mês_Ano",
     y="Valor",
     text="Valor_str",
     labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
-    category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
+    category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}  # força a ordem desejada
 )
 fig_receita.update_traces(textposition="inside")
 fig_receita.update_layout(height=400)
