@@ -44,15 +44,20 @@ def carregar_dados():
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
     if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
-        if set(["Hora Chegada", "Hora Saída do Salão"]).issubset(df.columns):
-            def calcular_duracao(row):
-                try:
-                    h1 = pd.to_datetime(row["Hora Chegada"], format="%H:%M:%S")
-                    h2 = pd.to_datetime(row["Hora Saída do Salão"], format="%H:%M:%S")
-                    return (h2 - h1).total_seconds() / 60 if h2 > h1 else None
-                except:
-                    return None
-            df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+    if "Hora Chegada" in df.columns and ("Hora Saída do Salão" in df.columns or "Hora Saída" in df.columns):
+        def calcular_duracao(row):
+            try:
+                chegada = pd.to_datetime(str(row["Hora Chegada"]), format="%H:%M:%S", errors="coerce")
+                saida_salao = pd.to_datetime(str(row.get("Hora Saída do Salão")), format="%H:%M:%S", errors="coerce")
+                saida = pd.to_datetime(str(row.get("Hora Saída")), format="%H:%M:%S", errors="coerce")
+
+                fim = saida_salao if pd.notnull(saida_salao) else saida
+                return (fim - chegada).total_seconds() / 60 if pd.notnull(chegada) and pd.notnull(fim) and fim > chegada else None
+            except:
+                return None
+
+        df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+
 
     return df
 
