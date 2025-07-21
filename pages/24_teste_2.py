@@ -80,3 +80,68 @@ cliente_default = (
 cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis, index=clientes_disponiveis.index(cliente_default))
 
 st.success("Dados carregados com sucesso e cliente selecionado!")
+df_cliente = df[df["Cliente"] == cliente].sort_values("Data", ascending=False)
+
+if df_cliente.empty:
+    st.warning("Nenhum atendimento encontrado para esse cliente.")
+    st.stop()
+
+# Último atendimento
+ultimo = df_cliente["Data"].max()
+dias_desde = (pd.Timestamp.today() - ultimo).days
+frequencia = df_cliente["Data"].diff().dt.days.dropna().mean()
+intervalo_medio = round(df_cliente["Data"].diff().dt.days.dropna().mean(), 1)
+
+# Status
+status = "🟢 Em dia"
+if dias_desde > frequencia * 1.5:
+    status = "🔴 Muito atrasado"
+elif dias_desde > frequencia:
+    status = "🟡 Pouco atrasado"
+
+# Mais atendido por
+mais_atendido = df_cliente["Funcionário"].value_counts().idxmax()
+
+# VIP
+vip = "Sim" if df_cliente["Cliente VIP"].astype(str).str.lower().str.contains("sim").any() else "Não"
+
+# Ticket médio
+ticket = df_cliente["Valor"].mean()
+
+# Tempo total no salão (se houver duração)
+tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
+tempo_txt = f"{int(tempo_total)} min" if tempo_total else "Indisponível"
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.subheader("📅 Último Atendimento")
+    st.markdown(f"<h3>{ultimo.strftime('%d/%m/%Y')}</h3>", unsafe_allow_html=True)
+with col2:
+    st.subheader("📊 Frequência Média")
+    st.markdown(f"<h3>{frequencia:.1f} dias</h3>", unsafe_allow_html=True)
+with col3:
+    st.subheader("🕒 Dias Desde Último")
+    st.markdown(f"<h3>{dias_desde}</h3>", unsafe_allow_html=True)
+with col4:
+    st.subheader("📌 Status")
+    st.markdown(f"<h3>{status}</h3>", unsafe_allow_html=True)
+
+st.markdown("---")
+st.subheader("💡 Insights Adicionais do Cliente")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown("🧡 **Cliente VIP**")
+    st.markdown(f"<h3>{vip} ⭐</h3>", unsafe_allow_html=True)
+    st.markdown("🪙 **Ticket Médio**")
+    st.markdown(f"<h3>R$ {ticket:.2f}</h3>", unsafe_allow_html=True)
+
+with col2:
+    st.markdown("🧑‍🦱 **Mais atendido por**")
+    st.markdown(f"<h3>{mais_atendido}</h3>", unsafe_allow_html=True)
+    st.markdown("📆 **Intervalo Médio**")
+    st.markdown(f"<h3>{intervalo_medio} dias</h3>", unsafe_allow_html=True)
+
+with col3:
+    st.markdown("⏱️ **Tempo Total no Salão**")
+    st.markdown(f"<h3>{tempo_txt}</h3>", unsafe_allow_html=True)
