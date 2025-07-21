@@ -195,7 +195,7 @@ else:
     status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
     mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
    tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
-tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
+   tempo_total_str = f"{int(tempo_total)} minutos" if tempo_total else "Indisponível"
 
     ticket_medio = df_cliente["Valor"].mean()
     intervalo_medio = media_freq if len(datas) >= 2 else None
