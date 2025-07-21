@@ -50,12 +50,10 @@ def carregar_dados():
                 chegada = pd.to_datetime(str(row["Hora Chegada"]), format="%H:%M:%S", errors="coerce")
                 saida_salao = pd.to_datetime(str(row.get("Hora Saída do Salão")), format="%H:%M:%S", errors="coerce")
                 saida = pd.to_datetime(str(row.get("Hora Saída")), format="%H:%M:%S", errors="coerce")
-
                 fim = saida_salao if pd.notnull(saida_salao) else saida
                 return (fim - chegada).total_seconds() / 60 if pd.notnull(chegada) and pd.notnull(fim) and fim > chegada else None
             except:
                 return None
-
         df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
 
 
