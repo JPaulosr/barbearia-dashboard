@@ -1,4 +1,3 @@
-from babel.dates import format_date
 import streamlit as st
 import pandas as pd
 import gspread
