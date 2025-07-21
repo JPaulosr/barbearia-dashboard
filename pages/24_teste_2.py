@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -56,7 +55,14 @@ def carregar_dados():
                 except:
                     return None
             df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
-
     return df
 
-# Fim do trecho corrigido
+try:
+    df = carregar_dados()
+except Exception as e:
+    st.error(f"Erro ao carregar dados: {e}")
+    st.stop()
+
+if df.empty:
+    st.error("Erro: A base de dados está vazia ou não foi carregada.")
+    st.stop()
