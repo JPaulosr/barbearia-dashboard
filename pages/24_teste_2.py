@@ -116,10 +116,32 @@ st.dataframe(
 )
 
 st.subheader("📊 Receita mensal")
-receita_mensal = df_cliente.groupby("Mês_Ano")["Valor"].sum().reset_index()
-# Adiciona coluna de data para ordenação correta
-receita_mensal["DataOrdenada"] = pd.to_datetime(receita_mensal["Mês_Ano"], format="%B/%Y", errors="coerce")
-receita_mensal = receita_mensal.sort_values("DataOrdenada")
+
+# Cria coluna de referência mensal a partir de Data
+df_cliente["Data_Ref_Mensal"] = df_cliente["Data"].dt.to_period("M").dt.to_timestamp()
+
+# Agrupa pela nova coluna de referência mensal
+receita_mensal = df_cliente.groupby("Data_Ref_Mensal")["Valor"].sum().reset_index()
+
+# Cria coluna Mês_Ano para exibição
+receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].dt.strftime("%B/%Y")
+
+# Formata valores
+receita_mensal["Valor_str"] = receita_mensal["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+# Gera gráfico com ordem correta
+fig_receita = px.bar(
+    receita_mensal,
+    x="Mês_Ano",
+    y="Valor",
+    text="Valor_str",
+    labels={"Valor": "Receita (R$)", "Mês_Ano": "Mês"},
+    category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
+)
+fig_receita.update_traces(textposition="inside")
+fig_receita.update_layout(height=400)
+st.plotly_chart(fig_receita, use_container_width=True)
+
 receita_mensal["Mês_Ano"] = receita_mensal["Mês_Ano"].astype(str)
 
 fig_receita = px.bar(
