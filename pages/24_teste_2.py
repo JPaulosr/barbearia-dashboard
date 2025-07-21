@@ -8,6 +8,8 @@ import datetime
 import requests
 from PIL import Image
 from io import BytesIO
+from babel.dates import format_date  # <-- Adicione esta linha
+
 
 st.set_page_config(layout="wide")
 st.title("📌 Detalhamento do Cliente")
