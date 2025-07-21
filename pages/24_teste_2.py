@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -10,9 +11,9 @@ from PIL import Image
 from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("\ud83d\udccc Detalhamento do Cliente")
+st.title("📌 Detalhamento do Cliente")
 
-# === CONFIGURA\u00c7\u00c3O GOOGLE SHEETS ===
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 
@@ -34,19 +35,19 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
-    df["M\u00eas"] = df["Data"].dt.month
+    df["Mês"] = df["Data"].dt.month
 
     meses_pt = {
-        1: "Janeiro", 2: "Fevereiro", 3: "Mar\u00e7o", 4: "Abril",
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
         5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
         9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
     }
-    df["M\u00eas_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
+    df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
-    # C\u00e1lculo da dura\u00e7\u00e3o em minutos de forma robusta
+    # Cálculo da duração em minutos de forma robusta
     def calcular_duracao(row):
         h1 = row.get("Hora Chegada")
-        h2 = row.get("Hora Sa\u00edda do Sal\u00e3o")
+        h2 = row.get("Hora Saída do Salão")
         try:
             h1 = pd.to_datetime(str(h1), errors="coerce").time()
             h2 = pd.to_datetime(str(h2), errors="coerce").time()
@@ -58,7 +59,7 @@ def carregar_dados():
         except:
             return None
 
-    if {"Hora Chegada", "Hora Sa\u00edda do Sal\u00e3o"}.issubset(df.columns):
-        df["Dura\u00e7\u00e3o (min)"] = df.apply(calcular_duracao, axis=1)
+    if {"Hora Chegada", "Hora Saída do Salão"}.issubset(df.columns):
+        df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
 
     return df
