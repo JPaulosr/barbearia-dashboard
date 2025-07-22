@@ -113,6 +113,8 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
 
 freq_df = pd.DataFrame(frequencia_clientes)
 freq_df = freq_df.merge(df_status[["Cliente", "Imagem"]], on="Cliente", how="left")
+freq_df = pd.DataFrame(frequencia_clientes)
+freq_df = freq_df.merge(df_status[["Cliente", "Imagem"]], on="Cliente", how="left")
 
 # === INDICADORES ===
 st.markdown("### 📊 Indicadores")
