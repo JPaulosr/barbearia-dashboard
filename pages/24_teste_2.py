@@ -81,6 +81,9 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
     })
 
 freq_df = pd.DataFrame(frequencia_clientes)
+freq_df = pd.DataFrame(frequencia_clientes)
+freq_df["Último Atendimento"] = pd.to_datetime(freq_df["Último Atendimento"])
+freq_df["Último Atendimento"] = freq_df["Último Atendimento"].dt.strftime("%d/%m/%Y")
 
 # === FILTRO POR TEXTO
 st.markdown("### 🎯 Filtro de Cliente")
