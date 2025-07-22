@@ -6,13 +6,14 @@ from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
-st.title("🧍‍♂️ Clientes - Receita Total")
+st.title("🦽 Clientes - Receita Total")
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
 
+# === Função para conectar ao Google Sheets ===
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -21,6 +22,7 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
+# === Carregar dados principais ===
 @st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
@@ -43,30 +45,65 @@ def carregar_status():
     except:
         return pd.DataFrame(columns=["Cliente", "Status"])
 
+# === Atualizar status de clientes automaticamente ===
+def atualizar_status_clientes(ultimos_status):
+    try:
+        planilha = conectar_sheets()
+        aba_status = planilha.worksheet(STATUS_ABA)
+        dados = aba_status.get_all_records()
+
+        atualizados = 0
+        for i, linha in enumerate(dados, start=2):  # começa na linha 2
+            nome = linha.get("Cliente", "").strip()
+            status_atual = linha.get("Status", "").strip()
+            status_novo = ultimos_status.get(nome)
+
+            if status_novo and status_novo != status_atual:
+                aba_status.update_cell(i, 2, status_novo)  # coluna 2 = "Status"
+                atualizados += 1
+
+        return atualizados
+    except Exception as e:
+        st.warning(f"⚠️ Erro ao atualizar status dos clientes: {e}")
+        return 0
+
+# === Executa carregamento e atualiza status ===
 df = carregar_dados()
 df_status = carregar_status()
 
-# === Contagem total de clientes únicos e por status ===
+# === Lógica de atualização de status ===
+hoje = pd.Timestamp.today().normalize()
+limite_dias = 90
+
+ultimos = df.groupby("Cliente")["Data"].max().reset_index()
+ultimos["DiasDesde"] = (hoje - ultimos["Data"]).dt.days
+ultimos["StatusNovo"] = ultimos["DiasDesde"].apply(lambda x: "Inativo" if x > limite_dias else "Ativo")
+
+status_atualizado = dict(zip(ultimos["Cliente"], ultimos["StatusNovo"]))
+qtd = atualizar_status_clientes(status_atualizado)
+if qtd > 0:
+    st.success(f"🔄 {qtd} cliente(s) tiveram seus status atualizados automaticamente.")
+
+# === Indicadores ===
 clientes_unicos = df["Cliente"].nunique()
 contagem_status = df_status["Status"].value_counts().to_dict()
 ativos = contagem_status.get("Ativo", 0)
 ignorados = contagem_status.get("Ignorado", 0)
 inativos = contagem_status.get("Inativo", 0)
 
-# === Exibição dos indicadores no topo ===
 st.markdown("### 📊 Indicadores Gerais")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("👥 Clientes únicos", clientes_unicos)
 col2.metric("✅ Ativos", ativos)
 col3.metric("🚫 Ignorados", ignorados)
-col4.metric("🛑 Inativos", inativos)
+col4.metric("🚩 Inativos", inativos)
 
 # === Remove nomes genéricos ===
 nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
 normalizar = lambda s: str(s).lower().strip()
 df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
 
-# === Agrupamento ===
+# === Ranking geral ===
 ranking = df.groupby("Cliente")["Valor"].sum().reset_index()
 ranking = ranking.sort_values(by="Valor", ascending=False)
 ranking["Valor Formatado"] = ranking["Valor"].apply(
@@ -74,17 +111,15 @@ ranking["Valor Formatado"] = ranking["Valor"].apply(
 )
 
 # === Busca dinâmica ===
-st.subheader("🧾 Receita total por cliente")
+st.subheader("📟 Receita total por cliente")
 busca = st.text_input("🔎 Filtrar por nome").lower().strip()
-
 if busca:
     ranking_exibido = ranking[ranking["Cliente"].str.lower().str.contains(busca)]
 else:
     ranking_exibido = ranking.copy()
-
 st.dataframe(ranking_exibido[["Cliente", "Valor Formatado"]], use_container_width=True)
 
-# === Top 5 clientes ===
+# === Top 5 ===
 st.subheader("🏆 Top 5 Clientes por Receita")
 top5 = ranking.head(5)
 fig_top = px.bar(
@@ -99,9 +134,8 @@ fig_top.update_traces(textposition="outside")
 fig_top.update_layout(showlegend=False, height=400, template="plotly_white")
 st.plotly_chart(fig_top, use_container_width=True)
 
-# === Comparativo entre dois clientes ===
+# === Comparativo ===
 st.subheader("⚖️ Comparar dois clientes")
-
 clientes_disponiveis = ranking["Cliente"].tolist()
 col1, col2 = st.columns(2)
 c1 = col1.selectbox("👤 Cliente 1", clientes_disponiveis)
