@@ -146,15 +146,19 @@ def exibir_clientes_em_galeria(df_input, titulo):
             if imagem:
                 st.image(imagem, width=80)
             st.markdown(f"**{row['Cliente']}**")
-           # Formatar a data no padrão brasileiro, mesmo que ainda seja datetime.date
-data_formatada = pd.to_datetime(row["Último Atendimento"]).strftime("%d/%m/%Y")
 
-st.markdown(
-    f"🗓️ Último: {data_formatada}  \n"
-    f"🔁 Freq: {row['Frequência Média (dias)']}d  \n"
-    f"⏳ {row['Dias Desde Último']} dias sem vir"
-)
+            # ✅ Formatar data para dd/mm/aaaa
+            try:
+                data_formatada = pd.to_datetime(row["Último Atendimento"]).strftime("%d/%m/%Y")
+            except:
+                data_formatada = row["Último Atendimento"]
 
+            st.markdown(
+                f"🗓️ Último: {data_formatada}  \n"
+                f"🔁 Freq: {row['Frequência Média (dias)']}d  \n"
+                f"⏳ {row['Dias Desde Último']} dias sem vir"
+            )
+            
 # === EXIBIÇÃO FINAL COM NOVO LAYOUT ===
 st.divider()
 exibir_clientes_em_galeria(freq_df[freq_df["Status_Label"] == "Muito atrasado"], "## 🔴 Muito Atrasados")
