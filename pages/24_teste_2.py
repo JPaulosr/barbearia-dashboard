@@ -6,13 +6,14 @@ from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(layout="wide")
-st.title("📆 Frequência dos Clientes")
+st.title("🦽 Clientes - Receita Total")
 
-# === CONFIG GOOGLE SHEETS ===
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
 
+# === Função para conectar ao Google Sheets ===
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -21,149 +22,153 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
+# === Carregar dados principais ===
 @st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
+    df.columns = [col.strip() for col in df.columns]
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
     return df
 
 @st.cache_data
 def carregar_status():
     try:
         planilha = conectar_sheets()
-        aba_status = planilha.worksheet(STATUS_ABA)
-        status = get_as_dataframe(aba_status).dropna(how="all")
-        status.columns = [str(col).strip() for col in status.columns]
-        return status[["Cliente", "Status"]]
+        aba = planilha.worksheet(STATUS_ABA)
+        df_status = get_as_dataframe(aba).dropna(how="all")
+        df_status.columns = [col.strip() for col in df_status.columns]
+        return df_status[["Cliente", "Status"]]
     except:
         return pd.DataFrame(columns=["Cliente", "Status"])
 
-# === PRÉ-PROCESSAMENTO
+# === Atualizar status de clientes automaticamente ===
+def atualizar_status_clientes(ultimos_status):
+    try:
+        planilha = conectar_sheets()
+        aba_status = planilha.worksheet(STATUS_ABA)
+        dados = aba_status.get_all_records()
+
+        atualizados = 0
+        for i, linha in enumerate(dados, start=2):  # começa na linha 2
+            nome = linha.get("Cliente", "").strip()
+            status_atual = linha.get("Status", "").strip()
+            status_novo = ultimos_status.get(nome)
+
+            if status_novo and status_novo != status_atual:
+                aba_status.update_cell(i, 2, status_novo)  # coluna 2 = "Status"
+                atualizados += 1
+
+        return atualizados
+    except Exception as e:
+        st.warning(f"⚠️ Erro ao atualizar status dos clientes: {e}")
+        return 0
+
+# === Executa carregamento e atualiza status ===
 df = carregar_dados()
 df_status = carregar_status()
-clientes_validos = df_status[~df_status["Status"].isin(["Inativo", "Ignorado"])]["Cliente"].unique().tolist()
-df = df[df["Cliente"].isin(clientes_validos)]
-atendimentos = df.drop_duplicates(subset=["Cliente", "Data"])
 
-# === CÁLCULO DE FREQUÊNCIA
-frequencia_clientes = []
+# === Lógica de atualização de status ===
 hoje = pd.Timestamp.today().normalize()
+limite_dias = 90
 
-for cliente, grupo in atendimentos.groupby("Cliente"):
-    datas = grupo.sort_values("Data")["Data"].tolist()
-    if len(datas) < 2:
-        continue
+ultimos = df.groupby("Cliente")["Data"].max().reset_index()
+ultimos["DiasDesde"] = (hoje - ultimos["Data"]).dt.days
+ultimos["StatusNovo"] = ultimos["DiasDesde"].apply(lambda x: "Inativo" if x > limite_dias else "Ativo")
 
-    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
-    media_freq = sum(diffs) / len(diffs)
-    ultimo_atendimento = datas[-1]
-    dias_desde_ultimo = (hoje - ultimo_atendimento).days
+status_atualizado = dict(zip(ultimos["Cliente"], ultimos["StatusNovo"]))
+qtd = atualizar_status_clientes(status_atualizado)
+if qtd > 0:
+    st.success(f"🔄 {qtd} cliente(s) tiveram seus status atualizados automaticamente.")
 
-    if dias_desde_ultimo <= media_freq:
-        status = ("🟢 Em dia", "Em dia")
-    elif dias_desde_ultimo <= media_freq * 1.5:
-        status = ("🟠 Pouco atrasado", "Pouco atrasado")
-    else:
-        status = ("🔴 Muito atrasado", "Muito atrasado")
+# === Indicadores ===
+clientes_unicos = df["Cliente"].nunique()
+contagem_status = df_status["Status"].value_counts().to_dict()
+ativos = contagem_status.get("Ativo", 0)
+ignorados = contagem_status.get("Ignorado", 0)
+inativos = contagem_status.get("Inativo", 0)
 
-    frequencia_clientes.append({
-        "Status": status[0],
-        "Cliente": cliente,
-        "Último Atendimento": ultimo_atendimento.date(),
-        "Qtd Atendimentos": len(datas),
-        "Frequência Média (dias)": round(media_freq, 1),
-        "Dias Desde Último": dias_desde_ultimo,
-        "Status_Label": status[1]
-    })
-
-freq_df = pd.DataFrame(frequencia_clientes)
-freq_df = pd.DataFrame(frequencia_clientes)
-freq_df["Último Atendimento"] = pd.to_datetime(freq_df["Último Atendimento"])
-freq_df["Último Atendimento"] = freq_df["Último Atendimento"].dt.strftime("%d/%m/%Y")
-
-# === FILTRO POR TEXTO
-st.markdown("### 🎯 Filtro de Cliente")
-nome_busca = st.text_input("🔍 Digite parte do nome").strip().lower()
-if nome_busca:
-    freq_df = freq_df[freq_df["Cliente"].str.lower().str.contains(nome_busca)]
-
-# === INDICADORES
-st.markdown("### 📊 Indicadores")
+st.markdown("### 📊 Indicadores Gerais")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("👥 Clientes ativos", freq_df["Cliente"].nunique())
-col2.metric("🟢 Em dia", freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente"].nunique())
-col3.metric("🟠 Pouco atrasado", freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique())
-col4.metric("🔴 Muito atrasado", freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique())
+col1.metric("👥 Clientes únicos", clientes_unicos)
+col2.metric("✅ Ativos", ativos)
+col3.metric("🚫 Ignorados", ignorados)
+col4.metric("🚩 Inativos", inativos)
 
-# === TABELAS POR STATUS
-st.divider()
-st.markdown("## 🔴 Muito Atrasados")
-muito = freq_df[freq_df["Status_Label"] == "Muito atrasado"].drop(columns=["Status_Label"])
-st.dataframe(muito, use_container_width=True)
+# === Remove nomes genéricos ===
+nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
+normalizar = lambda s: str(s).lower().strip()
+df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
 
-st.markdown("## 🟠 Pouco Atrasados")
-pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"].drop(columns=["Status_Label"])
-st.dataframe(pouco, use_container_width=True)
+# === Ranking geral ===
+ranking = df.groupby("Cliente")["Valor"].sum().reset_index()
+ranking = ranking.sort_values(by="Valor", ascending=False)
+ranking["Valor Formatado"] = ranking["Valor"].apply(
+    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+)
 
-st.markdown("## 🟢 Em Dia")
-emdia = freq_df[freq_df["Status_Label"] == "Em dia"].drop(columns=["Status_Label"])
-st.dataframe(emdia, use_container_width=True)
+# === Busca dinâmica ===
+st.subheader("📟 Receita total por cliente")
+busca = st.text_input("🔎 Filtrar por nome").lower().strip()
+if busca:
+    ranking_exibido = ranking[ranking["Cliente"].str.lower().str.contains(busca)]
+else:
+    ranking_exibido = ranking.copy()
+st.dataframe(ranking_exibido[["Cliente", "Valor Formatado"]], use_container_width=True)
 
-# === GRÁFICO: TOP 20 CLIENTES AUSENTES
-st.divider()
-st.subheader("📊 Top 20 Clientes com mais dias sem vir")
-top_grafico = freq_df.sort_values("Dias Desde Último", ascending=False).head(20)
-fig = px.bar(
-    top_grafico,
+# === Top 5 ===
+st.subheader("🏆 Top 5 Clientes por Receita")
+top5 = ranking.head(5)
+fig_top = px.bar(
+    top5,
     x="Cliente",
-    y="Dias Desde Último",
-    color="Status_Label",
-    text="Dias Desde Último",
-    labels={"Dias Desde Último": "Dias de ausência", "Status_Label": "Status"}
+    y="Valor",
+    text=top5["Valor"].apply(lambda x: f"R$ {x:,.0f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+    labels={"Valor": "Receita (R$)"},
+    color="Cliente"
 )
-fig.update_layout(xaxis_tickangle=-45, height=500)
-fig.update_traces(textposition="outside")
-st.plotly_chart(fig, use_container_width=True)
+fig_top.update_traces(textposition="outside")
+fig_top.update_layout(showlegend=False, height=400, template="plotly_white")
+st.plotly_chart(fig_top, use_container_width=True)
 
-# === RANKING DE FREQUÊNCIA
-st.divider()
-st.subheader("🏆 Ranking por Frequência Média")
-col5, col6 = st.columns(2)
+# === Comparativo ===
+st.subheader("⚖️ Comparar dois clientes")
+clientes_disponiveis = ranking["Cliente"].tolist()
+col1, col2 = st.columns(2)
+c1 = col1.selectbox("👤 Cliente 1", clientes_disponiveis)
+c2 = col2.selectbox("👤 Cliente 2", clientes_disponiveis, index=1 if len(clientes_disponiveis) > 1 else 0)
 
-with col5:
-    st.markdown("### ✅ Top 5 Clientes com Melhor Frequência")
-    melhores = freq_df.sort_values("Frequência Média (dias)").head(5)
-    st.dataframe(melhores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
+df_c1 = df[df["Cliente"] == c1]
+df_c2 = df[df["Cliente"] == c2]
 
-with col6:
-    st.markdown("### ⚠️ Top 5 Clientes com Pior Frequência")
-    piores = freq_df.sort_values("Frequência Média (dias)", ascending=False).head(5)
-    st.dataframe(piores[["Cliente", "Frequência Média (dias)"]], use_container_width=True)
+def resumo_cliente(df_cliente):
+    total = df_cliente["Valor"].sum()
+    servicos = df_cliente["Serviço"].nunique()
+    media = df_cliente.groupby("Data")["Valor"].sum().mean()
+    servicos_detalhados = df_cliente["Serviço"].value_counts().rename("Quantidade")
+    return pd.Series({
+        "Total Receita": f"R$ {total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
+        "Serviços Distintos": servicos,
+        "Tique Médio": f"R$ {media:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+    }), servicos_detalhados
 
-# === NOVO GRÁFICO: TOP 10 POR QUANTIDADE DE ATENDIMENTOS
-st.divider()
-st.subheader("💪 Top 10 Clientes por Quantidade de Atendimentos")
+resumo1, servicos1 = resumo_cliente(df_c1)
+resumo2, servicos2 = resumo_cliente(df_c2)
 
-top_atendimentos = freq_df.sort_values("Qtd Atendimentos", ascending=False).head(10)
+resumo_geral = pd.concat([resumo1.rename(c1), resumo2.rename(c2)], axis=1)
+servicos_comparativo = pd.concat([servicos1.rename(c1), servicos2.rename(c2)], axis=1).fillna(0).astype(int)
 
-fig2 = px.bar(
-    top_atendimentos,
-    x="Cliente",
-    y="Qtd Atendimentos",
-    text="Qtd Atendimentos",
-    color_discrete_sequence=["#36a2eb"]
-)
+st.dataframe(resumo_geral, use_container_width=True)
+st.markdown("**Serviços Realizados por Tipo**")
+st.dataframe(servicos_comparativo, use_container_width=True)
 
-fig2.update_traces(textposition="outside")
-fig2.update_layout(
-    xaxis_tickangle=-45,
-    height=500,
-    yaxis_title="Atendimentos",
-    xaxis_title="Cliente"
-)
+# === Navegar para detalhamento ===
+st.subheader("🔍 Ver detalhamento de um cliente")
+cliente_escolhido = st.selectbox("📌 Escolha um cliente", clientes_disponiveis)
 
-st.plotly_chart(fig2, use_container_width=True)
+if st.button("➡ Ver detalhes"):
+    st.session_state["cliente"] = cliente_escolhido
+    st.switch_page("pages/2_DetalhesCliente.py")
