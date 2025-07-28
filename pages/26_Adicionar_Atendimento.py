@@ -148,7 +148,7 @@ if enviar:
             "Valor": f"R$ {valor:.2f}",
             "Conta": conta,
             "Cliente": cliente,
-            "Combo": combo,
+            "Combo": combo_input,
             "Funcionário": funcionario,
             "Fase": fase,
             "Tipo": tipo,
