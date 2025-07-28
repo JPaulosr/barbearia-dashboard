@@ -97,13 +97,16 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         # Campo Combo com sugestões manuais
 combo_input = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
 
-# Sugestões abaixo do campo ao digitar
-if combo_input and len(combo_input) >= 2:
-    sugestoes = [c for c in lista_combos if combo_input.lower() in c.lower()]
-    if sugestoes:
-        st.markdown("🔍 **Sugestões de combos encontrados:**")
-        for s in sugestoes:
-            st.markdown(f"- {s}")
+        # Campo Combo com sugestões manuais
+        combo_input = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
+
+        # Sugestões abaixo do campo ao digitar
+        if combo_input and len(combo_input) >= 2:
+            sugestoes = [c for c in lista_combos if combo_input.lower() in c.lower()]
+            if sugestoes:
+                st.markdown("🔍 **Sugestões de combos encontrados:**")
+                for s in sugestoes:
+                    st.markdown(f"- {s}")
 
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
