@@ -170,7 +170,7 @@ if enviar:
         st.success("✅ Atendimento salvo com sucesso!")
         st.session_state["salvo"] = True
         st.experimental_set_query_params(recarga="ok")
-        st.experimental_rerun()
+        st.rerun()
 
 # === RECARREGAMENTO SEGURO APÓS SALVAR ===
 if st.session_state.get("salvo"):
