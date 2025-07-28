@@ -96,7 +96,12 @@ with st.form("formulario_atendimento", clear_on_submit=False):
             placeholder="Digite o nome do cliente ou selecione"
         )
                # Campo Combo com sugestões manuais (autocomplete visual)
-        combo_input = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
+        combo_input = st.selectbox(
+    "Combo (opcional)",
+    options=[""] + sorted(lista_combos),
+    index=0,
+    placeholder="Digite ou selecione um combo",
+)
 
         sugestoes = []
         if combo_input and len(combo_input) >= 2:
