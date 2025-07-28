@@ -169,7 +169,7 @@ if enviar:
         salvar_novo_atendimento(novo)
         st.success("✅ Atendimento salvo com sucesso!")
         st.session_state["salvo"] = True
-        st.experimental_set_query_params(recarga="ok")
+        st.query_params.update(recarga="ok")
         st.rerun()
 
 # === RECARREGAMENTO SEGURO APÓS SALVAR ===
