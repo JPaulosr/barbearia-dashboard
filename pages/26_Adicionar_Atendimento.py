@@ -82,6 +82,7 @@ st.title("✍️ Adicionar Atendimento Manual")
 
 with st.form("formulario_atendimento", clear_on_submit=False):
     col1, col2 = st.columns(2)
+
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         servico = st.selectbox("Serviço", options=servicos_2025)
@@ -89,18 +90,14 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
         cliente = st.selectbox(
-    "Nome do Cliente",
-    options=[""] + sorted(lista_clientes),
-    index=0,
-    placeholder="Digite o nome do cliente ou selecione",
-)
-        # Campo Combo com sugestões manuais
-combo_input = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
-
-        # Campo Combo com sugestões manuais
+            "Nome do Cliente",
+            options=[""] + sorted(lista_clientes),
+            index=0,
+            placeholder="Digite o nome do cliente ou selecione"
+        )
         combo_input = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
 
-        # Sugestões abaixo do campo ao digitar
+        # Sugestões de combos
         if combo_input and len(combo_input) >= 2:
             sugestoes = [c for c in lista_combos if combo_input.lower() in c.lower()]
             if sugestoes:
