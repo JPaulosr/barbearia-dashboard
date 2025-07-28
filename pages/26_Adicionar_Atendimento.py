@@ -4,10 +4,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
-import locale
-
-# Ajuste para idioma e formato brasileiros
-locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -67,10 +63,10 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
         fase = st.selectbox("Fase", ["Autônomo (prestador)", "Dono (sozinho)", "Dono + funcionário"])
         tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
-        hora_chegada = st.time_input("Hora de Chegada")
-        hora_inicio = st.time_input("Hora de Início")
-        hora_saida = st.time_input("Hora de Saída")
-        hora_saida_salao = st.time_input("Hora Saída do Salão")
+        hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", value="00:00:00")
+        hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", value="00:00:00")
+        hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
+        hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
     enviar = st.form_submit_button("💾 Salvar Atendimento")
 
@@ -102,10 +98,10 @@ if enviar:
             "Funcionário": funcionario,
             "Fase": fase,
             "Tipo": tipo,
-            "Hora Chegada": hora_chegada.strftime("%H:%M:%S"),
-            "Hora Início": hora_inicio.strftime("%H:%M:%S"),
-            "Hora Saída": hora_saida.strftime("%H:%M:%S"),
-            "Hora Saída do Salão": hora_saida_salao.strftime("%H:%M:%S"),
+            "Hora Chegada": hora_chegada,
+            "Hora Início": hora_inicio,
+            "Hora Saída": hora_saida,
+            "Hora Saída do Salão": hora_saida_salao,
             "Família": familia
         }])
 
