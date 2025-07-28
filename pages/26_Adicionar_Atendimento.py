@@ -95,15 +95,17 @@ with st.form("formulario_atendimento", clear_on_submit=False):
             index=0,
             placeholder="Digite o nome do cliente ou selecione"
         )
+               # Campo Combo com sugestões manuais (autocomplete visual)
         combo_input = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
 
-        # Sugestões de combos
+        sugestoes = []
         if combo_input and len(combo_input) >= 2:
             sugestoes = [c for c in lista_combos if combo_input.lower() in c.lower()]
-            if sugestoes:
-                st.markdown("🔍 **Sugestões de combos encontrados:**")
+
+        if sugestoes:
+            with st.expander("🔍 Sugestões de combos"):
                 for s in sugestoes:
-                    st.markdown(f"- {s}")
+                    st.markdown(f"- `{s}`")
 
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
