@@ -88,7 +88,12 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         valor_padrao = valores_referencia.get(servico, 0.0)
         valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
-        cliente = st.text_input("Nome do Cliente", placeholder="Ex: carlos sobrancelha").strip()
+        cliente = st.selectbox(
+    "Nome do Cliente",
+    options=[""] + sorted(lista_clientes),
+    index=0,
+    placeholder="Digite o nome do cliente ou selecione",
+)
         combo = st.text_input("Combo (opcional)", placeholder="Ex: corte+barba").strip()
 
     with col2:
