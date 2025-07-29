@@ -68,15 +68,15 @@ valores_referencia = (
 )
 
 valores_fixos = {
-    "Corte": 25.00,
-    "Barba": 15.00,
-    "Alisamento": 40.00,
-    "Pezinho": 7.00,
-    "Luzes": 45.00,
-    "Sobrancelha": 7.00,
-    "Gel": 10.00,
-    "Pomada": 15.00,
-    "Tintura": 20.00
+    "corte": 25.00,
+    "barba": 15.00,
+    "alisamento": 40.00,
+    "pezinho": 7.00,
+    "luzes": 45.00,
+    "sobrancelha": 7.00,
+    "gel": 10.00,
+    "pomada": 15.00,
+    "tintura": 20.00
 }
 
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
