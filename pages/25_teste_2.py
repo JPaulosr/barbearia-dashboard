@@ -24,7 +24,7 @@ def carregar_base():
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-# Tabela de preços padrão
+# === TABELA DE PREÇOS PADRÃO ===
 PRECOS_PADRAO = {
     "corte": 25.0,
     "pezinho": 7.0,
@@ -37,14 +37,21 @@ PRECOS_PADRAO = {
 # === TÍTULO ===
 st.markdown("## 📝 Adicionar Atendimento Manual")
 
+# === CARREGAR DADOS PARA AUTOCOMPLETE ===
+df, aba = carregar_base()
+clientes_existentes = sorted(df["Cliente"].dropna().unique())
+formas_pagamento = sorted(df["Conta"].dropna().unique())
+combos_existentes = sorted(df["Combo"].dropna().unique())
+
 # === FORMULÁRIO ===
 with st.form("form_atendimento"):
     col1, col2 = st.columns(2)
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today())
-        conta = st.selectbox("Forma de Pagamento", options=[])
-        cliente_input = st.selectbox("Nome do Cliente", options=[], placeholder="Digite ou selecione")
-        combo_input = st.selectbox("Combo (opcional - use 'corte+barba')", options=[], placeholder="Digite ou selecione")
+        conta = st.selectbox("Forma de Pagamento", options=formas_pagamento, placeholder="Selecione")
+        cliente_input = st.selectbox("Nome do Cliente", options=clientes_existentes, placeholder="Digite ou selecione")
+        novo_cliente = st.text_input("Ou digite um novo nome de cliente")
+        combo_input = st.selectbox("Combo (opcional - use 'corte+barba')", options=[""] + combos_existentes, placeholder="Digite ou selecione")
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
         tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
@@ -54,15 +61,13 @@ with st.form("form_atendimento"):
         h_saida_salao = st.time_input("Hora Saída do Salão (HH:MM:SS)")
 
     servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
-    valor_simples = st.text_input("Valor do Serviço", "")
 
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
 # === PROCESSAMENTO ===
 if submitted:
-    df, aba = carregar_base()
     nova_data = data.strftime("%d/%m/%Y")
-    cliente = cliente_input.strip()
+    cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
     conta = conta.strip()
     fase = "Dono + funcionário"
 
@@ -106,12 +111,17 @@ if submitted:
     # === TRATAMENTO DE SERVIÇO SIMPLES ===
     elif servico_simples:
         servico = servico_simples.lower().strip()
-        valor_digitado = st.text_input("Valor do Serviço", value=PRECOS_PADRAO.get(servico, 0.0))
+        valor_padrao = PRECOS_PADRAO.get(servico, 0.0)
+        valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao))
 
-        try:
-            valor_final = float(valor_digitado.replace(",", "."))
-        except:
-            st.error("Erro: valor inválido.")
+        if valor_digitado:
+            try:
+                valor_final = float(valor_digitado.replace(",", "."))
+            except:
+                st.error("Erro: valor inválido.")
+                st.stop()
+        else:
+            st.warning("Digite o valor do serviço.")
             st.stop()
 
         nova_linha = {
