@@ -67,6 +67,13 @@ valores_referencia = (
     .to_dict()
 )
 
+import unicodedata
+
+# Função para normalizar os nomes
+def normalizar(texto):
+    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
+
+# Dicionário fixo com nomes normalizados
 valores_fixos = {
     "corte": 25.00,
     "barba": 15.00,
@@ -78,6 +85,11 @@ valores_fixos = {
     "pomada": 15.00,
     "tintura": 20.00
 }
+
+# Normalizar o nome do serviço selecionado
+servico_key = normalizar(servico)
+valor_padrao = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
+valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
 
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
