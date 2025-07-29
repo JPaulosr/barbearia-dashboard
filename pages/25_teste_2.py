@@ -25,9 +25,10 @@ def carregar_base():
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-def salvar_base(df_final):
+def salvar_linhas_adicionais(novas_linhas_df):
     aba = conectar_sheets().worksheet(ABA_DADOS)
-    set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
+    ultima_linha = len(aba.get_all_values()) + 1
+    set_with_dataframe(aba, novas_linhas_df, row=ultima_linha, include_index=False, include_column_header=False)
 
 def formatar_hora(valor):
     if re.match(r"^\d{2}:\d{2}:\d{2}$", valor):
