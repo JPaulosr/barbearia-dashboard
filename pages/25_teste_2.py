@@ -89,12 +89,13 @@ if submitted:
             st.stop()
 
     # === TRATAMENTO DE COMBO ===
-    if combo_input:
-        servicos_combo = combo_input.split("+")
-        valores_combo = []
+   if combo_input:
+    servicos_combo = combo_input.split("+")
+    valores_combo = []
 
-        st.markdown("### 💰 Edite os valores do combo antes de salvar:")
+    st.markdown("### 💰 Edite os valores do combo antes de salvar:")
 
+    with st.form("combo_form"):
         erro_detectado = False
         for serv in servicos_combo:
             serv_formatado = serv.strip().lower().replace(" ", "")
@@ -110,33 +111,30 @@ if submitted:
                 )
                 valores_combo.append((serv_formatado, valor_digitado))
 
-        if erro_detectado:
-            st.stop()
+        confirmar_combo = st.form_submit_button("✅ Confirmar e Salvar Combo")
 
-        confirmar_combo = st.button("✅ Confirmar e Salvar Combo")
+    if confirmar_combo and not erro_detectado:
+        for i, (serv, valor) in enumerate(valores_combo):
+            nova_linha = {
+                "Data": nova_data,
+                "Serviço": serv,
+                "Valor": valor,
+                "Conta": conta,
+                "Cliente": cliente,
+                "Combo": combo_input,
+                "Funcionário": funcionario,
+                "Fase": fase,
+                "Tipo": tipo,
+                "Hora Chegada": h_chegada if i == 0 else "",
+                "Hora Início": h_inicio if i == 0 else "",
+                "Hora Saída": h_saida if i == 0 else "",
+                "Hora Saída do Salão": h_saida_salao if i == 0 else ""
+            }
+            df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
 
-        if confirmar_combo:
-            for i, (serv, valor) in enumerate(valores_combo):
-                nova_linha = {
-                    "Data": nova_data,
-                    "Serviço": serv,
-                    "Valor": valor,
-                    "Conta": conta,
-                    "Cliente": cliente,
-                    "Combo": combo_input,
-                    "Funcionário": funcionario,
-                    "Fase": fase,
-                    "Tipo": tipo,
-                    "Hora Chegada": h_chegada if i == 0 else "",
-                    "Hora Início": h_inicio if i == 0 else "",
-                    "Hora Saída": h_saida if i == 0 else "",
-                    "Hora Saída do Salão": h_saida_salao if i == 0 else ""
-                }
-                df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
-
-            set_with_dataframe(aba, df)
-            st.success(f"✅ Combo registrado com sucesso para {cliente} ({len(valores_combo)} serviços)")
-            st.rerun()
+        set_with_dataframe(aba, df)
+        st.success(f"✅ Combo registrado com sucesso para {cliente} ({len(valores_combo)} serviços)")
+        st.rerun()
 
     # === SERVIÇO SIMPLES ===
     elif servico_simples:
