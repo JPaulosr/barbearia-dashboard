@@ -4,7 +4,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
-import re
 
 # === CONFIGURAÇÕES GLOBAIS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -60,7 +59,15 @@ with st.form("form_atendimento"):
         h_saida = st.time_input("Hora de Saída (HH:MM:SS)")
         h_saida_salao = st.time_input("Hora Saída do Salão (HH:MM:SS)")
 
-    servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
+    col3, col4 = st.columns([1, 1])
+    with col3:
+        servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
+    with col4:
+        if servico_simples:
+            valor_padrao = PRECOS_PADRAO.get(servico_simples.lower().strip(), 0.0)
+            valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao))
+        else:
+            valor_digitado = ""
 
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
@@ -111,8 +118,6 @@ if submitted:
     # === TRATAMENTO DE SERVIÇO SIMPLES ===
     elif servico_simples:
         servico = servico_simples.lower().strip()
-        valor_padrao = PRECOS_PADRAO.get(servico, 0.0)
-        valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao))
 
         if valor_digitado:
             try:
