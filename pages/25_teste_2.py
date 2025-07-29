@@ -54,7 +54,6 @@ def normalizar(texto):
 df_clientes = carregar_clientes()
 df_base, _ = carregar_base()
 df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
-servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
 
 valores_fixos = {
     "corte": 25.00,
@@ -86,26 +85,29 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
     hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
+    # Cliente
     cliente_nome = st.selectbox("Nome do Cliente", options=[""] + lista_clientes, key="cliente")
     if cliente_nome == "":
         cliente_nome = st.text_input("Novo Cliente", key="cliente_manual").strip()
 
+    # Combo com sugestão
     combo_selecionado = st.selectbox(
-    "Combo (ex: corte+barba)",
-    options=[""] + lista_combos,
-    index=0,
-    help="Digite ou selecione um combo já usado anteriormente",
-    placeholder="Digite ou selecione o combo",
-    key="combo"
-)
-
-if combo_selecionado == "":
-    combo_bruto = st.text_input("Novo Combo", key="combo_manual").strip().lower()
-else:
-    combo_bruto = combo_selecionado.strip().lower()
+        "Combo (ex: corte+barba)",
+        options=[""] + lista_combos,
+        index=0,
+        help="Digite ou selecione um combo já usado anteriormente",
+        placeholder="Digite ou selecione o combo",
+        key="combo"
+    )
+    if combo_selecionado == "":
+        combo_bruto = st.text_input("Novo Combo", key="combo_manual").strip().lower()
+    else:
+        combo_bruto = combo_selecionado.strip().lower()
 
     enviar = st.form_submit_button("💾 Salvar Atendimento")
+    limpar = st.form_submit_button("🧹 Limpar formulário")
 
+# === AÇÃO: SALVAR
 if enviar:
     campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
     if not all(validar_hora(h) for h in campos_hora):
@@ -116,20 +118,17 @@ if enviar:
         st.error("❗ Combo não pode estar vazio.")
     else:
         servicos_combo = [s.strip() for s in combo_bruto.split("+")]
-        dados_linhas = []
+        valores_servicos = []
 
-        for i, serv in enumerate(servicos_combo):
-            serv_key = normalizar(serv)
+        for i, servico in enumerate(servicos_combo):
+            serv_key = normalizar(servico)
             valor_padrao = valores_fixos.get(serv_key, 0.0)
-            valor_input = st.number_input(f"Valor para '{serv}'", min_value=0.0, step=0.5, format="%.2f", value=valor_padrao, key=f"valor_{i}")
+            valor_input = st.number_input(
+                f"Valor para '{servico}'", min_value=0.0, step=0.5, format="%.2f", value=valor_padrao, key=f"valor_{i}"
+            )
+            valores_servicos.append({"Serviço": servico, "Valor": f"R$ {valor_input:.2f}"})
 
-            dados_linhas.append({
-                "Serviço": serv,
-                "Valor": f"R$ {valor_input:.2f}"
-            })
-
-        confirmar = st.button("✅ Confirmar e Salvar Combo")
-        if confirmar:
+        if st.button("✅ Confirmar e Salvar Combo"):
             familia = ""
             cliente_encontrado = df_clientes[df_clientes["Cliente"].str.lower() == cliente_nome.lower()]
             if not cliente_encontrado.empty and "Família" in cliente_encontrado.columns:
@@ -140,8 +139,8 @@ if enviar:
 
             df_final = pd.DataFrame([{
                 "Data": data.strftime("%d/%m/%Y"),
-                "Serviço": linha["Serviço"],
-                "Valor": linha["Valor"],
+                "Serviço": item["Serviço"],
+                "Valor": item["Valor"],
                 "Conta": conta,
                 "Cliente": cliente_nome,
                 "Combo": combo_bruto,
@@ -153,8 +152,18 @@ if enviar:
                 "Hora Saída": hora_saida,
                 "Hora Saída do Salão": hora_saida_salao,
                 "Família": familia
-            } for linha in dados_linhas])
+            } for item in valores_servicos])
 
             salvar_novo_atendimento(df_final)
             st.success("✅ Combo registrado com sucesso!")
+
+            for k in ["cliente", "cliente_manual", "combo", "combo_manual"] + [f"valor_{i}" for i in range(len(valores_servicos))]:
+                if k in st.session_state:
+                    del st.session_state[k]
+
             st.rerun()
+
+# === AÇÃO: LIMPAR
+if limpar:
+    st.session_state.clear()
+    st.rerun()
