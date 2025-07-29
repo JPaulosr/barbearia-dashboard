@@ -4,8 +4,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
+import re
 
-# === CONFIGURAÇÕES GLOBAIS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
 
@@ -23,26 +23,26 @@ def carregar_base():
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-# === TABELA DE PREÇOS PADRÃO ===
+def validar_hora(hora_str):
+    return re.match(r"^\d{2}:\d{2}:\d{2}$", hora_str)
+
 PRECOS_PADRAO = {
     "corte": 25.0,
     "pezinho": 7.0,
     "barba": 15.0,
     "sobrancelha": 15.0,
-    "luzes": 80.0,
-    "pintura": 35.0,
+    "luzes": 45.0,
+    "pintura": 20.0,
+    "alisamento": 40.0,
 }
 
-# === TÍTULO ===
 st.markdown("## 📝 Adicionar Atendimento Manual")
 
-# === CARREGAR DADOS PARA AUTOCOMPLETE ===
 df, aba = carregar_base()
 clientes_existentes = sorted(df["Cliente"].dropna().unique())
 formas_pagamento = sorted(df["Conta"].dropna().unique())
 combos_existentes = sorted(df["Combo"].dropna().unique())
 
-# === FORMULÁRIO ===
 with st.form("form_atendimento"):
     col1, col2 = st.columns(2)
     with col1:
@@ -54,10 +54,10 @@ with st.form("form_atendimento"):
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
         tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
-        h_chegada = st.time_input("Hora de Chegada (HH:MM:SS)")
-        h_inicio = st.time_input("Hora de Início (HH:MM:SS)")
-        h_saida = st.time_input("Hora de Saída (HH:MM:SS)")
-        h_saida_salao = st.time_input("Hora Saída do Salão (HH:MM:SS)")
+        h_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", value="00:00:00")
+        h_inicio = st.text_input("Hora de Início (HH:MM:SS)", value="00:00:00")
+        h_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
+        h_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
     col3, col4 = st.columns([1, 1])
     with col3:
@@ -71,14 +71,19 @@ with st.form("form_atendimento"):
 
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
-# === PROCESSAMENTO ===
 if submitted:
-    nova_data = data.strftime("%d/%m/%Y")
     cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
     conta = conta.strip()
+    nova_data = data.strftime("%d/%m/%Y")
     fase = "Dono + funcionário"
 
-    # === TRATAMENTO DE COMBO ===
+    # Validação das horas
+    for label, h in [("Hora Chegada", h_chegada), ("Hora Início", h_inicio), ("Hora Saída", h_saida), ("Hora Saída do Salão", h_saida_salao)]:
+        if not validar_hora(h):
+            st.error(f"{label} inválida. Use o formato HH:MM:SS.")
+            st.stop()
+
+    # === COMBO ===
     if combo_input:
         servicos_combo = combo_input.split("+")
         valores_editados = []
@@ -104,10 +109,10 @@ if submitted:
                     "Funcionário": funcionario,
                     "Fase": fase,
                     "Tipo": tipo,
-                    "Hora Chegada": h_chegada.strftime("%H:%M:%S") if i == 0 else "",
-                    "Hora Início": h_inicio.strftime("%H:%M:%S") if i == 0 else "",
-                    "Hora Saída": h_saida.strftime("%H:%M:%S") if i == 0 else "",
-                    "Hora Saída do Salão": h_saida_salao.strftime("%H:%M:%S") if i == 0 else ""
+                    "Hora Chegada": h_chegada if i == 0 else "",
+                    "Hora Início": h_inicio if i == 0 else "",
+                    "Hora Saída": h_saida if i == 0 else "",
+                    "Hora Saída do Salão": h_saida_salao if i == 0 else ""
                 }
                 df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
 
@@ -115,7 +120,7 @@ if submitted:
             st.success(f"Combo registrado com sucesso para {cliente}! ({len(valores_editados)} linha(s))")
             st.rerun()
 
-    # === TRATAMENTO DE SERVIÇO SIMPLES ===
+    # === SERVIÇO SIMPLES ===
     elif servico_simples:
         servico = servico_simples.lower().strip()
 
@@ -139,10 +144,10 @@ if submitted:
             "Funcionário": funcionario,
             "Fase": fase,
             "Tipo": tipo,
-            "Hora Chegada": h_chegada.strftime("%H:%M:%S"),
-            "Hora Início": h_inicio.strftime("%H:%M:%S"),
-            "Hora Saída": h_saida.strftime("%H:%M:%S"),
-            "Hora Saída do Salão": h_saida_salao.strftime("%H:%M:%S")
+            "Hora Chegada": h_chegada,
+            "Hora Início": h_inicio,
+            "Hora Saída": h_saida,
+            "Hora Saída do Salão": h_saida_salao
         }
 
         df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
