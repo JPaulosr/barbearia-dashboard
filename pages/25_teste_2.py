@@ -63,7 +63,15 @@ servicos_2025 = sorted(set(servicos_2025))
 # Valores médios por serviço
 valores_referencia = (
     df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.startswith("R$")]
-    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R$", "", regex=True).str.replace(",", ".").astype(float))
+    .assign(
+        valor_num=lambda d: pd.to_numeric(
+            d["Valor"]
+            .astype(str)
+            .str.replace("R\$", "", regex=True)
+            .str.replace(",", "."),
+            errors='coerce'
+        )
+    )
     .groupby("Serviço")["valor_num"]
     .mean()
     .round(2)
