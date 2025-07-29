@@ -55,28 +55,25 @@ def validar_hora(hora):
 df_clientes = carregar_clientes()
 df_base, _ = carregar_base()
 
+# Serviços 2025
 df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
 servicos_2025 = df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique().tolist()
 servicos_2025 = sorted(set(servicos_2025))
 
+# Valores médios por serviço
 valores_referencia = (
     df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.startswith("R$")]
-    .assign(
-        valor_num=lambda d: pd.to_numeric(
-            d["Valor"]
-            .astype(str)
-            .str.replace("R$", "", regex=True)
-            .str.replace(",", "."),
-            errors='coerce'
-        )
-    )
+    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R$", "", regex=True).str.replace(",", ".").astype(float))
     .groupby("Serviço")["valor_num"]
     .mean()
     .round(2)
     .to_dict()
 )
 
+# Contas (formas de pagamento)
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
+
+# Clientes e combos
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
 lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
@@ -138,7 +135,7 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
         hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
-    enviar = st.form_submit_button("🌟 Salvar Atendimento")
+    enviar = st.form_submit_button("📂 Salvar Atendimento")
 
 # === AÇÃO AO ENVIAR ===
 if enviar:
@@ -178,7 +175,7 @@ if enviar:
         st.session_state["salvo"] = True
         st.experimental_rerun()
 
-# === RECARREGAMENTO SEGURO ===
+# === RECARREGAMENTO SEGURO APÓS SALVAR ===
 if st.session_state.get("salvo"):
     st.success("✅ Atendimento registrado.")
     st.session_state["salvo"] = False
