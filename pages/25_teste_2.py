@@ -6,7 +6,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
 import re
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
+# === CONFIGURAÇÕES GLOBAIS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
 
@@ -24,124 +24,116 @@ def carregar_base():
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-df, aba = carregar_base()
-
-st.title("📝 Adicionar Atendimento Manual")
-
-# === Valores únicos dos campos ===
-clientes = sorted(df["Cliente"].dropna().unique())
-pagamentos = sorted(df["Conta"].dropna().unique())
-servicos_cadastrados = sorted(df["Serviço"].dropna().unique())
-combos_cadastrados = sorted(df["Combo"].dropna().unique())
-
-# === Tabela fixa de preços (você pode editar conforme necessário) ===
-precos_fixos = {
-    "pezinho": 7.00,
-    "corte": 25.00,
-    "barba": 15.00,
-    "sobrancelha": 10.00,
-    "luzes": 150.00,
-    "hidratação": 30.00,
-    "selagem": 120.00,
-    "progressiva": 150.00
+# Tabela de preços padrão
+PRECOS_PADRAO = {
+    "corte": 25.0,
+    "pezinho": 7.0,
+    "barba": 15.0,
+    "sobrancelha": 15.0,
+    "luzes": 80.0,
+    "pintura": 35.0,
 }
 
-# === CAMPOS DO FORMULÁRIO ===
-col1, col2 = st.columns(2)
-with col1:
-    data = st.date_input("Data do Atendimento", value=datetime.today())
-    conta = st.selectbox("Forma de Pagamento", pagamentos)
-    cliente = st.selectbox("Nome do Cliente", options=clientes + ["Digite um novo nome..."])
-    combo = st.selectbox("Combo (opcional - use 'corte+barba')", options=[""] + combos_cadastrados)
-with col2:
-    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
-    tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
-    hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", value="00:00:00")
-    hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", value="00:00:00")
-    hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
-    hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
+# === TÍTULO ===
+st.markdown("## 📝 Adicionar Atendimento Manual")
 
-# === SERVIÇO INDIVIDUAL ===
-servico = st.selectbox("Serviço (ex: corte)", options=[""] + servicos_cadastrados)
+# === FORMULÁRIO ===
+with st.form("form_atendimento"):
+    col1, col2 = st.columns(2)
+    with col1:
+        data = st.date_input("Data do Atendimento", value=datetime.today())
+        conta = st.selectbox("Forma de Pagamento", options=[])
+        cliente_input = st.selectbox("Nome do Cliente", options=[], placeholder="Digite ou selecione")
+        combo_input = st.selectbox("Combo (opcional - use 'corte+barba')", options=[], placeholder="Digite ou selecione")
+    with col2:
+        funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
+        tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
+        h_chegada = st.time_input("Hora de Chegada (HH:MM:SS)")
+        h_inicio = st.time_input("Hora de Início (HH:MM:SS)")
+        h_saida = st.time_input("Hora de Saída (HH:MM:SS)")
+        h_saida_salao = st.time_input("Hora Saída do Salão (HH:MM:SS)")
 
-# === VALOR AUTOMÁTICO AO ESCOLHER SERVIÇO ===
-valor_default = precos_fixos.get(servico.lower(), "")
-valor_manual = st.text_input(f"Valor do serviço: {servico.lower() if servico else ''}", value=str(valor_default).replace('.', ','))
+    servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
+    valor_simples = st.text_input("Valor do Serviço", "")
 
-# === BOTÃO SALVAR ===
-if st.button("💾 Salvar Atendimento"):
-    data_str = data.strftime("%d/%m/%Y")
+    submitted = st.form_submit_button("💾 Salvar Atendimento")
+
+# === PROCESSAMENTO ===
+if submitted:
+    df, aba = carregar_base()
+    nova_data = data.strftime("%d/%m/%Y")
+    cliente = cliente_input.strip()
+    conta = conta.strip()
     fase = "Dono + funcionário"
 
-    # === Função para validar horário ===
-    def validar_hora(h):
-        return bool(re.match(r"^\d{2}:\d{2}:\d{2}$", h.strip()))
+    # === TRATAMENTO DE COMBO ===
+    if combo_input:
+        servicos_combo = combo_input.split("+")
+        valores_editados = []
 
-    if not all([validar_hora(h) for h in [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]]):
-        st.error("⛔ Formato de hora inválido. Use HH:MM:SS.")
-    else:
-        linhas = []
+        st.markdown("### 💰 Edite os valores antes de salvar:")
+        with st.form("valores_combo"):
+            for i, serv in enumerate(servicos_combo):
+                serv = serv.strip().lower()
+                valor_padrao = PRECOS_PADRAO.get(serv, 0.0)
+                valor_digitado = st.number_input(f"{serv.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, key=f"val_{i}")
+                valores_editados.append((serv, valor_digitado))
+            confirmar = st.form_submit_button("✅ Confirmar e Salvar")
 
-        # === REGISTRO DE COMBO ===
-        if combo:
-            servicos_combo = combo.split("+")
-            for i, srv in enumerate(servicos_combo):
-                valor = ""
-                if i == 0:
-                    try:
-                        valor = float(valor_manual.replace(",", "."))
-                    except:
-                        st.error("⛔ Valor inválido.")
-                        st.stop()
-                else:
-                    valor = precos_fixos.get(srv.lower(), 0)
-
-                linha = {
-                    "Data": data_str,
-                    "Serviço": srv,
+        if confirmar:
+            for i, (serv, valor) in enumerate(valores_editados):
+                nova_linha = {
+                    "Data": nova_data,
+                    "Serviço": serv,
                     "Valor": valor,
                     "Conta": conta,
                     "Cliente": cliente,
-                    "Combo": combo,
+                    "Combo": combo_input,
                     "Funcionário": funcionario,
                     "Fase": fase,
                     "Tipo": tipo,
-                    "Hora Chegada": hora_chegada if i == 0 else "",
-                    "Hora Início": hora_inicio if i == 0 else "",
-                    "Hora Saída": hora_saida if i == 0 else "",
-                    "Hora Saída do Salão": hora_saida_salao if i == 0 else ""
+                    "Hora Chegada": h_chegada.strftime("%H:%M:%S") if i == 0 else "",
+                    "Hora Início": h_inicio.strftime("%H:%M:%S") if i == 0 else "",
+                    "Hora Saída": h_saida.strftime("%H:%M:%S") if i == 0 else "",
+                    "Hora Saída do Salão": h_saida_salao.strftime("%H:%M:%S") if i == 0 else ""
                 }
-                linhas.append(linha)
-        else:
-            # Atendimento simples
-            try:
-                valor = float(valor_manual.replace(",", "."))
-            except:
-                st.error("⛔ Valor inválido.")
-                st.stop()
+                df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
 
-            linha = {
-                "Data": data_str,
-                "Serviço": servico,
-                "Valor": valor,
-                "Conta": conta,
-                "Cliente": cliente,
-                "Combo": "",
-                "Funcionário": funcionario,
-                "Fase": fase,
-                "Tipo": tipo,
-                "Hora Chegada": hora_chegada,
-                "Hora Início": hora_inicio,
-                "Hora Saída": hora_saida,
-                "Hora Saída do Salão": hora_saida_salao
-            }
-            linhas.append(linha)
+            set_with_dataframe(aba, df)
+            st.success(f"Combo registrado com sucesso para {cliente}! ({len(valores_editados)} linha(s))")
+            st.rerun()
 
-        # === SALVAR NO GOOGLE SHEETS ===
-        df_existente = get_as_dataframe(aba).dropna(how="all")
-        df_novo = pd.concat([df_existente, pd.DataFrame(linhas)], ignore_index=True)
-        aba.clear()
-        set_with_dataframe(aba, df_novo)
+    # === TRATAMENTO DE SERVIÇO SIMPLES ===
+    elif servico_simples:
+        servico = servico_simples.lower().strip()
+        valor_digitado = st.text_input("Valor do Serviço", value=PRECOS_PADRAO.get(servico, 0.0))
 
-        st.success(f"✅ Atendimento registrado com sucesso para {cliente}! ({len(linhas)} linha(s))")
-        st.stop()
+        try:
+            valor_final = float(valor_digitado.replace(",", "."))
+        except:
+            st.error("Erro: valor inválido.")
+            st.stop()
+
+        nova_linha = {
+            "Data": nova_data,
+            "Serviço": servico,
+            "Valor": valor_final,
+            "Conta": conta,
+            "Cliente": cliente,
+            "Combo": "",
+            "Funcionário": funcionario,
+            "Fase": fase,
+            "Tipo": tipo,
+            "Hora Chegada": h_chegada.strftime("%H:%M:%S"),
+            "Hora Início": h_inicio.strftime("%H:%M:%S"),
+            "Hora Saída": h_saida.strftime("%H:%M:%S"),
+            "Hora Saída do Salão": h_saida_salao.strftime("%H:%M:%S")
+        }
+
+        df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+        set_with_dataframe(aba, df)
+        st.success(f"Atendimento registrado com sucesso para {cliente}.")
+        st.rerun()
+
+    else:
+        st.warning("Preencha o serviço ou o combo para salvar.")
