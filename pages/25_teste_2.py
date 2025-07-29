@@ -1,11 +1,10 @@
+# 11_Adicionar_Atendimento.py
 import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe, set_with_dataframe
+from gspread_dataframe import set_with_dataframe, get_as_dataframe
 from datetime import datetime
-import re
-import unicodedata
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -20,74 +19,37 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
+# === CARREGAR DADOS ===
 def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-def carregar_clientes():
-    aba = conectar_sheets().worksheet(ABA_CLIENTES)
-    df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
-    return df
+# === CONFIG PADRÃO ===
+servicos_2025 = ["corte", "barba", "sobrancelha", "combo", "hidratação", "pomada"]
+valores_fixos = {"corte": 25.0, "barba": 15.0, "sobrancelha": 10.0, "pomada": 15.0, "hidratação": 20.0}
+funcionarios = ["JPaulo", "Vinicius"]
+tipo_padrao = "Serviço"
+formas_pagamento = ["Carteira", "Nubank", "Pix", "Dinheiro", "Pix Cliente", "Pagseguro"]
 
-def salvar_novo_atendimento(novo_df):
-    df_existente, aba = carregar_base()
-    df_final = pd.concat([df_existente, novo_df], ignore_index=True)
-    set_with_dataframe(aba, df_final)
-
-def salvar_novo_cliente(nome):
-    aba = conectar_sheets().worksheet(ABA_CLIENTES)
-    df_atual = get_as_dataframe(aba).dropna(how="all")
-    novo = pd.DataFrame([{ "Cliente": nome, "Status": "Ativo", "Foto": "", "Família": "" }])
-    df_final = pd.concat([df_atual, novo], ignore_index=True)
-    set_with_dataframe(aba, df_final)
-
-def validar_hora(hora):
-    return bool(re.fullmatch(r"\d{2}:\d{2}:\d{2}", hora))
-
-def normalizar(texto):
-    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
-
-# === DADOS BASE ===
-df_clientes = carregar_clientes()
-df_base, _ = carregar_base()
-df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
-servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
-
-valores_fixos = {
-    "corte": 25.00,
-    "barba": 15.00,
-    "alisamento": 40.00,
-    "pezinho": 7.00,
-    "luzes": 45.00,
-    "sobrancelha": 7.00,
-    "gel": 10.00,
-    "pomada": 15.00,
-    "tintura": 20.00
-}
-
-valores_referencia = (
-    df_base[df_base["Valor"].notna()]
-    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R\$", "", regex=True).str.replace(",", ".").astype(float))
-    .groupby("Serviço")["valor_num"]
-    .mean()
-    .round(2)
-    .to_dict()
-)
-
-formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
-lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
-lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
-
-# === TÍTULO ===
-st.title("✍️ Adicionar Atendimento Manual")
+# === DADOS EXISTENTES ===
+df_dados, aba_dados = carregar_base()
+lista_clientes = sorted(df_dados["Cliente"].dropna().unique())
+lista_combos = sorted(df_dados["Combo"].dropna().unique())
 
 # === FORMULÁRIO ===
-with st.form("formulario_atendimento", clear_on_submit=False):
-    col1, col2 = st.columns(2)
+st.markdown("<h2 style='color:#f1c40f;'>🖋️ Adicionar Atendimento Manual</h2>", unsafe_allow_html=True)
+st.markdown("""
+<style>
+    .stSelectbox, .stTextInput, .stDateInput, .stNumberInput, .stTextArea {
+        background-color: #1c1c1c;
+    }
+</style>
+""", unsafe_allow_html=True)
 
+with st.form("formulario"):
+    col1, col2 = st.columns(2)
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
@@ -96,108 +58,85 @@ with st.form("formulario_atendimento", clear_on_submit=False):
             "Nome do Cliente",
             options=[""] + lista_clientes,
             index=0,
-            help="Digite o nome e veja se já existe. Se não existir, será cadastrado como novo.",
-            placeholder="Digite ou selecione o cliente",
-            key="cliente"
+            help="Digite o nome e veja se já existe. Se não existir, será cadastrado como novo."
         )
+        if cliente_selecionado == "":
+            cliente_input = st.text_input("Novo Cliente (não encontrado na lista)", key="cliente_manual").strip()
+        else:
+            cliente_input = cliente_selecionado
 
-        cliente_input = st.text_input("Novo Cliente (caso não esteja na lista)", key="cliente_manual").strip() if cliente_selecionado == "" else cliente_selecionado
-
-        combo_input = st.selectbox(
+        combo_input_raw = st.selectbox(
             "Combo (opcional - use 'corte+barba')",
             options=[""] + lista_combos,
-            index=0,
-            help="Digite ou selecione um combo já usado anteriormente",
-            placeholder="Digite ou selecione um combo",
-            key="combo"
-        ).strip()
+            index=0
+        )
+        combo_input = combo_input_raw.strip()
 
         if combo_input == "":
             servico = st.selectbox("Serviço", options=servicos_2025)
-            servico_key = normalizar(servico)
-            valor_fixo = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
-            valor = st.number_input("Valor (R$)", min_value=0.0, step=0.5, format="%.2f", value=valor_fixo)
-        else:
-            servico = ""
-            valor = None  # será editado depois
+            valor = st.number_input("Valor", min_value=0.0, value=valores_fixos.get(servico, 0.0), step=0.5)
 
     with col2:
-        funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
-        tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
+        funcionario = st.selectbox("Funcionário", options=funcionarios, index=0)
+        tipo = tipo_padrao
         hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", value="00:00:00")
         hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", value="00:00:00")
         hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
         hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
-    enviar = st.form_submit_button("💾 Salvar Atendimento")
+    st.markdown("---")
+    salvar = st.form_submit_button("📄 Salvar Atendimento")
 
-# === AÇÃO AO ENVIAR ===
-if enviar:
-    if cliente_input == "":
-        st.error("❗ Nome do cliente é obrigatório.")
-    elif combo_input == "" and servico == "":
-        st.error("❗ Informe um serviço ou combo.")
-    elif not all(validar_hora(h) for h in [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]):
-        st.error("❗ Todos os campos de hora devem estar no formato HH:MM:SS.")
-    else:
-        cliente = cliente_input
-        familia = ""
-        cliente_encontrado = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
-        if not cliente_encontrado.empty and "Família" in cliente_encontrado.columns:
-            familia = cliente_encontrado.iloc[0]["Família"]
-        if cliente not in lista_clientes:
-            salvar_novo_cliente(cliente)
+# === AÇÃO ===
+if salvar and cliente_input != "":
+    nova_linha = []
+    data_str = data.strftime("%d/%m/%Y")
 
-        registros = []
+    if combo_input:
+        servicos_combo = [s.strip().lower() for s in combo_input.split("+")]
+        for idx, serv in enumerate(servicos_combo):
+            valor_combo = valores_fixos.get(serv, 0.0)
+            if idx == 0:
+                valor_editado = st.number_input(f"Valor do serviço: {serv}", min_value=0.0, value=valor_combo, step=0.5, key=f"valor_{serv}")
+            else:
+                valor_editado = valor_combo
 
-        if combo_input:
-            servicos_combo = [s.strip() for s in combo_input.split("+")]
-            st.info("✏️ Edite os valores do combo abaixo antes de salvar.")
-            valores_servicos = []
-            for i, s in enumerate(servicos_combo):
-                key = f"valor_{i}"
-                default = valores_fixos.get(normalizar(s), valores_referencia.get(s, 0.0))
-                v = st.number_input(f"{s.title()} (R$)", min_value=0.0, step=0.5, format="%.2f", value=default, key=key)
-                valores_servicos.append((s, v))
-
-            if st.button("✅ Confirmar e Salvar Combo"):
-                for i, (nome_servico, valor_unitario) in enumerate(valores_servicos):
-                    registros.append({
-                        "Data": data.strftime("%d/%m/%Y"),
-                        "Serviço": nome_servico,
-                        "Valor": f"R$ {valor_unitario:.2f}",
-                        "Conta": conta,
-                        "Cliente": cliente,
-                        "Combo": combo_input,
-                        "Funcionário": funcionario,
-                        "Fase": "Dono + funcionário",
-                        "Tipo": tipo,
-                        "Hora Chegada": hora_chegada if i == 0 else "00:00:00",
-                        "Hora Início": hora_inicio if i == 0 else "00:00:00",
-                        "Hora Saída": hora_saida if i == 0 else "00:00:00",
-                        "Hora Saída do Salão": hora_saida_salao if i == 0 else "00:00:00",
-                        "Família": familia
-                    })
-                salvar_novo_atendimento(pd.DataFrame(registros))
-                st.success("✅ Combo salvo com sucesso!")
-                st.experimental_rerun()
-        else:
-            novo = pd.DataFrame([{
-                "Data": data.strftime("%d/%m/%Y"),
-                "Serviço": servico,
-                "Valor": f"R$ {valor:.2f}",
+            linha = {
+                "Data": data_str,
+                "Serviço": serv,
+                "Valor": f"R$ {valor_editado:.2f}".replace(".", ","),
                 "Conta": conta,
-                "Cliente": cliente,
-                "Combo": "",
+                "Cliente": cliente_input,
+                "Combo": combo_input,
                 "Funcionário": funcionario,
                 "Fase": "Dono + funcionário",
                 "Tipo": tipo,
-                "Hora Chegada": hora_chegada,
-                "Hora Início": hora_inicio,
-                "Hora Saída": hora_saida,
-                "Hora Saída do Salão": hora_saida_salao,
-                "Família": familia
-            }])
-            salvar_novo_atendimento(novo)
-            st.success("✅ Atendimento salvo com sucesso!")
-            st.experimental_rerun()
+                "Hora Chegada": hora_chegada if idx == 0 else "00:00:00",
+                "Hora Início": hora_inicio if idx == 0 else "00:00:00",
+                "Hora Saída": hora_saida if idx == 0 else "00:00:00",
+                "Hora Saída do Salão": hora_saida_salao if idx == 0 else "00:00:00"
+            }
+            nova_linha.append(linha)
+    else:
+        linha = {
+            "Data": data_str,
+            "Serviço": servico,
+            "Valor": f"R$ {valor:.2f}".replace(".", ","),
+            "Conta": conta,
+            "Cliente": cliente_input,
+            "Combo": "",
+            "Funcionário": funcionario,
+            "Fase": "Dono + funcionário",
+            "Tipo": tipo,
+            "Hora Chegada": hora_chegada,
+            "Hora Início": hora_inicio,
+            "Hora Saída": hora_saida,
+            "Hora Saída do Salão": hora_saida_salao
+        }
+        nova_linha.append(linha)
+
+    df_atual = get_as_dataframe(aba_dados).dropna(how="all")
+    df_novo = pd.concat([df_atual, pd.DataFrame(nova_linha)], ignore_index=True)
+    set_with_dataframe(aba_dados, df_novo)
+    st.success(f"Atendimento registrado com sucesso para {cliente_input}! ({len(nova_linha)} linha(s))")
+    st.experimental_rerun()
