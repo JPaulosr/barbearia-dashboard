@@ -35,6 +35,7 @@ PRECOS_PADRAO = {
     "sobrancelha": 15.0,
     "luzes": 80.0,
     "pintura": 35.0,
+    "alisamento": 40.0,
 }
 
 st.markdown("## 📝 Adicionar Atendimento Manual")
