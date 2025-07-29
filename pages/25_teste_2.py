@@ -75,7 +75,6 @@ with st.form("form_atendimento"):
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
 # === PROCESSAMENTO ===
-# ... (código acima permanece igual até o if submitted)
 
 if submitted:
     cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
