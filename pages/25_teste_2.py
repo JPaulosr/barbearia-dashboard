@@ -92,8 +92,8 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         servico = st.selectbox("Serviço", options=servicos_2025)
-        servico_normalizado = servico.strip().capitalize()
-        valor_padrao = valores_fixos.get(servico_normalizado, valores_referencia.get(servico, 0.0))
+        servico_key = servico.strip().lower()
+        valor_padrao = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
         valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
 
