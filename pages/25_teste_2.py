@@ -88,6 +88,13 @@ formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
 lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
+# === CONTROLE DE ESTADO ===
+if "servico_selecionado" not in st.session_state:
+    st.session_state.servico_selecionado = None
+
+if "valor_personalizado" not in st.session_state:
+    st.session_state.valor_personalizado = None
+
 # === FORMULÁRIO ===
 st.title("✍️ Adicionar Atendimento Manual")
 
@@ -98,17 +105,21 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         servico = st.selectbox("Serviço", options=servicos_2025)
 
-        # Valor automático (fixo ou média)
+        # Atualizar valor fixo se serviço mudou
         servico_key = normalizar(servico)
-        valor_padrao = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
+        valor_fixo = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
+
+        if st.session_state.servico_selecionado != servico:
+            st.session_state.valor_personalizado = valor_fixo
+            st.session_state.servico_selecionado = servico
+
         valor = st.number_input(
-    "Valor (R$)",
-    value=valor_padrao,
-    min_value=0.0,
-    step=0.5,
-    format="%.2f",
-    key=f"valor_input_{servico_key}"
-)
+            "Valor (R$)",
+            min_value=0.0,
+            step=0.5,
+            format="%.2f",
+            value=st.session_state.valor_personalizado
+        )
 
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
 
