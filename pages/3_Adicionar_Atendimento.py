@@ -104,7 +104,7 @@ if submitted:
             },
             "servicos": servicos_combo
         }
-        st.experimental_rerun()
+        st.rerun()
 
     elif servico_simples:
         try:
