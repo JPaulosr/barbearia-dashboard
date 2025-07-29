@@ -4,8 +4,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
-import unicodedata
 import re
+import unicodedata
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -40,12 +40,7 @@ def salvar_novo_atendimento(novo_df):
 def salvar_novo_cliente(nome):
     aba = conectar_sheets().worksheet(ABA_CLIENTES)
     df_atual = get_as_dataframe(aba).dropna(how="all")
-    novo = pd.DataFrame([{
-        "Cliente": nome,
-        "Status": "Ativo",
-        "Foto": "",
-        "Família": ""
-    }])
+    novo = pd.DataFrame([{ "Cliente": nome, "Status": "Ativo", "Foto": "", "Família": "" }])
     df_final = pd.concat([df_atual, novo], ignore_index=True)
     set_with_dataframe(aba, df_final)
 
@@ -58,11 +53,9 @@ def normalizar(texto):
 # === DADOS BASE ===
 df_clientes = carregar_clientes()
 df_base, _ = carregar_base()
-
 df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
 servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
 
-# Valores de referência fixos
 valores_fixos = {
     "corte": 25.00,
     "barba": 15.00,
@@ -75,46 +68,46 @@ valores_fixos = {
     "tintura": 20.00
 }
 
-# Referência por média histórica (fallback)
 valores_referencia = (
     df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.startswith("R$")]
-    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R\$", "", regex=True).str.replace(",", ".").astype(float))
+    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R$", "", regex=True).str.replace(",", ".").astype(float))
     .groupby("Serviço")["valor_num"]
     .mean()
     .round(2)
     .to_dict()
 )
 
-# Contas (formas de pagamento)
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
 lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
-# === INTERFACE ===
+# === SERVIÇO E VALOR ===
 st.title("✍️ Adicionar Atendimento Manual")
-
-# Serviço e valor dinâmico fora do form
 servico = st.selectbox("Serviço", options=servicos_2025)
 servico_key = normalizar(servico)
 valor_fixo = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
 valor = st.number_input("Valor (R$)", min_value=0.0, step=0.5, format="%.2f", value=valor_fixo)
 
+# === FORMULÁRIO ===
 with st.form("formulario_atendimento", clear_on_submit=False):
     col1, col2 = st.columns(2)
 
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
-        cliente_input = st.text_input("Nome do Cliente").strip()
-        combo_input = st.text_input("Combo (opcional)").strip()
 
-        if cliente_input:
-            st.markdown("🔍 Clientes semelhantes:")
-            for s in sorted([c for c in lista_clientes if cliente_input.lower() in c.lower()])[:5]:
+        cliente_input = st.text_input("Nome do Cliente").strip()
+        sugestoes = [c for c in lista_clientes if cliente_input.lower() in c.lower()] if cliente_input else []
+        if sugestoes:
+            st.markdown("🔍 **Clientes semelhantes encontrados:**")
+            for s in sugestoes[:5]:
                 st.markdown(f"- {s}")
-        if combo_input:
-            st.markdown("🔍 Combos semelhantes:")
-            for s in sorted([c for c in lista_combos if combo_input.lower() in c.lower()])[:5]:
+
+        combo_input = st.text_input("Combo (opcional)").strip()
+        sugestoes_combo = [c for c in lista_combos if combo_input.lower() in c.lower()] if combo_input else []
+        if sugestoes_combo:
+            st.markdown("🔍 **Combos semelhantes encontrados:**")
+            for s in sugestoes_combo[:5]:
                 st.markdown(f"- {s}")
 
     with col2:
@@ -128,7 +121,7 @@ with st.form("formulario_atendimento", clear_on_submit=False):
 
     enviar = st.form_submit_button("💾 Salvar Atendimento")
 
-# === AÇÃO ===
+# === AÇÃO AO ENVIAR ===
 if enviar:
     campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
     if not all(validar_hora(h) for h in campos_hora):
@@ -168,7 +161,7 @@ if enviar:
         st.query_params.update(recarga="ok")
         st.rerun()
 
-# === Confirmação pós-rerun ===
+# === RECARREGAMENTO ===
 if st.session_state.get("salvo"):
     st.success("✅ Atendimento registrado.")
     st.session_state["salvo"] = False
