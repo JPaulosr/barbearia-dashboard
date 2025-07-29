@@ -101,7 +101,6 @@ def salvar_combo(combo, valores_customizados):
     df_final = pd.concat([df, pd.DataFrame(novas_linhas)], ignore_index=True)
     salvar_base(df_final)
     st.success("Combo salvo com sucesso!")
-    st.experimental_rerun()
 
 def salvar_simples(servico, valor):
     df, _ = carregar_base()
@@ -123,17 +122,22 @@ def salvar_simples(servico, valor):
     df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
     salvar_base(df_final)
     st.success("Atendimento salvo com sucesso!")
-    st.experimental_rerun()
+
+# === CONTROLE DE DUPLICIDADE NO BOTÃO ===
+if "combo_salvo" not in st.session_state:
+    st.session_state.combo_salvo = False
 
 if combo:
     st.subheader("💰 Edite os valores do combo antes de salvar:")
     valores_customizados = {}
     for servico in combo.split("+"):
         valor_padrao = obter_valor_servico(servico)
-        valor = st.number_input(f"{servico.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0)
+        valor = st.number_input(f"{servico.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0, key=f"valor_{servico}")
         valores_customizados[servico] = valor
-    if st.button("✅ Confirmar e Salvar Combo"):
+    if st.button("✅ Confirmar e Salvar Combo") and not st.session_state.combo_salvo:
         salvar_combo(combo, valores_customizados)
+        st.session_state.combo_salvo = True
+        st.experimental_rerun()
 else:
     st.subheader("✂️ Selecione o serviço e valor:")
     servico = st.selectbox("Serviço", servicos_existentes + list(valores_servicos.keys()))
@@ -141,3 +145,4 @@ else:
     valor = st.number_input("Valor", value=valor_sugerido, step=1.0)
     if st.button("📁 Salvar Atendimento"):
         salvar_simples(servico, valor)
+        st.experimental_rerun()
