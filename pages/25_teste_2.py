@@ -93,16 +93,24 @@ if submitted:
         valores_combo = []
 
         st.markdown("### 💰 Edite os valores do combo antes de salvar:")
-        for serv in servicos_combo:
-            serv = serv.strip().lower()
-            serv = serv.replace(" ", "")  # remove espaços internos
-            if serv not in PRECOS_PADRAO:
-            st.error(f"O serviço '{serv}' não está cadastrado na tabela de preços.")
-            st.stop()
-            valor_padrao = PRECOS_PADRAO[serv]
 
-            valor_digitado = st.number_input(f"{serv.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, key=f"combo_{serv}")
-            valores_combo.append((serv, valor_digitado))
+        erro_detectado = False
+        for serv in servicos_combo:
+            serv_formatado = serv.strip().lower().replace(" ", "")
+            if serv_formatado not in PRECOS_PADRAO:
+                st.error(f"⚠️ Serviço '{serv}' não encontrado na tabela de preços.")
+                erro_detectado = True
+            else:
+                valor_padrao = PRECOS_PADRAO[serv_formatado]
+                valor_digitado = st.number_input(
+                    f"{serv_formatado.capitalize()} (padrão: R$ {valor_padrao})",
+                    value=valor_padrao,
+                    key=f"combo_{serv_formatado}"
+                )
+                valores_combo.append((serv_formatado, valor_digitado))
+
+        if erro_detectado:
+            st.stop()
 
         confirmar_combo = st.button("✅ Confirmar e Salvar Combo")
 
