@@ -7,7 +7,11 @@ from datetime import datetime
 import unicodedata
 import re
 
-# === CONFIG GOOGLE SHEETS ===
+# === Função de normalização ===
+def normalizar(texto):
+    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
+
+# === Config Google Sheets ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
 ABA_CLIENTES = "clientes_status"
@@ -52,21 +56,17 @@ def salvar_novo_cliente(nome):
 def validar_hora(hora):
     return bool(re.fullmatch(r"\d{2}:\d{2}:\d{2}", hora))
 
-def normalizar(texto):
-    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
-
-# === DADOS ===
+# === Carregar dados ===
 df_clientes = carregar_clientes()
 df_base, _ = carregar_base()
-
 df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
-servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
 
+servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
 lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
-# === VALORES FIXOS ===
+# === Tabela de valores fixos ===
 valores_fixos = {
     "corte": 25.00,
     "barba": 15.00,
@@ -79,28 +79,27 @@ valores_fixos = {
     "tintura": 20.00
 }
 
-# === INTERFACE ===
+# === Interface ===
 st.title("✍️ Adicionar Atendimento Manual")
 
+# Campo SERVIÇO (fora do form)
+servico = st.selectbox("Serviço", options=servicos_2025)
+
+# Valor fixo baseado no serviço
+servico_key = normalizar(servico)
+valor_fixo = valores_fixos.get(servico_key, 0.0)
+
+# Campo VALOR (fora do form)
+valor = st.number_input("Valor (R$)", value=valor_fixo, min_value=0.0, step=0.5, format="%.2f")
+
+# === Formulário principal ===
 with st.form("formulario_atendimento", clear_on_submit=False):
     col1, col2 = st.columns(2)
 
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
-        servico = st.selectbox("Serviço", options=servicos_2025)
-
-        servico_key = normalizar(servico)
-        valor_padrao = valores_fixos.get(servico_key, 0.0)
-        valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
-
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
-
         cliente_input = st.text_input("Nome do Cliente").strip()
-        sugestoes = [c for c in lista_clientes if cliente_input.lower() in c.lower()] if cliente_input else []
-        if sugestoes:
-            st.markdown("🔍 **Clientes semelhantes encontrados:**")
-            for s in sugestoes[:5]:
-                st.markdown(f"- {s}")
 
         combo_input = st.text_input("Combo (opcional)").strip()
         sugestoes_combo = [c for c in lista_combos if combo_input.lower() in c.lower()] if combo_input else []
@@ -120,7 +119,7 @@ with st.form("formulario_atendimento", clear_on_submit=False):
 
     enviar = st.form_submit_button("💾 Salvar Atendimento")
 
-# === SALVAR ===
+# === Ação ao enviar ===
 if enviar:
     campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
     if not all(validar_hora(h) for h in campos_hora):
@@ -160,6 +159,7 @@ if enviar:
         st.query_params.update(recarga="ok")
         st.rerun()
 
+# === Confirmação ===
 if st.session_state.get("salvo"):
     st.success("✅ Atendimento registrado.")
     st.session_state["salvo"] = False
