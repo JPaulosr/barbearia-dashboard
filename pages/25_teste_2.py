@@ -32,7 +32,7 @@ PRECOS_PADRAO = {
     "corte": 25.0,
     "pezinho": 7.0,
     "barba": 15.0,
-    "sobrancelha": 15.0,
+    "sobrancelha": 7.0,
     "luzes": 80.0,
     "pintura": 35.0,
     "alisamento": 40.0,
@@ -73,22 +73,20 @@ with st.form("form_atendimento"):
         h_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
         h_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
-    submitted = st.form_submit_button("💾 Salvar Atendimento")
+    submitted = st.form_submit_button("📂 Salvar Atendimento")
 
-# === PROCESSAMENTO ===
+# === VARIÁVEIS BASE ===
+cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
+conta = conta.strip()
+nova_data = data.strftime("%d/%m/%Y")
+fase = "Dono + funcionário"
 
-if submitted:
-    cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
-    conta = conta.strip()
-    nova_data = data.strftime("%d/%m/%Y")
-    fase = "Dono + funcionário"
+for label, hora in [("Hora Chegada", h_chegada), ("Hora Início", h_inicio), ("Hora Saída", h_saida), ("Hora Saída do Salão", h_saida_salao)]:
+    if not validar_hora(hora):
+        st.error(f"{label} inválida. Use HH:MM:SS.")
+        st.stop()
 
-    for label, hora in [("Hora Chegada", h_chegada), ("Hora Início", h_inicio), ("Hora Saída", h_saida), ("Hora Saída do Salão", h_saida_salao)]:
-        if not validar_hora(hora):
-            st.error(f"{label} inválida. Use HH:MM:SS.")
-            st.stop()
-
-    # === TRATAMENTO DE COMBO ===
+# === FORM DE COMBO ===
 if combo_input:
     servicos_combo = combo_input.split("+")
     valores_combo = []
@@ -136,34 +134,34 @@ if combo_input:
         st.success(f"✅ Combo registrado com sucesso para {cliente} ({len(valores_combo)} serviços)")
         st.rerun()
 
-    # === SERVIÇO SIMPLES ===
-    elif servico_simples:
-        try:
-            valor_final = float(valor_digitado.replace(",", "."))
-        except:
-            st.error("Valor do serviço inválido.")
-            st.stop()
+# === SERVIÇO SIMPLES ===
+elif submitted and servico_simples:
+    try:
+        valor_final = float(valor_digitado.replace(",", "."))
+    except:
+        st.error("Valor do serviço inválido.")
+        st.stop()
 
-        nova_linha = {
-            "Data": nova_data,
-            "Serviço": servico_simples.lower(),
-            "Valor": valor_final,
-            "Conta": conta,
-            "Cliente": cliente,
-            "Combo": "",
-            "Funcionário": funcionario,
-            "Fase": fase,
-            "Tipo": tipo,
-            "Hora Chegada": h_chegada,
-            "Hora Início": h_inicio,
-            "Hora Saída": h_saida,
-            "Hora Saída do Salão": h_saida_salao
-        }
+    nova_linha = {
+        "Data": nova_data,
+        "Serviço": servico_simples.lower(),
+        "Valor": valor_final,
+        "Conta": conta,
+        "Cliente": cliente,
+        "Combo": "",
+        "Funcionário": funcionario,
+        "Fase": fase,
+        "Tipo": tipo,
+        "Hora Chegada": h_chegada,
+        "Hora Início": h_inicio,
+        "Hora Saída": h_saida,
+        "Hora Saída do Salão": h_saida_salao
+    }
 
-        df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
-        set_with_dataframe(aba, df)
-        st.success(f"✅ Atendimento salvo com sucesso para {cliente}!")
-        st.rerun()
+    df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+    set_with_dataframe(aba, df)
+    st.success(f"✅ Atendimento salvo com sucesso para {cliente}!")
+    st.rerun()
 
-    else:
-        st.warning("⚠️ Preencha o serviço ou o combo para continuar.")
+elif submitted:
+    st.warning("⚠️ Preencha o serviço ou o combo para continuar.")
