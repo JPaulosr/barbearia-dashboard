@@ -139,4 +139,5 @@ if salvar and cliente_input != "":
     df_novo = pd.concat([df_atual, pd.DataFrame(nova_linha)], ignore_index=True)
     set_with_dataframe(aba_dados, df_novo)
     st.success(f"Atendimento registrado com sucesso para {cliente_input}! ({len(nova_linha)} linha(s))")
-    st.experimental_rerun()
+    st.rerun()
+
