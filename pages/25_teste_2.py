@@ -65,7 +65,7 @@ valores_referencia = (
         valor_num=lambda d: pd.to_numeric(
             d["Valor"]
             .astype(str)
-            .str.replace("R\$", "", regex=True)
+            .str.replace("R$", "", regex=True)
             .str.replace(",", "."),
             errors='coerce'
         )
@@ -92,7 +92,15 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         valor_padrao = valores_referencia.get(servico, 0.0)
         valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
-        cliente = st.text_input("Nome do Cliente")
+
+        cliente = st.text_input("Nome do Cliente", placeholder="Digite o nome do cliente")
+
+        if cliente and len(cliente) >= 2:
+            sugestoes_cliente = [c for c in lista_clientes if cliente.lower() in c.lower()]
+            if sugestoes_cliente:
+                with st.expander("🔍 Clientes semelhantes encontrados"):
+                    for s in sugestoes_cliente[:10]:
+                        st.markdown(f"- `{s}`")
 
         if cliente:
             try:
