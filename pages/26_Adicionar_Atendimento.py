@@ -138,6 +138,7 @@ with st.form("formulario_atendimento", clear_on_submit=False):
             link_foto = cliente_match.iloc[0]["Foto"]
             if isinstance(link_foto, str) and link_foto.startswith("http"):
                 st.image(link_foto, width=150, caption="Foto do cliente")
+                
 # === AÇÃO AO ENVIAR ===
 if enviar:
     campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
