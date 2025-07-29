@@ -6,6 +6,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
 import re
 
+# === CONFIG ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
 
@@ -23,17 +24,16 @@ def carregar_base():
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-def validar_hora(hora_str):
-    return re.match(r"^\d{2}:\d{2}:\d{2}$", hora_str)
+def validar_hora(h):
+    return re.match(r"^\d{2}:\d{2}:\d{2}$", h)
 
 PRECOS_PADRAO = {
     "corte": 25.0,
     "pezinho": 7.0,
     "barba": 15.0,
     "sobrancelha": 15.0,
-    "luzes": 45.0,
-    "pintura": 20.0,
-    "alisamento": 40.0,
+    "luzes": 80.0,
+    "pintura": 35.0,
 }
 
 st.markdown("## 📝 Adicionar Atendimento Manual")
@@ -43,6 +43,7 @@ clientes_existentes = sorted(df["Cliente"].dropna().unique())
 formas_pagamento = sorted(df["Conta"].dropna().unique())
 combos_existentes = sorted(df["Combo"].dropna().unique())
 
+# === FORMULÁRIO PRINCIPAL ===
 with st.form("form_atendimento"):
     col1, col2 = st.columns(2)
     with col1:
@@ -50,7 +51,7 @@ with st.form("form_atendimento"):
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento, placeholder="Selecione")
         cliente_input = st.selectbox("Nome do Cliente", options=clientes_existentes, placeholder="Digite ou selecione")
         novo_cliente = st.text_input("Ou digite um novo nome de cliente")
-        combo_input = st.selectbox("Combo (opcional - use 'corte+barba')", options=[""] + combos_existentes, placeholder="Digite ou selecione")
+        combo_input = st.selectbox("Combo (opcional - use 'corte+barba')", options=[""] + combos_existentes)
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
         tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
@@ -63,42 +64,39 @@ with st.form("form_atendimento"):
     with col3:
         servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
     with col4:
-        if servico_simples:
-            valor_padrao = PRECOS_PADRAO.get(servico_simples.lower().strip(), 0.0)
-            valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao))
-        else:
-            valor_digitado = ""
+        valor_padrao = PRECOS_PADRAO.get(servico_simples.lower(), 0.0) if servico_simples else ""
+        valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao) if valor_padrao else "")
 
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
+# === PROCESSAMENTO ===
 if submitted:
     cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
     conta = conta.strip()
     nova_data = data.strftime("%d/%m/%Y")
     fase = "Dono + funcionário"
 
-    # Validação das horas
-    for label, h in [("Hora Chegada", h_chegada), ("Hora Início", h_inicio), ("Hora Saída", h_saida), ("Hora Saída do Salão", h_saida_salao)]:
-        if not validar_hora(h):
-            st.error(f"{label} inválida. Use o formato HH:MM:SS.")
+    for label, hora in [("Hora Chegada", h_chegada), ("Hora Início", h_inicio), ("Hora Saída", h_saida), ("Hora Saída do Salão", h_saida_salao)]:
+        if not validar_hora(hora):
+            st.error(f"{label} inválida. Use HH:MM:SS.")
             st.stop()
 
     # === COMBO ===
     if combo_input:
         servicos_combo = combo_input.split("+")
-        valores_editados = []
+        valores_combo = []
 
         st.markdown("### 💰 Edite os valores antes de salvar:")
-        with st.form("valores_combo"):
-            for i, serv in enumerate(servicos_combo):
-                serv = serv.strip().lower()
-                valor_padrao = PRECOS_PADRAO.get(serv, 0.0)
-                valor_digitado = st.number_input(f"{serv.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, key=f"val_{i}")
-                valores_editados.append((serv, valor_digitado))
-            confirmar = st.form_submit_button("✅ Confirmar e Salvar")
+        for serv in servicos_combo:
+            serv = serv.strip().lower()
+            valor_padrao = PRECOS_PADRAO.get(serv, 0.0)
+            valor_digitado = st.number_input(f"{serv.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, key=f"val_{serv}")
+            valores_combo.append((serv, valor_digitado))
+
+        confirmar = st.button("✅ Confirmar e Salvar Combo")
 
         if confirmar:
-            for i, (serv, valor) in enumerate(valores_editados):
+            for i, (serv, valor) in enumerate(valores_combo):
                 nova_linha = {
                     "Data": nova_data,
                     "Serviço": serv,
@@ -117,26 +115,20 @@ if submitted:
                 df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
 
             set_with_dataframe(aba, df)
-            st.success(f"Combo registrado com sucesso para {cliente}! ({len(valores_editados)} linha(s))")
+            st.success(f"Combo salvo com sucesso para {cliente}!")
             st.rerun()
 
     # === SERVIÇO SIMPLES ===
     elif servico_simples:
-        servico = servico_simples.lower().strip()
-
-        if valor_digitado:
-            try:
-                valor_final = float(valor_digitado.replace(",", "."))
-            except:
-                st.error("Erro: valor inválido.")
-                st.stop()
-        else:
-            st.warning("Digite o valor do serviço.")
+        try:
+            valor_final = float(valor_digitado.replace(",", "."))
+        except:
+            st.error("Valor do serviço inválido.")
             st.stop()
 
         nova_linha = {
             "Data": nova_data,
-            "Serviço": servico,
+            "Serviço": servico_simples.lower(),
             "Valor": valor_final,
             "Conta": conta,
             "Cliente": cliente,
@@ -152,7 +144,7 @@ if submitted:
 
         df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
         set_with_dataframe(aba, df)
-        st.success(f"Atendimento registrado com sucesso para {cliente}.")
+        st.success(f"Serviço salvo com sucesso para {cliente}.")
         st.rerun()
 
     else:
