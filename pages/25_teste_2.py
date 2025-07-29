@@ -163,8 +163,8 @@ if combo:
                 st.session_state.combo_salvo = True
     else:
         if st.button("➕ Novo Atendimento"):
-    st.session_state.combo_salvo = False
-    st.rerun()
+           st.session_state.combo_salvo = False
+           st.rerun()
 
 else:
     st.subheader("✂️ Selecione o serviço e valor:")
@@ -181,6 +181,6 @@ else:
                 st.session_state.simples_salvo = True
     else:
         if st.button("➕ Novo Atendimento"):
-    st.session_state.simples_salvo = False
-    st.rerun()
+           st.session_state.simples_salvo = False
+           st.rerun()
 
