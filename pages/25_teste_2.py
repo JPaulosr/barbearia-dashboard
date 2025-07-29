@@ -162,10 +162,9 @@ if combo:
                 salvar_combo(combo, valores_customizados)
                 st.session_state.combo_salvo = True
     else:
-        st.success("✅ Combo salvo com sucesso!")
         if st.button("➕ Novo Atendimento"):
-            st.session_state.combo_salvo = False
-            st.experimental_rerun()
+    st.session_state.combo_salvo = False
+    st.rerun()
 
 else:
     st.subheader("✂️ Selecione o serviço e valor:")
@@ -181,8 +180,7 @@ else:
                 salvar_simples(servico, valor)
                 st.session_state.simples_salvo = True
     else:
-        st.success("✅ Atendimento salvo com sucesso!")
         if st.button("➕ Novo Atendimento"):
-            st.session_state.simples_salvo = False
-            st.experimental_rerun()
+    st.session_state.simples_salvo = False
+    st.rerun()
 
