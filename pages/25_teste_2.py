@@ -23,6 +23,7 @@ def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
+    df["Combo"] = df["Combo"].fillna("")  # Normaliza campo para evitar erro de comparação
     return df, aba
 
 def salvar_base(df_final):
@@ -40,7 +41,13 @@ def obter_valor_servico(servico):
 
 def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
-    existe = df[(df["Cliente"] == cliente) & (df["Data"] == data) & (df["Serviço"] == servico) & (df["Combo"] == combo)]
+    df["Combo"] = df["Combo"].fillna("")
+    existe = df[
+        (df["Cliente"] == cliente) &
+        (df["Data"] == data) &
+        (df["Serviço"] == servico) &
+        (df["Combo"] == combo)
+    ]
     return not existe.empty
 
 # === VALORES PADRÃO DE SERVIÇO ===
@@ -80,6 +87,12 @@ with col2:
     hora_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", "00:00:00")
 
 fase = "Dono + funcionário"
+
+# === CONTROLE DE ESTADO ===
+if "combo_salvo" not in st.session_state:
+    st.session_state.combo_salvo = False
+if "simples_salvo" not in st.session_state:
+    st.session_state.simples_salvo = False
 
 # === FUNÇÕES DE SALVAMENTO ===
 def salvar_combo(combo, valores_customizados):
@@ -124,9 +137,8 @@ def salvar_simples(servico, valor):
         "Hora Saída": hora_saida,
         "Hora Saída do Salão": hora_salao,
     }
-    if not ja_existe_atendimento(cliente, data, servico):
-        df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
-        salvar_base(df_final)
+    df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+    salvar_base(df_final)
 
 # === FORMULÁRIO ===
 if combo:
@@ -137,25 +149,33 @@ if combo:
         valor = st.number_input(f"{servico.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0, key=f"valor_{servico}")
         valores_customizados[servico] = valor
 
-    if st.button("✅ Confirmar e Salvar Combo"):
-        duplicado = any(ja_existe_atendimento(cliente, data, s, combo) for s in combo.split("+"))
-        if duplicado:
-            st.warning("⚠️ Combo já registrado para este cliente e data.")
-        else:
-            salvar_combo(combo, valores_customizados)
-            st.success("✅ Combo salvo com sucesso!")
-            st.button("➕ Cadastrar Novo Atendimento")
+    if not st.session_state.combo_salvo:
+        if st.button("✅ Confirmar e Salvar Combo"):
+            duplicado = False
+            for s in combo.split("+"):
+                if ja_existe_atendimento(cliente, data, s, combo):
+                    duplicado = True
+                    break
+            if duplicado:
+                st.warning("⚠️ Combo já registrado para este cliente e data.")
+            else:
+                salvar_combo(combo, valores_customizados)
+                st.session_state.combo_salvo = True
+    else:
+        st.success("✅ Combo salvo com sucesso!")
 
 else:
     st.subheader("✂️ Selecione o serviço e valor:")
-    servico = st.selectbox("Serviço", sorted(set(servicos_existentes + list(valores_servicos.keys()))))
+    servico = st.selectbox("Serviço", servicos_existentes + list(valores_servicos.keys()))
     valor_sugerido = obter_valor_servico(servico)
     valor = st.number_input("Valor", value=valor_sugerido, step=1.0)
 
-    if st.button("📁 Salvar Atendimento"):
-        if ja_existe_atendimento(cliente, data, servico):
-            st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
-        else:
-            salvar_simples(servico, valor)
-            st.success("✅ Atendimento salvo com sucesso!")
-            st.button("➕ Cadastrar Novo Atendimento")
+    if not st.session_state.simples_salvo:
+        if st.button("📁 Salvar Atendimento"):
+            if ja_existe_atendimento(cliente, data, servico):
+                st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
+            else:
+                salvar_simples(servico, valor)
+                st.session_state.simples_salvo = True
+    else:
+        st.success("✅ Atendimento salvo com sucesso!")
