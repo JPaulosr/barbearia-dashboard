@@ -51,35 +51,36 @@ def salvar_novo_cliente(nome):
 def validar_hora(hora):
     return bool(re.fullmatch(r"\d{2}:\d{2}:\d{2}", hora))
 
-# === CARREGAR DADOS ===
+# === CARREGAR DADOS BASE ===
 df_clientes = carregar_clientes()
 df_base, _ = carregar_base()
 
+# Serviços 2025
 df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
-servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
+servicos_2025 = df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique().tolist()
+servicos_2025 = sorted(set(servicos_2025))
 
+# Valores médios por serviço
 valores_referencia = (
     df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.startswith("R$")]
-    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R\$", "", regex=True).str.replace(",", ".").astype(float))
+    .assign(
+        valor_num=lambda d: pd.to_numeric(
+            d["Valor"].astype(str)
+            .str.replace("R\\$", "", regex=True)
+            .str.replace(",", "."),
+            errors="coerce"
+        )
+    )
     .groupby("Serviço")["valor_num"]
     .mean()
     .round(2)
     .to_dict()
 )
 
-valores_fixos = {
-    "Corte": 25.00,
-    "Barba": 15.00,
-    "Alisamento": 40.00,
-    "Pezinho": 7.00,
-    "Luzes": 45.00,
-    "Sobrancelha": 7.00,
-    "Gel": 10.00,
-    "Pomada": 15.00,
-    "Tintura": 20.00
-}
-
+# Contas (formas de pagamento)
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
+
+# Clientes e combos
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
 lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
@@ -92,26 +93,44 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         servico = st.selectbox("Serviço", options=servicos_2025)
-        valor_padrao = valores_fixos.get(servico, valores_referencia.get(servico, 0.0))
+        valor_padrao = valores_referencia.get(servico, 0.0)
         valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
 
-        cliente_input = st.text_input("Nome do Cliente").strip()
+        cliente = st.text_input("Nome do Cliente", placeholder="Digite o nome do cliente")
 
-        if cliente_input and len(cliente_input) >= 2:
-            sugestoes = [c for c in lista_clientes if cliente_input.lower() in c.lower()]
-            if sugestoes:
-                st.markdown("🔍 **Sugerido:**")
-                for s in sugestoes:
-                    st.markdown(f"- `{s}`")
+        if cliente and len(cliente) >= 2:
+            sugestoes_cliente = [c for c in lista_clientes if cliente.lower() in c.lower()]
+            if sugestoes_cliente:
+                with st.expander("🔍 Clientes semelhantes encontrados"):
+                    for s in sugestoes_cliente[:10]:
+                        st.markdown(f"- `{s}`")
 
-        combo_input = st.text_input("Combo (opcional)").strip()
+        if cliente:
+            try:
+                linha_cliente = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
+                if not linha_cliente.empty and "Foto" in linha_cliente.columns:
+                    foto_url = linha_cliente.iloc[0]["Foto"]
+                    if isinstance(foto_url, str) and foto_url.strip() != "":
+                        st.image(foto_url, width=150, caption=f"📸 Foto de {cliente}")
+                    else:
+                        st.info("Cliente sem foto cadastrada.")
+            except Exception as e:
+                st.warning(f"Erro ao carregar a foto: {e}")
 
+        combo_input = st.selectbox(
+            "Combo (opcional)",
+            options=[""] + sorted(lista_combos),
+            index=0,
+            placeholder="Digite ou selecione um combo",
+        )
+
+        sugestoes = []
         if combo_input and len(combo_input) >= 2:
-            sugestoes_combo = [c for c in lista_combos if combo_input.lower() in c.lower()]
-            if sugestoes_combo:
-                st.markdown("🔍 **Sugestões de Combos:**")
-                for s in sugestoes_combo:
+            sugestoes = [c for c in lista_combos if combo_input.lower() in c.lower()]
+        if sugestoes:
+            with st.expander("🔍 Sugestões de combos"):
+                for s in sugestoes:
                     st.markdown(f"- `{s}`")
 
     with col2:
@@ -123,17 +142,16 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
         hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
-    enviar = st.form_submit_button("💾 Salvar Atendimento")
+    enviar = st.form_submit_button("📂 Salvar Atendimento")
 
 # === AÇÃO AO ENVIAR ===
 if enviar:
     campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
     if not all(validar_hora(h) for h in campos_hora):
         st.error("❗ Todos os campos de hora devem estar no formato HH:MM:SS.")
-    elif cliente_input == "" or servico == "":
+    elif cliente.strip() == "" or servico.strip() == "":
         st.error("❗ Nome do cliente e serviço são obrigatórios.")
     else:
-        cliente = cliente_input
         familia = ""
         cliente_encontrado = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
         if not cliente_encontrado.empty and "Família" in cliente_encontrado.columns:
@@ -162,10 +180,9 @@ if enviar:
         salvar_novo_atendimento(novo)
         st.success("✅ Atendimento salvo com sucesso!")
         st.session_state["salvo"] = True
-        st.query_params.update(recarga="ok")
-        st.rerun()
+        st.experimental_rerun()
 
-# === RECARREGAMENTO SEGURO ===
+# === RECARREGAMENTO SEGURO APÓS SALVAR ===
 if st.session_state.get("salvo"):
     st.success("✅ Atendimento registrado.")
     st.session_state["salvo"] = False
