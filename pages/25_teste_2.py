@@ -120,6 +120,21 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     )
     combo_input = combo_selecionado.strip()
 
+    if cliente_selecionado == "":
+        cliente_input = st.text_input("Novo Cliente (não encontrado na lista)", key="cliente_manual").strip()
+    else:
+        cliente_input = cliente_selecionado
+
+    combo_selecionado = st.selectbox(
+        "Combo (opcional)",
+        options=[""] + lista_combos,
+        index=0,
+        help="Digite ou selecione um combo já usado anteriormente",
+        placeholder="Digite ou selecione um combo",
+        key="combo"
+    )
+    combo_input = combo_selecionado.strip()
+
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
         fase = st.selectbox("Fase", ["Autônomo (prestador)", "Dono (sozinho)", "Dono + funcionário"])
