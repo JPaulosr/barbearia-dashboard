@@ -78,7 +78,8 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
     conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
     funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
-    fase = st.selectbox("Fase", ["Autônomo (prestador)", "Dono (sozinho)", "Dono + funcionário"])
+    fase = "Dono + funcionário"
+    st.markdown(f"**Fase:** {fase}")
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
     hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", value="00:00:00")
     hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", value="00:00:00")
@@ -97,10 +98,7 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         placeholder="Digite ou selecione o combo",
         key="combo"
     )
-    if combo_selecionado == "":
-        combo_bruto = st.text_input("Novo Combo", key="combo_manual").strip().lower()
-    else:
-        combo_bruto = combo_selecionado.strip().lower()
+    combo_bruto = combo_selecionado.strip().lower()
 
     servico_individual = st.selectbox("Serviço (uso se não for combo)", options=list(valores_fixos.keys()), key="servico_individual")
     valor_individual = st.number_input("Valor", min_value=0.0, step=0.5, format="%.2f", value=valores_fixos.get(servico_individual, 0.0), key="valor_unico")
@@ -169,7 +167,7 @@ if enviar:
 
         salvar_novo_atendimento(pd.DataFrame(registros))
         st.success("✅ Atendimento registrado com sucesso!")
-        for k in ["cliente", "cliente_manual", "combo", "combo_manual", "servico_individual", "valor_unico"] + [f"valor_{i}" for i in range(len(registros))]:
+        for k in ["cliente", "cliente_manual", "combo", "servico_individual", "valor_unico"] + [f"valor_{i}" for i in range(len(registros))]:
             if k in st.session_state:
                 del st.session_state[k]
         st.rerun()
