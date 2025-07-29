@@ -18,17 +18,17 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
-# === FUNÇÕES ===
+# === FUNÇÕES AUXILIARES ===
 def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
     return df, aba
 
-def salvar_linhas_adicionais(novas_linhas_df):
+def salvar_base(df_final):
     aba = conectar_sheets().worksheet(ABA_DADOS)
-    ultima_linha = len(aba.get_all_values()) + 1
-    set_with_dataframe(aba, novas_linhas_df, row=ultima_linha, include_index=False, include_column_header=False)
+    aba.clear()  # Limpa a aba para não deixar buracos
+    set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
 
 def formatar_hora(valor):
     if re.match(r"^\d{2}:\d{2}:\d{2}$", valor):
@@ -38,7 +38,17 @@ def formatar_hora(valor):
 def obter_valor_servico(servico):
     return valores_servicos.get(servico.lower(), 0.0)
 
-# === BASE DE VALORES PADRÕES ===
+def ja_existe_atendimento(cliente, data, servico, combo=""):
+    df, _ = carregar_base()
+    existe = df[
+        (df["Cliente"] == cliente) &
+        (df["Data"] == data) &
+        (df["Serviço"] == servico) &
+        (df["Combo"] == combo)
+    ]
+    return not existe.empty
+
+# === VALORES PADRÃO DE SERVIÇO ===
 valores_servicos = {
     "corte": 25.0,
     "pezinho": 7.0,
@@ -76,22 +86,13 @@ with col2:
 
 fase = "Dono + funcionário"
 
-# === CONTROLE DE DUPLICIDADE ===
+# === CONTROLE DE ESTADO (EVITA DUPLICAÇÃO POR CLIQUE DUPLO) ===
 if "combo_salvo" not in st.session_state:
     st.session_state.combo_salvo = False
 if "simples_salvo" not in st.session_state:
     st.session_state.simples_salvo = False
 
-def ja_existe_atendimento(cliente, data, servico, combo=""):
-    df, _ = carregar_base()
-    existe = df[
-        (df["Cliente"] == cliente) &
-        (df["Data"] == data) &
-        (df["Serviço"] == servico) &
-        (df["Combo"] == combo)
-    ]
-    return not existe.empty
-
+# === FUNÇÕES DE SALVAMENTO ===
 def salvar_combo(combo, valores_customizados):
     df, _ = carregar_base()
     servicos = combo.split("+")
@@ -137,7 +138,7 @@ def salvar_simples(servico, valor):
     df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
     salvar_base(df_final)
 
-# === FORMULÁRIO E VALIDAÇÃO ===
+# === FORMULÁRIO DE COMBO OU SIMPLES ===
 if combo:
     st.subheader("💰 Edite os valores do combo antes de salvar:")
     valores_customizados = {}
