@@ -5,6 +5,11 @@ from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
 import re
+import unicodedata
+
+# === FUNÇÃO DE NORMALIZAÇÃO ===
+def normalizar(texto):
+    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
@@ -67,13 +72,6 @@ valores_referencia = (
     .to_dict()
 )
 
-import unicodedata
-
-# Função para normalizar os nomes
-def normalizar(texto):
-    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
-
-# Dicionário fixo com nomes normalizados
 valores_fixos = {
     "corte": 25.00,
     "barba": 15.00,
@@ -85,11 +83,6 @@ valores_fixos = {
     "pomada": 15.00,
     "tintura": 20.00
 }
-
-# Normalizar o nome do serviço selecionado
-servico_key = normalizar(servico)
-valor_padrao = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
-valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
 
 formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
 lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
@@ -104,9 +97,12 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     with col1:
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
         servico = st.selectbox("Serviço", options=servicos_2025)
-        servico_key = servico.strip().lower()
+
+        # Valor automático (fixo ou média)
+        servico_key = normalizar(servico)
         valor_padrao = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
         valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
+
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
 
         cliente_input = st.text_input("Nome do Cliente").strip()
