@@ -27,6 +27,7 @@ def carregar_base():
 def validar_hora(h):
     return re.match(r"^\d{2}:\d{2}:\d{2}$", h)
 
+# === TABELA DE PREÇOS PADRÃO ===
 PRECOS_PADRAO = {
     "corte": 25.0,
     "pezinho": 7.0,
@@ -38,10 +39,21 @@ PRECOS_PADRAO = {
 
 st.markdown("## 📝 Adicionar Atendimento Manual")
 
+# === CARREGAMENTO INICIAL ===
 df, aba = carregar_base()
 clientes_existentes = sorted(df["Cliente"].dropna().unique())
 formas_pagamento = sorted(df["Conta"].dropna().unique())
 combos_existentes = sorted(df["Combo"].dropna().unique())
+
+# === SERVIÇO E VALOR (FORA DO FORM) ===
+st.markdown("### ✂️ Selecione o Serviço e o Valor")
+
+col3, col4 = st.columns([1, 1])
+with col3:
+    servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
+with col4:
+    valor_padrao = PRECOS_PADRAO.get(servico_simples.lower(), 0.0) if servico_simples else ""
+    valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao) if valor_padrao else "")
 
 # === FORMULÁRIO PRINCIPAL ===
 with st.form("form_atendimento"):
@@ -60,13 +72,6 @@ with st.form("form_atendimento"):
         h_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
         h_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
-    col3, col4 = st.columns([1, 1])
-    with col3:
-        servico_simples = st.selectbox("Serviço (ex: corte)", options=[""] + sorted(PRECOS_PADRAO.keys()))
-    with col4:
-        valor_padrao = PRECOS_PADRAO.get(servico_simples.lower(), 0.0) if servico_simples else ""
-        valor_digitado = st.text_input("Valor do Serviço", value=str(valor_padrao) if valor_padrao else "")
-
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
 # === PROCESSAMENTO ===
@@ -81,44 +86,10 @@ if submitted:
             st.error(f"{label} inválida. Use HH:MM:SS.")
             st.stop()
 
-    # === COMBO ===
     if combo_input:
-        servicos_combo = combo_input.split("+")
-        valores_combo = []
+        st.warning("⚠️ O campo 'Combo' foi preenchido. O sistema ainda não está tratando combos nesta versão.")
+        st.stop()
 
-        st.markdown("### 💰 Edite os valores antes de salvar:")
-        for serv in servicos_combo:
-            serv = serv.strip().lower()
-            valor_padrao = PRECOS_PADRAO.get(serv, 0.0)
-            valor_digitado = st.number_input(f"{serv.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, key=f"val_{serv}")
-            valores_combo.append((serv, valor_digitado))
-
-        confirmar = st.button("✅ Confirmar e Salvar Combo")
-
-        if confirmar:
-            for i, (serv, valor) in enumerate(valores_combo):
-                nova_linha = {
-                    "Data": nova_data,
-                    "Serviço": serv,
-                    "Valor": valor,
-                    "Conta": conta,
-                    "Cliente": cliente,
-                    "Combo": combo_input,
-                    "Funcionário": funcionario,
-                    "Fase": fase,
-                    "Tipo": tipo,
-                    "Hora Chegada": h_chegada if i == 0 else "",
-                    "Hora Início": h_inicio if i == 0 else "",
-                    "Hora Saída": h_saida if i == 0 else "",
-                    "Hora Saída do Salão": h_saida_salao if i == 0 else ""
-                }
-                df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
-
-            set_with_dataframe(aba, df)
-            st.success(f"Combo salvo com sucesso para {cliente}!")
-            st.rerun()
-
-    # === SERVIÇO SIMPLES ===
     elif servico_simples:
         try:
             valor_final = float(valor_digitado.replace(",", "."))
@@ -144,8 +115,8 @@ if submitted:
 
         df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
         set_with_dataframe(aba, df)
-        st.success(f"Serviço salvo com sucesso para {cliente}.")
+        st.success(f"✅ Atendimento salvo com sucesso para {cliente}!")
         st.rerun()
 
     else:
-        st.warning("Preencha o serviço ou o combo para salvar.")
+        st.warning("⚠️ Preencha o serviço ou o combo para continuar.")
