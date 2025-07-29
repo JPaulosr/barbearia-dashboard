@@ -90,7 +90,19 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     if cliente_nome == "":
         cliente_nome = st.text_input("Novo Cliente", key="cliente_manual").strip()
 
-    combo_bruto = st.text_input("Combo (ex: corte+barba)").strip().lower()
+    combo_selecionado = st.selectbox(
+    "Combo (ex: corte+barba)",
+    options=[""] + lista_combos,
+    index=0,
+    help="Digite ou selecione um combo já usado anteriormente",
+    placeholder="Digite ou selecione o combo",
+    key="combo"
+)
+
+if combo_selecionado == "":
+    combo_bruto = st.text_input("Novo Combo", key="combo_manual").strip().lower()
+else:
+    combo_bruto = combo_selecionado.strip().lower()
 
     enviar = st.form_submit_button("💾 Salvar Atendimento")
 
