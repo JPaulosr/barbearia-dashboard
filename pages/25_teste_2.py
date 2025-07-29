@@ -62,7 +62,7 @@ servicos_2025 = sorted(set(servicos_2025))
 
 # Valores médios por serviço
 valores_referencia = (
-    df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.startswith("R$")]
+    df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.contains("R\$")]
     .assign(
         valor_num=lambda d: pd.to_numeric(
             d["Valor"]
@@ -86,7 +86,7 @@ lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
 lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
 # === FORMULÁRIO ===
-st.title("✍️ Adicionar Atendimento Manual")
+st.title("📝 Adicionar Atendimento Manual")
 
 with st.form("formulario_atendimento", clear_on_submit=False):
     col1, col2 = st.columns(2)
@@ -104,37 +104,21 @@ with st.form("formulario_atendimento", clear_on_submit=False):
             placeholder="Digite o nome do cliente ou selecione"
         )
 
-        # === MOSTRAR FOTO DO CLIENTE ===
-if cliente:
-    foto_cliente = None
-    try:
-        # Tenta obter o link da foto na aba clientes_status
-        linha_cliente = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
-        if not linha_cliente.empty and "Foto" in linha_cliente.columns:
-            foto_url = linha_cliente.iloc[0]["Foto"]
-            if isinstance(foto_url, str) and foto_url.strip() != "":
-                st.image(foto_url, width=150, caption=f"📸 Foto de {cliente}")
-            else:
-                st.info("Cliente sem foto cadastrada.")
-    except Exception as e:
-        st.warning(f"Erro ao carregar a foto: {e}")
-        
-        # Campo Combo com sugestões manuais (autocomplete visual)
+        if cliente:
+            linha_cliente = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
+            if not linha_cliente.empty and "Foto" in linha_cliente.columns:
+                foto_url = linha_cliente.iloc[0]["Foto"]
+                if isinstance(foto_url, str) and foto_url.strip() != "":
+                    st.image(foto_url, width=150, caption=f"📸 Foto de {cliente}")
+                else:
+                    st.info("Cliente sem foto cadastrada.")
+
         combo_input = st.selectbox(
             "Combo (opcional)",
             options=[""] + sorted(lista_combos),
             index=0,
             placeholder="Digite ou selecione um combo",
         )
-
-        sugestoes = []
-        if combo_input and len(combo_input) >= 2:
-            sugestoes = [c for c in lista_combos if combo_input.lower() in c.lower()]
-
-        if sugestoes:
-            with st.expander("🔍 Sugestões de combos"):
-                for s in sugestoes:
-                    st.markdown(f"- `{s}`")
 
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
@@ -155,13 +139,11 @@ if enviar:
     elif cliente == "" or servico == "":
         st.error("❗ Nome do cliente e serviço são obrigatórios.")
     else:
-        # Obter família (se cliente existente)
         familia = ""
         cliente_encontrado = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
         if not cliente_encontrado.empty and "Família" in cliente_encontrado.columns:
             familia = cliente_encontrado.iloc[0]["Família"]
 
-        # Se cliente não existe, salvar na aba clientes_status
         if cliente not in lista_clientes:
             salvar_novo_cliente(cliente)
 
@@ -188,7 +170,6 @@ if enviar:
         st.query_params.update(recarga="ok")
         st.rerun()
 
-# === RECARREGAMENTO SEGURO APÓS SALVAR ===
 if st.session_state.get("salvo"):
     st.success("✅ Atendimento registrado.")
     st.session_state["salvo"] = False
