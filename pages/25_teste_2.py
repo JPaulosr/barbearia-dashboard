@@ -89,7 +89,7 @@ if submitted:
             st.stop()
 
     # === TRATAMENTO DE COMBO ===
-   if combo_input:
+if combo_input:
     servicos_combo = combo_input.split("+")
     valores_combo = []
 
