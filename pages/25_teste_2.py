@@ -104,14 +104,21 @@ with st.form("formulario_atendimento", clear_on_submit=False):
             placeholder="Digite o nome do cliente ou selecione"
         )
 
-        # Mostrar foto do cliente, se houver
-        if cliente:
-            cliente_info = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
-            if not cliente_info.empty:
-                foto_url = cliente_info.iloc[0].get("Foto", "")
-                if isinstance(foto_url, str) and foto_url.startswith("http"):
-                    st.image(foto_url, width=150, caption="Foto do Cliente")
-
+        # === MOSTRAR FOTO DO CLIENTE ===
+if cliente:
+    foto_cliente = None
+    try:
+        # Tenta obter o link da foto na aba clientes_status
+        linha_cliente = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
+        if not linha_cliente.empty and "Foto" in linha_cliente.columns:
+            foto_url = linha_cliente.iloc[0]["Foto"]
+            if isinstance(foto_url, str) and foto_url.strip() != "":
+                st.image(foto_url, width=150, caption=f"📸 Foto de {cliente}")
+            else:
+                st.info("Cliente sem foto cadastrada.")
+    except Exception as e:
+        st.warning(f"Erro ao carregar a foto: {e}")
+        
         # Campo Combo com sugestões manuais (autocomplete visual)
         combo_input = st.selectbox(
             "Combo (opcional)",
