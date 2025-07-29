@@ -101,7 +101,14 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         # Valor automático (fixo ou média)
         servico_key = normalizar(servico)
         valor_padrao = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
-        valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
+        valor = st.number_input(
+    "Valor (R$)",
+    value=valor_padrao,
+    min_value=0.0,
+    step=0.5,
+    format="%.2f",
+    key=f"valor_input_{servico_key}"
+)
 
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
 
