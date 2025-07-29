@@ -86,7 +86,7 @@ with col2:
 
 fase = "Dono + funcionário"
 
-# === CONTROLE DE ESTADO (EVITA DUPLICAÇÃO POR CLIQUE DUPLO) ===
+# === CONTROLE DE ESTADO (EVITA DUPLICAÇÃO) ===
 if "combo_salvo" not in st.session_state:
     st.session_state.combo_salvo = False
 if "simples_salvo" not in st.session_state:
@@ -138,7 +138,7 @@ def salvar_simples(servico, valor):
     df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
     salvar_base(df_final)
 
-# === FORMULÁRIO DE COMBO OU SIMPLES ===
+# === FORMULÁRIO DE COMBO ===
 if combo:
     st.subheader("💰 Edite os valores do combo antes de salvar:")
     valores_customizados = {}
@@ -162,6 +162,7 @@ if combo:
     else:
         st.success("✅ Combo salvo com sucesso!")
 
+# === FORMULÁRIO DE ATENDIMENTO SIMPLES ===
 else:
     st.subheader("✂️ Selecione o serviço e valor:")
     servico = st.selectbox("Serviço", servicos_existentes + list(valores_servicos.keys()))
@@ -177,4 +178,3 @@ else:
                 st.session_state.simples_salvo = True
     else:
         st.success("✅ Atendimento salvo com sucesso!")
-        
