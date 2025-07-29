@@ -82,8 +82,6 @@ df_2025["Serviço"] = (
 )
 
 servicos_existentes = sorted(df_2025["Serviço"].unique())
-
-
 servicos_existentes = sorted(df_2025["Serviço"].unique())
 contas_existentes = sorted(df_2025["Conta"].dropna().unique())
 combos_existentes = sorted(df_2025["Combo"].dropna().unique())
