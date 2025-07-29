@@ -176,6 +176,55 @@ if enviar:
 
         salvar_novo_atendimento(novo)
         st.success("✅ Atendimento salvo com sucesso!")
+
+        # 🔁 LIMPAR CAMPOS
+        for chave in ["cliente", "cliente_manual", "combo"]:
+            if chave in st.session_state:
+                del st.session_state[chave]
+
+        st.session_state["salvo"] = True
+        st.query_params.update(recarga="ok")
+        st.rerun()
+
+elif 'limpar' in locals() and limpar:
+    # 🔁 LIMPAR MANUALMENTE
+    st.session_state.clear()
+    st.rerun()
+    
+    campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
+    if not all(validar_hora(h) for h in campos_hora):
+        st.error("❗ Todos os campos de hora devem estar no formato HH:MM:SS.")
+    elif cliente_input == "" or servico == "":
+        st.error("❗ Nome do cliente e serviço são obrigatórios.")
+    else:
+        cliente = cliente_input
+        familia = ""
+        cliente_encontrado = df_clientes[df_clientes["Cliente"].str.lower() == cliente.lower()]
+        if not cliente_encontrado.empty and "Família" in cliente_encontrado.columns:
+            familia = cliente_encontrado.iloc[0]["Família"]
+
+        if cliente not in lista_clientes:
+            salvar_novo_cliente(cliente)
+
+        novo = pd.DataFrame([{
+            "Data": data.strftime("%d/%m/%Y"),
+            "Serviço": servico,
+            "Valor": f"R$ {valor:.2f}",
+            "Conta": conta,
+            "Cliente": cliente,
+            "Combo": combo_input,
+            "Funcionário": funcionario,
+            "Fase": fase,
+            "Tipo": tipo,
+            "Hora Chegada": hora_chegada,
+            "Hora Início": hora_inicio,
+            "Hora Saída": hora_saida,
+            "Hora Saída do Salão": hora_saida_salao,
+            "Família": familia
+        }])
+
+        salvar_novo_atendimento(novo)
+        st.success("✅ Atendimento salvo com sucesso!")
         st.session_state["salvo"] = True
         st.query_params.update(recarga="ok")
         st.rerun()
