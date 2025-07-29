@@ -75,6 +75,8 @@ with st.form("form_atendimento"):
     submitted = st.form_submit_button("💾 Salvar Atendimento")
 
 # === PROCESSAMENTO ===
+# ... (código acima permanece igual até o if submitted)
+
 if submitted:
     cliente = novo_cliente.strip() if novo_cliente else cliente_input.strip()
     conta = conta.strip()
@@ -86,10 +88,44 @@ if submitted:
             st.error(f"{label} inválida. Use HH:MM:SS.")
             st.stop()
 
+    # === TRATAMENTO DE COMBO ===
     if combo_input:
-        st.warning("⚠️ O campo 'Combo' foi preenchido. O sistema ainda não está tratando combos nesta versão.")
-        st.stop()
+        servicos_combo = combo_input.split("+")
+        valores_combo = []
 
+        st.markdown("### 💰 Edite os valores do combo antes de salvar:")
+        for serv in servicos_combo:
+            serv = serv.strip().lower()
+            valor_padrao = PRECOS_PADRAO.get(serv, 0.0)
+            valor_digitado = st.number_input(f"{serv.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, key=f"combo_{serv}")
+            valores_combo.append((serv, valor_digitado))
+
+        confirmar_combo = st.button("✅ Confirmar e Salvar Combo")
+
+        if confirmar_combo:
+            for i, (serv, valor) in enumerate(valores_combo):
+                nova_linha = {
+                    "Data": nova_data,
+                    "Serviço": serv,
+                    "Valor": valor,
+                    "Conta": conta,
+                    "Cliente": cliente,
+                    "Combo": combo_input,
+                    "Funcionário": funcionario,
+                    "Fase": fase,
+                    "Tipo": tipo,
+                    "Hora Chegada": h_chegada if i == 0 else "",
+                    "Hora Início": h_inicio if i == 0 else "",
+                    "Hora Saída": h_saida if i == 0 else "",
+                    "Hora Saída do Salão": h_saida_salao if i == 0 else ""
+                }
+                df = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
+
+            set_with_dataframe(aba, df)
+            st.success(f"✅ Combo registrado com sucesso para {cliente} ({len(valores_combo)} serviços)")
+            st.rerun()
+
+    # === SERVIÇO SIMPLES ===
     elif servico_simples:
         try:
             valor_final = float(valor_digitado.replace(",", "."))
