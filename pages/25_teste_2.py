@@ -134,7 +134,11 @@ with st.form("formulario_atendimento", clear_on_submit=False):
         hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", value="00:00:00")
         hora_saida_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", value="00:00:00")
 
+    col_botao1, col_botao2 = st.columns([1, 1])
+with col_botao1:
     enviar = st.form_submit_button("💾 Salvar Atendimento")
+with col_botao2:
+    limpar = st.form_submit_button("🧹 Limpar formulário")
 
 # === AÇÃO AO ENVIAR ===
 if enviar:
