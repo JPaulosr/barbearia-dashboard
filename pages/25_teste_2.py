@@ -93,47 +93,32 @@ with st.form("formulario_atendimento", clear_on_submit=False):
     col1, col2 = st.columns(2)
 
     with col1:
-    data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
-    conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
+        data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
+        conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
 
-    cliente_selecionado = st.selectbox(
-        "Nome do Cliente",
-        options=[""] + lista_clientes,
-        index=0,
-        help="Digite o nome e veja se já existe. Se não existir, será cadastrado como novo.",
-        placeholder="Digite ou selecione o cliente",
-        key="cliente"
-    )
+        cliente_selecionado = st.selectbox(
+            "Nome do Cliente",
+            options=[""] + lista_clientes,
+            index=0,
+            help="Digite o nome e veja se já existe. Se não existir, será cadastrado como novo.",
+            placeholder="Digite ou selecione o cliente",
+            key="cliente"
+        )
 
-    if cliente_selecionado == "":
-        cliente_input = st.text_input("Novo Cliente (não encontrado na lista)", key="cliente_manual").strip()
-    else:
-        cliente_input = cliente_selecionado
+        if cliente_selecionado == "":
+            cliente_input = st.text_input("Novo Cliente (não encontrado na lista)", key="cliente_manual").strip()
+        else:
+            cliente_input = cliente_selecionado
 
-    combo_selecionado = st.selectbox(
-        "Combo (opcional)",
-        options=[""] + lista_combos,
-        index=0,
-        help="Digite ou selecione um combo já usado anteriormente",
-        placeholder="Digite ou selecione um combo",
-        key="combo"
-    )
-    combo_input = combo_selecionado.strip()
-
-    if cliente_selecionado == "":
-        cliente_input = st.text_input("Novo Cliente (não encontrado na lista)", key="cliente_manual").strip()
-    else:
-        cliente_input = cliente_selecionado
-
-    combo_selecionado = st.selectbox(
-        "Combo (opcional)",
-        options=[""] + lista_combos,
-        index=0,
-        help="Digite ou selecione um combo já usado anteriormente",
-        placeholder="Digite ou selecione um combo",
-        key="combo"
-    )
-    combo_input = combo_selecionado.strip()
+        combo_selecionado = st.selectbox(
+            "Combo (opcional)",
+            options=[""] + lista_combos,
+            index=0,
+            help="Digite ou selecione um combo já usado anteriormente",
+            placeholder="Digite ou selecione um combo",
+            key="combo"
+        )
+        combo_input = combo_selecionado.strip()
 
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
