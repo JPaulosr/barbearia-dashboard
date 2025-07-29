@@ -64,10 +64,17 @@ valores_servicos = {
 # === INTERFACE ===
 st.title("📅 Adicionar Atendimento")
 df_existente, _ = carregar_base()
-clientes_existentes = sorted(df_existente["Cliente"].dropna().unique())
-servicos_existentes = sorted(df_existente["Serviço"].dropna().unique())
-contas_existentes = sorted(df_existente["Conta"].dropna().unique())
-combos_existentes = sorted(df_existente["Combo"].dropna().unique())
+
+# Converte a coluna "Data" para datetime
+df_existente["Data"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
+
+# Filtra apenas os registros de 2025
+df_2025 = df_existente[df_existente["Data"].dt.year == 2025]
+
+clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
+servicos_existentes = sorted(df_2025["Serviço"].dropna().unique())
+contas_existentes = sorted(df_2025["Conta"].dropna().unique())
+combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
 col1, col2 = st.columns(2)
 with col1:
