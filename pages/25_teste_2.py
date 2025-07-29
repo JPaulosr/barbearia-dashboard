@@ -4,12 +4,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
-import re
 import unicodedata
+import re
 
-def normalizar(texto):
-    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
-
+# === CONFIG GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
 ABA_CLIENTES = "clientes_status"
@@ -54,20 +52,21 @@ def salvar_novo_cliente(nome):
 def validar_hora(hora):
     return bool(re.fullmatch(r"\d{2}:\d{2}:\d{2}", hora))
 
+def normalizar(texto):
+    return unicodedata.normalize("NFKD", texto.strip().lower()).encode("ASCII", "ignore").decode()
+
+# === DADOS ===
 df_clientes = carregar_clientes()
 df_base, _ = carregar_base()
+
 df_base["Data"] = pd.to_datetime(df_base["Data"], dayfirst=True, errors='coerce')
 servicos_2025 = sorted(df_base[df_base["Data"].dt.year == 2025]["Serviço"].dropna().unique())
 
-valores_referencia = (
-    df_base[df_base["Valor"].notna() & df_base["Valor"].astype(str).str.startswith("R$")]
-    .assign(valor_num=lambda d: d["Valor"].astype(str).str.replace("R\$", "", regex=True).str.replace(",", ".").astype(float))
-    .groupby("Serviço")["valor_num"]
-    .mean()
-    .round(2)
-    .to_dict()
-)
+formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
+lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
+lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
 
+# === VALORES FIXOS ===
 valores_fixos = {
     "corte": 25.00,
     "barba": 15.00,
@@ -80,33 +79,35 @@ valores_fixos = {
     "tintura": 20.00
 }
 
-formas_pagamento = df_base["Conta"].dropna().astype(str).unique().tolist()
-lista_clientes = df_clientes["Cliente"].dropna().astype(str).unique().tolist()
-lista_combos = df_base["Combo"].dropna().astype(str).unique().tolist()
-
+# === INTERFACE ===
 st.title("✍️ Adicionar Atendimento Manual")
 
 with st.form("formulario_atendimento", clear_on_submit=False):
     col1, col2 = st.columns(2)
 
     with col1:
-        servico = st.selectbox("Serviço", options=servicos_2025)
-        servico_key = normalizar(servico)
-        valor_fixo = valores_fixos.get(servico_key, valores_referencia.get(servico, 0.0))
-
-        if st.session_state.get("servico_anterior") != servico:
-            st.session_state["valor_auto"] = valor_fixo
-            st.session_state["servico_anterior"] = servico
-
-        valor = st.number_input(
-            "Valor (R$)", value=st.session_state.get("valor_auto", valor_fixo),
-            min_value=0.0, step=0.5, format="%.2f"
-        )
-
         data = st.date_input("Data do Atendimento", value=datetime.today(), format="DD/MM/YYYY")
+        servico = st.selectbox("Serviço", options=servicos_2025)
+
+        servico_key = normalizar(servico)
+        valor_padrao = valores_fixos.get(servico_key, 0.0)
+        valor = st.number_input("Valor (R$)", value=valor_padrao, min_value=0.0, step=0.5, format="%.2f")
+
         conta = st.selectbox("Forma de Pagamento", options=formas_pagamento)
+
         cliente_input = st.text_input("Nome do Cliente").strip()
+        sugestoes = [c for c in lista_clientes if cliente_input.lower() in c.lower()] if cliente_input else []
+        if sugestoes:
+            st.markdown("🔍 **Clientes semelhantes encontrados:**")
+            for s in sugestoes[:5]:
+                st.markdown(f"- {s}")
+
         combo_input = st.text_input("Combo (opcional)").strip()
+        sugestoes_combo = [c for c in lista_combos if combo_input.lower() in c.lower()] if combo_input else []
+        if sugestoes_combo:
+            st.markdown("🔍 **Combos semelhantes encontrados:**")
+            for s in sugestoes_combo[:5]:
+                st.markdown(f"- {s}")
 
     with col2:
         funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
@@ -119,6 +120,7 @@ with st.form("formulario_atendimento", clear_on_submit=False):
 
     enviar = st.form_submit_button("💾 Salvar Atendimento")
 
+# === SALVAR ===
 if enviar:
     campos_hora = [hora_chegada, hora_inicio, hora_saida, hora_saida_salao]
     if not all(validar_hora(h) for h in campos_hora):
