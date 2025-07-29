@@ -72,13 +72,17 @@ df_existente["Data"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", e
 df_2025 = df_existente[df_existente["Data"].dt.year == 2025]
 
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
+# Padroniza e limpa a coluna de serviços (somente registros válidos)
+df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
 df_2025["Serviço"] = (
     df_2025["Serviço"]
-    .dropna()
     .str.strip()
     .str.lower()
     .str.capitalize()
 )
+
+servicos_existentes = sorted(df_2025["Serviço"].unique())
+
 
 servicos_existentes = sorted(df_2025["Serviço"].unique())
 contas_existentes = sorted(df_2025["Conta"].dropna().unique())
