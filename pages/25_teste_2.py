@@ -207,6 +207,7 @@ if combo:
                 st.success("✅ Atendimento salvo com sucesso!")
                 st.markdown(f"[📲 Enviar mensagem de agradecimento para {cliente}]({whatsapp_link})")
 
+
     else:
         if st.button("➕ Novo Atendimento"):
             st.session_state.combo_salvo = False
