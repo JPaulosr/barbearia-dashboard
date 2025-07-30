@@ -37,16 +37,18 @@ def formatar_hora(valor):
     return "00:00:00"
 
 def obter_valor_servico(servico):
-    return valores_servicos.get(servico.lower(), 0.0)
+    for chave in valores_servicos.keys():
+        if chave.lower() == servico.lower():
+            return valores_servicos[chave]
+    return 0.0
 
 def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
     df["Combo"] = df["Combo"].fillna("")
-    servico = servico.strip().lower()
     existe = df[
         (df["Cliente"] == cliente) &
         (df["Data"] == data) &
-        (df["Serviço"].str.strip().str.lower() == servico) &
+        (df["Serviço"] == servico) &
         (df["Combo"] == combo)
     ]
     return not existe.empty
@@ -63,19 +65,14 @@ valores_servicos = {
 }
 
 # === INTERFACE ===
-st.title("\ud83d\uddd5\ufe0f Adicionar Atendimento")
+st.title("📅 Adicionar Atendimento")
 df_existente, _ = carregar_base()
 df_existente["Data"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
 df_2025 = df_existente[df_existente["Data"].dt.year == 2025]
 
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
-
-# Padroniza serviços
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
-df_2025["Serviço"] = df_2025["Serviço"].astype(str).str.strip().str.lower()
-servicos_existentes = sorted(set(df_2025["Serviço"].unique()))
-servicos_existentes = [s.capitalize() for s in servicos_existentes]
-
+servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
 contas_existentes = sorted(df_2025["Conta"].dropna().unique())
 combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
@@ -98,21 +95,23 @@ with col2:
 
 fase = "Dono + funcionário"
 
+# === CONTROLE DE ESTADO ===
 if "combo_salvo" not in st.session_state:
     st.session_state.combo_salvo = False
 if "simples_salvo" not in st.session_state:
     st.session_state.simples_salvo = False
 
+# === FUNÇÕES DE SALVAMENTO ===
 def salvar_combo(combo, valores_customizados):
     df, _ = carregar_base()
     servicos = combo.split("+")
     novas_linhas = []
     for i, servico in enumerate(servicos):
-        servico = servico.strip().lower()
-        valor = valores_customizados.get(servico, obter_valor_servico(servico))
+        servico_formatado = servico.strip()
+        valor = valores_customizados.get(servico_formatado, obter_valor_servico(servico_formatado))
         linha = {
             "Data": data,
-            "Serviço": servico,
+            "Serviço": servico_formatado,
             "Valor": valor,
             "Conta": conta,
             "Cliente": cliente,
@@ -131,7 +130,6 @@ def salvar_combo(combo, valores_customizados):
 
 def salvar_simples(servico, valor):
     df, _ = carregar_base()
-    servico = servico.strip().lower()
     nova_linha = {
         "Data": data,
         "Serviço": servico,
@@ -152,19 +150,21 @@ def salvar_simples(servico, valor):
 
 # === FORMULÁRIO ===
 if combo:
-    st.subheader("\ud83d\udcb0 Edite os valores do combo antes de salvar:")
+    st.subheader("💰 Edite os valores do combo antes de salvar:")
     valores_customizados = {}
     for servico in combo.split("+"):
-        servico = servico.strip().lower()
-        valor_padrao = obter_valor_servico(servico)
-        valor = st.number_input(f"{servico.capitalize()} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0, key=f"valor_{servico}")
-        valores_customizados[servico] = valor
+        servico_formatado = servico.strip()
+        valor_padrao = obter_valor_servico(servico_formatado)
+        valor = st.number_input(f"{servico_formatado} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}")
+        valores_customizados[servico_formatado] = valor
 
     if not st.session_state.combo_salvo:
         if st.button("✅ Confirmar e Salvar Combo"):
-            duplicado = any(
-                ja_existe_atendimento(cliente, data, s.strip().lower(), combo) for s in combo.split("+")
-            )
+            duplicado = False
+            for s in combo.split("+"):
+                if ja_existe_atendimento(cliente, data, s.strip(), combo):
+                    duplicado = True
+                    break
             if duplicado:
                 st.warning("⚠️ Combo já registrado para este cliente e data.")
             else:
@@ -176,7 +176,7 @@ if combo:
             st.rerun()
 else:
     st.subheader("✂️ Selecione o serviço e valor:")
-    servico = st.selectbox("Serviço", servicos_existentes + [s.capitalize() for s in valores_servicos.keys()])
+    servico = st.selectbox("Serviço", servicos_existentes)
     valor_sugerido = obter_valor_servico(servico)
     valor = st.number_input("Valor", value=valor_sugerido, step=1.0)
 
