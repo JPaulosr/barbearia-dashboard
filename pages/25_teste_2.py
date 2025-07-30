@@ -18,15 +18,31 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
-# === FUNÇÕES AUXILIARES ===
 def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
+    colunas_esperadas = [
+        "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
+        "Funcionário", "Fase", "Tipo",
+        "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
+    ]
+    for coluna in colunas_esperadas:
+        if coluna not in df.columns:
+            df[coluna] = ""
     df["Combo"] = df["Combo"].fillna("")
     return df, aba
 
 def salvar_base(df_final):
+    colunas_padrao = [
+        "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
+        "Funcionário", "Fase", "Tipo",
+        "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
+    ]
+    for col in colunas_padrao:
+        if col not in df_final.columns:
+            df_final[col] = ""
+    df_final = df_final[colunas_padrao]
     aba = conectar_sheets().worksheet(ABA_DADOS)
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
@@ -100,6 +116,12 @@ if "combo_salvo" not in st.session_state:
     st.session_state.combo_salvo = False
 if "simples_salvo" not in st.session_state:
     st.session_state.simples_salvo = False
+
+# === BOTÃO EXTRA PARA LIMPAR FORMULÁRIO ===
+if st.button("🧹 Limpar formulário"):
+    st.session_state.combo_salvo = False
+    st.session_state.simples_salvo = False
+    st.rerun()
 
 # === FUNÇÕES DE SALVAMENTO ===
 def salvar_combo(combo, valores_customizados):
