@@ -92,17 +92,26 @@ servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
 contas_existentes = sorted(df_2025["Conta"].dropna().unique())
 combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
+# === SELEÇÃO E AUTOPREENCHIMENTO ===
 col1, col2 = st.columns(2)
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-    conta = st.selectbox("Forma de Pagamento", contas_existentes + ["Carteira", "Nubank"])
     cliente = st.selectbox("Nome do Cliente", clientes_existentes)
     novo_nome = st.text_input("Ou digite um novo nome de cliente")
     cliente = novo_nome if novo_nome else cliente
-    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + combos_existentes)
+
+    # === Buscar último atendimento
+    ultimo = df_existente[df_existente["Cliente"] == cliente]
+    ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
+    conta_sugerida = ultimo["Conta"] if ultimo is not None else ""
+    funcionario_sugerido = ultimo["Funcionário"] if ultimo is not None else "JPaulo"
+    combo_sugerido = ultimo["Combo"] if ultimo is not None and ultimo["Combo"] else ""
+
+    conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys([conta_sugerida] + contas_existentes + ["Carteira", "Nubank"])))
+    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + list(dict.fromkeys([combo_sugerido] + combos_existentes)))
 
 with col2:
-    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
+    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=["JPaulo", "Vinicius"].index(funcionario_sugerido) if funcionario_sugerido in ["JPaulo", "Vinicius"] else 0)
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
     hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", "00:00:00")
     hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", "00:00:00")
