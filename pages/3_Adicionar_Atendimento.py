@@ -75,7 +75,7 @@ valores_servicos = {
     "pezinho": 7.0,
     "barba": 15.0,
     "sobrancelha": 7.0,
-    "luzes": 80.0,
+    "luzes": 45.0,
     "pintura": 35.0,
     "alisamento": 40.0,
 }
