@@ -71,13 +71,15 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
 
 # === VALORES PADRÃO DE SERVIÇO ===
 valores_servicos = {
-    "corte": 25.0,
-    "pezinho": 7.0,
-    "barba": 15.0,
-    "sobrancelha": 7.0,
-    "luzes": 80.0,
-    "pintura": 35.0,
-    "alisamento": 40.0,
+    "Corte": 25.0,
+    "Pezinho": 7.0,
+    "Barba": 15.0,
+    "Sobrancelha": 7.0,
+    "Luzes": 45.0,
+    "Pintura": 35.0,
+    "Alisamento": 40.0,
+    "Gel": 10.0,
+    "Pomada": 15.0,
 }
 
 # === INTERFACE ===
