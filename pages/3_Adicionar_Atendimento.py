@@ -62,24 +62,22 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
     df["Combo"] = df["Combo"].fillna("")
     existe = df[
-        (df["Cliente"] == cliente) &
-        (df["Data"] == data) &
-        (df["Serviço"] == servico) &
+        (df["Cliente"] == cliente) & 
+        (df["Data"] == data) & 
+        (df["Serviço"] == servico) & 
         (df["Combo"] == combo)
     ]
     return not existe.empty
 
 # === VALORES PADRÃO DE SERVIÇO ===
 valores_servicos = {
-    "Corte": 25.0,
-    "Pezinho": 7.0,
-    "Barba": 15.0,
-    "Sobrancelha": 7.0,
-    "Luzes": 45.0,
-    "Pintura": 35.0,
-    "Alisamento": 40.0,
-    "Gel": 10.0,
-    "Pomada": 15.0,
+    "corte": 25.0,
+    "pezinho": 7.0,
+    "barba": 15.0,
+    "sobrancelha": 7.0,
+    "luzes": 80.0,
+    "pintura": 35.0,
+    "alisamento": 40.0,
 }
 
 # === INTERFACE ===
@@ -94,17 +92,25 @@ servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
 contas_existentes = sorted(df_2025["Conta"].dropna().unique())
 combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
+# === SELEÇÃO E AUTOPREENCHIMENTO ===
 col1, col2 = st.columns(2)
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-    conta = st.selectbox("Forma de Pagamento", contas_existentes + ["Carteira", "Nubank"])
     cliente = st.selectbox("Nome do Cliente", clientes_existentes)
     novo_nome = st.text_input("Ou digite um novo nome de cliente")
     cliente = novo_nome if novo_nome else cliente
-    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + combos_existentes)
+
+    ultimo = df_existente[df_existente["Cliente"] == cliente]
+    ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
+    conta_sugerida = ultimo["Conta"] if ultimo is not None else ""
+    funcionario_sugerido = ultimo["Funcionário"] if ultimo is not None else "JPaulo"
+    combo_sugerido = ultimo["Combo"] if ultimo is not None and ultimo["Combo"] else ""
+
+    conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys([conta_sugerida] + contas_existentes + ["Carteira", "Nubank"])))
+    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + list(dict.fromkeys([combo_sugerido] + combos_existentes)))
 
 with col2:
-    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
+    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=["JPaulo", "Vinicius"].index(funcionario_sugerido) if funcionario_sugerido in ["JPaulo", "Vinicius"] else 0)
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
     hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", "00:00:00")
     hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", "00:00:00")
@@ -119,13 +125,12 @@ if "combo_salvo" not in st.session_state:
 if "simples_salvo" not in st.session_state:
     st.session_state.simples_salvo = False
 
-# === BOTÃO EXTRA PARA LIMPAR FORMULÁRIO ===
 if st.button("🧹 Limpar formulário"):
     st.session_state.combo_salvo = False
     st.session_state.simples_salvo = False
     st.rerun()
 
-# === FUNÇÕES DE SALVAMENTO ===
+# === SALVAMENTO ===
 def salvar_combo(combo, valores_customizados):
     df, _ = carregar_base()
     servicos = combo.split("+")
@@ -194,6 +199,7 @@ if combo:
             else:
                 salvar_combo(combo, valores_customizados)
                 st.session_state.combo_salvo = True
+                st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
     else:
         if st.button("➕ Novo Atendimento"):
             st.session_state.combo_salvo = False
@@ -211,6 +217,7 @@ else:
             else:
                 salvar_simples(servico, valor)
                 st.session_state.simples_salvo = True
+                st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
     else:
         if st.button("➕ Novo Atendimento"):
             st.session_state.simples_salvo = False
