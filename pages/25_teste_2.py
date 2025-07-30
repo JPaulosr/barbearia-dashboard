@@ -200,12 +200,12 @@ if combo:
                 st.warning("⚠️ Combo já registrado para este cliente e data.")
             else:
                 salvar_combo(combo, valores_customizados)
-                st.session_state.combo_salvo = True
-                
+                               st.session_state.combo_salvo = True
+
                 # === Mostrar botão de WhatsApp após salvar
-whatsapp_link = f"https://wa.me/?text=Olá%20{cliente.replace(' ', '%20')}!%20Obrigado%20por%20vir%20ao%20Salão%20JP%20hoje.%20Qualquer%20coisa,%20estamos%20à%20disposição!%20💈✨"
-st.success("✅ Atendimento salvo com sucesso!")
-st.markdown(f"[📲 Enviar mensagem de agradecimento para {cliente}]({whatsapp_link})")
+                whatsapp_link = f"https://wa.me/?text=Olá%20{cliente.replace(' ', '%20')}!%20Obrigado%20por%20vir%20ao%20Salão%20JP%20hoje.%20Qualquer%20coisa,%20estamos%20à%20disposição!%20💈✨"
+                st.success("✅ Atendimento salvo com sucesso!")
+                st.markdown(f"[📲 Enviar mensagem de agradecimento para {cliente}]({whatsapp_link})")
 
     else:
         if st.button("➕ Novo Atendimento"):
