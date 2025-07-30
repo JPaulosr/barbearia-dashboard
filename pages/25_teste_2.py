@@ -62,9 +62,9 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
     df["Combo"] = df["Combo"].fillna("")
     existe = df[
-        (df["Cliente"] == cliente) &
-        (df["Data"] == data) &
-        (df["Serviço"] == servico) &
+        (df["Cliente"] == cliente) & 
+        (df["Data"] == data) & 
+        (df["Serviço"] == servico) & 
         (df["Combo"] == combo)
     ]
     return not existe.empty
@@ -100,7 +100,6 @@ with col1:
     novo_nome = st.text_input("Ou digite um novo nome de cliente")
     cliente = novo_nome if novo_nome else cliente
 
-    # === Buscar último atendimento
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
     conta_sugerida = ultimo["Conta"] if ultimo is not None else ""
@@ -126,13 +125,12 @@ if "combo_salvo" not in st.session_state:
 if "simples_salvo" not in st.session_state:
     st.session_state.simples_salvo = False
 
-# === BOTÃO EXTRA PARA LIMPAR FORMULÁRIO ===
 if st.button("🧹 Limpar formulário"):
     st.session_state.combo_salvo = False
     st.session_state.simples_salvo = False
     st.rerun()
 
-# === FUNÇÕES DE SALVAMENTO ===
+# === SALVAMENTO ===
 def salvar_combo(combo, valores_customizados):
     df, _ = carregar_base()
     servicos = combo.split("+")
@@ -201,10 +199,7 @@ if combo:
             else:
                 salvar_combo(combo, valores_customizados)
                 st.session_state.combo_salvo = True
-
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-
-
     else:
         if st.button("➕ Novo Atendimento"):
             st.session_state.combo_salvo = False
@@ -222,6 +217,7 @@ else:
             else:
                 salvar_simples(servico, valor)
                 st.session_state.simples_salvo = True
+                st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
     else:
         if st.button("➕ Novo Atendimento"):
             st.session_state.simples_salvo = False
