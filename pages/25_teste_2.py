@@ -1,224 +1,89 @@
+
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe, set_with_dataframe
+import plotly.express as px
 from datetime import datetime
-import re
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"
+st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
+st.title("⏱️ Tempos por Atendimento")
 
-@st.cache_resource
-def conectar_sheets():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(SHEET_ID)
+@st.cache_data
+def carregar_dados_google_sheets():
+    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
+    df = pd.read_csv(url)
+    df["Data_convertida"] = pd.to_datetime(df["Data"], errors='coerce')
+    df = df[df["Data_convertida"].notna()].copy()
+    df["Data"] = df["Data_convertida"].dt.date
+    df.drop(columns=["Data_convertida"], inplace=True)
+    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
+    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
+    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
+    df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
+    return df
 
-def carregar_base():
-    aba = conectar_sheets().worksheet(ABA_DADOS)
-    df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
-    colunas_esperadas = [
-        "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
-        "Funcionário", "Fase", "Tipo",
-        "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
-    ]
-    for coluna in colunas_esperadas:
-        if coluna not in df.columns:
-            df[coluna] = ""
-    df["Combo"] = df["Combo"].fillna("")
-    return df, aba
+df = carregar_dados_google_sheets()
 
-def salvar_base(df_final):
-    colunas_padrao = [
-        "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
-        "Funcionário", "Fase", "Tipo",
-        "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
-    ]
-    for col in colunas_padrao:
-        if col not in df_final.columns:
-            df_final[col] = ""
-    df_final = df_final[colunas_padrao]
-    aba = conectar_sheets().worksheet(ABA_DADOS)
-    aba.clear()
-    set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
+colunas_necessarias = ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão", "Cliente", "Funcionário", "Tipo", "Combo", "Data"]
+faltando = [col for col in colunas_necessarias if col not in df.columns]
+if faltando:
+    st.error(f"As colunas obrigatórias estão faltando: {', '.join(faltando)}")
+    st.stop()
 
-def formatar_hora(valor):
-    if re.match(r"^\d{2}:\d{2}:\d{2}$", valor):
-        return valor
-    return "00:00:00"
+st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
+st.markdown("Corrigido: Insights semanais considerarão últimos 7 dias.")
 
-def obter_valor_servico(servico):
-    for chave in valores_servicos.keys():
-        if chave.lower() == servico.lower():
-            return valores_servicos[chave]
-    return 0.0
+st.markdown("### 🎛️ Filtros")
+col_f1, col_f2, col_f3 = st.columns(3)
+funcionarios = df["Funcionário"].dropna().unique().tolist()
+with col_f1:
+    funcionario_selecionado = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
+with col_f2:
+    cliente_busca = st.text_input("Buscar Cliente")
+with col_f3:
+    periodo = st.date_input("Período", value=None, help="Selecione o intervalo de datas")
 
-def ja_existe_atendimento(cliente, data, servico, combo=""):
-    df, _ = carregar_base()
-    df["Combo"] = df["Combo"].fillna("")
-    existe = df[
-        (df["Cliente"] == cliente) & 
-        (df["Data"] == data) & 
-        (df["Serviço"] == servico) & 
-        (df["Combo"] == combo)
-    ]
-    return not existe.empty
+df = df[df["Funcionário"].isin(funcionario_selecionado)]
+if cliente_busca:
+    df = df[df["Cliente"].str.contains(cliente_busca, case=False, na=False)]
+if isinstance(periodo, list) and len(periodo) == 2:
+    df = df[(df["Data"] >= periodo[0]) & (df["Data"] <= periodo[1])]
 
-# === VALORES PADRÃO DE SERVIÇO ===
-valores_servicos = {
-    "corte": 25.0,
-    "pezinho": 7.0,
-    "barba": 15.0,
-    "sobrancelha": 7.0,
-    "luzes": 80.0,
-    "pintura": 35.0,
-    "alisamento": 40.0,
-}
+combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
+combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
+    "Hora Chegada": "min",
+    "Hora Início": "min",
+    "Hora Saída": "max",
+    "Hora Saída do Salão": "max",
+    "Funcionário": "first",
+    "Tipo": lambda x: ', '.join(sorted(set(x)))
+}).reset_index()
 
-# === INTERFACE ===
-st.title("📅 Adicionar Atendimento")
-df_existente, _ = carregar_base()
-df_existente["Data"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
-df_2025 = df_existente[df_existente["Data"].dt.year == 2025]
+combos_df = df.groupby(["Cliente", "Data"])["Combo"].agg(lambda x: ', '.join(sorted(set(str(v) for v in x if pd.notnull(v))))).reset_index()
+combo_grouped = pd.merge(combo_grouped, combos_df, on=["Cliente", "Data"], how="left")
 
-clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
-df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
-servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
-contas_existentes = sorted(df_2025["Conta"].dropna().unique())
-combos_existentes = sorted(df_2025["Combo"].dropna().unique())
+combo_grouped["Data"] = pd.to_datetime(combo_grouped["Data"])
+combo_grouped["Data Group"] = combo_grouped["Data"]
+combo_grouped["Data"] = combo_grouped["Data"].dt.strftime("%d/%m/%Y")
 
-# === SELEÇÃO E AUTOPREENCHIMENTO ===
-col1, col2 = st.columns(2)
-with col1:
-    data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-    cliente = st.selectbox("Nome do Cliente", clientes_existentes)
-    novo_nome = st.text_input("Ou digite um novo nome de cliente")
-    cliente = novo_nome if novo_nome else cliente
+combo_grouped["Hora Chegada"] = combo_grouped["Hora Chegada"].dt.strftime("%H:%M")
+combo_grouped["Hora Início"] = combo_grouped["Hora Início"].dt.strftime("%H:%M")
+combo_grouped["Hora Saída"] = combo_grouped["Hora Saída"].dt.strftime("%H:%M")
+combo_grouped["Hora Saída do Salão"] = combo_grouped["Hora Saída do Salão"].dt.strftime("%H:%M")
 
-    ultimo = df_existente[df_existente["Cliente"] == cliente]
-    ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
-    conta_sugerida = ultimo["Conta"] if ultimo is not None else ""
-    funcionario_sugerido = ultimo["Funcionário"] if ultimo is not None else "JPaulo"
-    combo_sugerido = ultimo["Combo"] if ultimo is not None and ultimo["Combo"] else ""
+def calcular_duracao(row):
+    try:
+        inicio = pd.to_datetime(row["Hora Início"], format="%H:%M")
+        fim = pd.to_datetime(row["Hora Saída"], format="%H:%M")
+        return (fim - inicio).total_seconds() / 60
+    except:
+        return None
 
-    conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys([conta_sugerida] + contas_existentes + ["Carteira", "Nubank"])))
-    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + list(dict.fromkeys([combo_sugerido] + combos_existentes)))
+combo_grouped["Duração (min)"] = combo_grouped.apply(calcular_duracao, axis=1)
+combo_grouped["Duração formatada"] = combo_grouped["Duração (min)"].apply(lambda x: f"{int(x // 60)}h {int(x % 60)}min" if pd.notnull(x) else "")
+combo_grouped["Espera (min)"] = (pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M") - pd.to_datetime(combo_grouped["Hora Chegada"], format="%H:%M")).dt.total_seconds() / 60
+combo_grouped["Categoria"] = combo_grouped["Combo"].apply(lambda x: "Combo" if "+" in str(x) or "," in str(x) else "Simples")
+combo_grouped["Hora Início dt"] = pd.to_datetime(combo_grouped["Hora Início"], format="%H:%M", errors='coerce')
+combo_grouped["Período do Dia"] = combo_grouped["Hora Início dt"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
 
-with col2:
-    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=["JPaulo", "Vinicius"].index(funcionario_sugerido) if funcionario_sugerido in ["JPaulo", "Vinicius"] else 0)
-    tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
-    hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", "00:00:00")
-    hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", "00:00:00")
-    hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", "00:00:00")
-    hora_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", "00:00:00")
-
-fase = "Dono + funcionário"
-
-# === CONTROLE DE ESTADO ===
-if "combo_salvo" not in st.session_state:
-    st.session_state.combo_salvo = False
-if "simples_salvo" not in st.session_state:
-    st.session_state.simples_salvo = False
-
-if st.button("🧹 Limpar formulário"):
-    st.session_state.combo_salvo = False
-    st.session_state.simples_salvo = False
-    st.rerun()
-
-# === SALVAMENTO ===
-def salvar_combo(combo, valores_customizados):
-    df, _ = carregar_base()
-    servicos = combo.split("+")
-    novas_linhas = []
-    for i, servico in enumerate(servicos):
-        servico_formatado = servico.strip()
-        valor = valores_customizados.get(servico_formatado, obter_valor_servico(servico_formatado))
-        linha = {
-            "Data": data,
-            "Serviço": servico_formatado,
-            "Valor": valor,
-            "Conta": conta,
-            "Cliente": cliente,
-            "Combo": combo,
-            "Funcionário": funcionario,
-            "Fase": fase,
-            "Tipo": tipo,
-            "Hora Chegada": hora_chegada if i == 0 else "",
-            "Hora Início": hora_inicio if i == 0 else "",
-            "Hora Saída": hora_saida if i == 0 else "",
-            "Hora Saída do Salão": hora_salao if i == 0 else "",
-        }
-        novas_linhas.append(linha)
-    df_final = pd.concat([df, pd.DataFrame(novas_linhas)], ignore_index=True)
-    salvar_base(df_final)
-
-def salvar_simples(servico, valor):
-    df, _ = carregar_base()
-    nova_linha = {
-        "Data": data,
-        "Serviço": servico,
-        "Valor": valor,
-        "Conta": conta,
-        "Cliente": cliente,
-        "Combo": "",
-        "Funcionário": funcionario,
-        "Fase": fase,
-        "Tipo": tipo,
-        "Hora Chegada": hora_chegada,
-        "Hora Início": hora_inicio,
-        "Hora Saída": hora_saida,
-        "Hora Saída do Salão": hora_salao,
-    }
-    df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
-    salvar_base(df_final)
-
-# === FORMULÁRIO ===
-if combo:
-    st.subheader("💰 Edite os valores do combo antes de salvar:")
-    valores_customizados = {}
-    for servico in combo.split("+"):
-        servico_formatado = servico.strip()
-        valor_padrao = obter_valor_servico(servico_formatado)
-        valor = st.number_input(f"{servico_formatado} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}")
-        valores_customizados[servico_formatado] = valor
-
-    if not st.session_state.combo_salvo:
-        if st.button("✅ Confirmar e Salvar Combo"):
-            duplicado = False
-            for s in combo.split("+"):
-                if ja_existe_atendimento(cliente, data, s.strip(), combo):
-                    duplicado = True
-                    break
-            if duplicado:
-                st.warning("⚠️ Combo já registrado para este cliente e data.")
-            else:
-                salvar_combo(combo, valores_customizados)
-                st.session_state.combo_salvo = True
-                st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-    else:
-        if st.button("➕ Novo Atendimento"):
-            st.session_state.combo_salvo = False
-            st.rerun()
-else:
-    st.subheader("✂️ Selecione o serviço e valor:")
-    servico = st.selectbox("Serviço", servicos_existentes)
-    valor_sugerido = obter_valor_servico(servico)
-    valor = st.number_input("Valor", value=valor_sugerido, step=1.0)
-
-    if not st.session_state.simples_salvo:
-        if st.button("📁 Salvar Atendimento"):
-            if ja_existe_atendimento(cliente, data, servico):
-                st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
-            else:
-                salvar_simples(servico, valor)
-                st.session_state.simples_salvo = True
-                st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-    else:
-        if st.button("➕ Novo Atendimento"):
-            st.session_state.simples_salvo = False
-            st.rerun()
+df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
+df_tempo["Data Group"] = pd.to_datetime(df_tempo["Data"], format="%d/%m/%Y", errors='coerce')
