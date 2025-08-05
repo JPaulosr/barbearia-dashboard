@@ -118,9 +118,12 @@ st.subheader("📊 Quantidade por Período do Dia")
 if df_tempo["Período do Dia"].notna().sum() > 0:
     ordem = ["Manhã", "Tarde", "Noite"]
     turno_counts = df_tempo["Período do Dia"].value_counts().reindex(ordem).fillna(0)
-    fig_turno = px.bar(turno_counts.reset_index(), x="index", y="Período do Dia",
-                       labels={"index": "Período do Dia", "Período do Dia": "Quantidade"},
-                       title="Distribuição de Atendimentos por Turno")
+    df_turno = turno_counts.reset_index()
+df_turno.columns = ["Período do Dia", "Quantidade"]
+
+fig_turno = px.bar(df_turno, x="Período do Dia", y="Quantidade",
+                   labels={"Período do Dia": "Turno", "Quantidade": "Qtd Atendimentos"},
+                   title="Distribuição de Atendimentos por Turno")
     fig_turno.update_layout(title_x=0.5)
     st.plotly_chart(fig_turno, use_container_width=True)
 else:
