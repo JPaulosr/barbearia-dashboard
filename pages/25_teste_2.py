@@ -10,7 +10,9 @@ st.title("⏱️ Tempos por Atendimento")
 @st.cache_data
 def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url, header=0)
+
+    # Pula a primeira linha (que contém os agrupamentos visuais) e usa a segunda como cabeçalho
+    df = pd.read_csv(url, skiprows=1)
 
     df.columns = df.columns.str.strip()
     st.write("🔍 Colunas encontradas:", df.columns.tolist())
