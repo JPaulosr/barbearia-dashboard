@@ -47,7 +47,11 @@ df = carregar_dados()
 df_fotos = carregar_fotos()
 
 # Junta dados com 'Família'
-df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
+# Normaliza nomes para garantir que o merge funcione
+df["Cliente_norm"] = df["Cliente"].str.strip().str.lower()
+df_fotos["Cliente_norm"] = df_fotos["Cliente"].str.strip().str.lower()
+
+df_familia = df.merge(df_fotos[["Cliente_norm", "Família"]], left_on="Cliente_norm", right_on="Cliente_norm", how="left")
 df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
 # Agrupa por Família e soma valores
