@@ -1,131 +1,104 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime
+import requests
+from PIL import Image
+from io import BytesIO
+import gspread
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Tempos por Atendimento", page_icon="⏱️", layout="wide")
-st.title("⏱️ Tempos por Atendimento")
+st.set_page_config(layout="wide")
+st.subheader("👨‍👩‍👧‍👦 Cliente Família — Todas as Famílias")
 
-# === Função para carregar os dados do Google Sheets ===
+# === GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+ABA_BASE = "Base de Dados"
+ABA_STATUS = "clientes_status"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
+
 @st.cache_data
-def carregar_dados_google_sheets():
-    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url)
-    df.columns = df.columns.str.strip()
-
-    # Tenta encontrar a linha com a coluna "Data"
-    if "Data" not in df.columns:
-        for i in range(5):
-            temp = pd.read_csv(url, skiprows=i+1)
-            temp.columns = temp.columns.str.strip()
-            if "Data" in temp.columns:
-                df = temp.copy()
-                break
-
-    df["Data_convertida"] = pd.to_datetime(df["Data"], errors="coerce")
-    df = df[df["Data_convertida"].notna()].copy()
-    df["Data"] = df["Data_convertida"].dt.date
-    df.drop(columns=["Data_convertida"], inplace=True)
-
-    df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
-    df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
-    df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
-    df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
-
+def carregar_dados():
+    planilha = conectar_sheets()
+    df = get_as_dataframe(planilha.worksheet(ABA_BASE)).dropna(how="all")
+    df.columns = [c.strip() for c in df.columns]
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df = df.dropna(subset=["Cliente", "Funcionário"])
+    df = df[df["Cliente"].str.lower().str.contains("boliviano|brasileiro|menino|sem preferencia|funcionário") == False]
+    df = df[df["Cliente"].str.strip() != ""]
+    df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
     return df
 
-# === Carrega os dados ===
-df = carregar_dados_google_sheets()
-df = df[df["Funcionário"].notna() & df["Cliente"].notna()]
+@st.cache_data
+def carregar_fotos():
+    planilha = conectar_sheets()
+    df_status = get_as_dataframe(planilha.worksheet(ABA_STATUS)).dropna(how="all")
+    df_status.columns = [c.strip() for c in df_status.columns]
+    return df_status[["Cliente", "Foto", "Família"]].dropna(subset=["Cliente"])
 
-# === Filtros ===
-st.subheader("🧃 Filtros")
-col1, col2, col3 = st.columns([2, 2, 2])
+df = carregar_dados()
+df_fotos = carregar_fotos()
 
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-clientes = df["Cliente"].dropna().unique().tolist()
-datas_unicas = sorted(df["Data"].unique(), reverse=True)
+# Junta dados com 'Família'
+df_familia = df.merge(df_fotos[["Cliente", "Família"]], on="Cliente", how="left")
+df_familia = df_familia[df_familia["Família"].notna() & (df_familia["Família"].str.strip() != "")]
 
-with col1:
-    filtro_func = st.multiselect("Filtrar por Funcionário", funcionarios, default=funcionarios)
-with col2:
-    filtro_cli = st.text_input("Buscar Cliente")
-with col3:
-    filtro_data = st.date_input("Período", value=max(datas_unicas) if datas_unicas else None)
+# Agrupa por Família e soma valores
+familia_valores = df_familia.groupby("Família")["Valor"].sum()
+familia_valores = familia_valores[familia_valores > 0].sort_values(ascending=False)
 
-df = df[df["Funcionário"].isin(filtro_func)]
-if filtro_cli:
-    df = df[df["Cliente"].str.contains(filtro_cli, case=False, na=False)]
-if filtro_data:
-    df = df[df["Data"] == filtro_data]
+# Conta atendimentos únicos por cliente + data
+atendimentos_unicos = df_familia.drop_duplicates(subset=["Cliente", "Data"])
+familia_atendimentos = atendimentos_unicos.groupby("Família").size()
+dias_distintos = df_familia.drop_duplicates(subset=["Família", "Data"]).groupby("Família").size()
 
-# === Agrupar por atendimento único (Cliente + Data) ===
-combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
-combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
-    "Hora Chegada": "min",
-    "Hora Início": "min",
-    "Hora Saída": "max",
-    "Hora Saída do Salão": "max",
-    "Funcionário": "first",
-    "Tipo": lambda x: ', '.join(sorted(set(x)))
-}).reset_index()
+for idx, familia in enumerate(familia_valores.index):
+    valor_total = familia_valores[familia]
+    qtd_atendimentos = familia_atendimentos.get(familia, 0)
+    qtd_dias = dias_distintos.get(familia, 0)
 
-combo_grouped["Duração (min)"] = (combo_grouped["Hora Saída"] - combo_grouped["Hora Início"]).dt.total_seconds() / 60
-combo_grouped["Espera (min)"] = (combo_grouped["Hora Início"] - combo_grouped["Hora Chegada"]).dt.total_seconds() / 60
-combo_grouped["Hora Início dt"] = combo_grouped["Hora Início"]
-combo_grouped["Data Group"] = pd.to_datetime(combo_grouped["Data"])
+    membros = df_fotos[df_fotos["Família"] == familia]
+    qtd_membros = len(membros)
 
-# Turno do dia
-combo_grouped["Período do Dia"] = combo_grouped["Hora Início"].dt.hour.apply(
-    lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
+    nome_pai = familia.replace("Família ", "").strip().lower()
+    nome_pai_formatado = nome_pai.capitalize()
+    membro_foto = None
 
-df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
+    for i, row in membros.iterrows():
+        cliente_nome = str(row["Cliente"]).strip().lower()
+        foto = row["Foto"]
+        if cliente_nome == nome_pai and pd.notna(foto):
+            membro_foto = foto
+            break
 
-# === Insights Semanais ===
-st.subheader("🔍 Insights da Semana")
-hoje = pd.Timestamp.now().normalize()
-semana = hoje - pd.Timedelta(days=6)
-df_semana = df_tempo[(df_tempo["Data Group"].dt.date >= semana.date()) & (df_tempo["Data Group"].dt.date <= hoje.date())]
+    if not membro_foto and membros["Foto"].notna().any():
+        membro_foto = membros["Foto"].dropna().values[0]
 
-if df_semana.empty:
-    st.info("Nenhum atendimento nos últimos 7 dias.")
-else:
-    soma_por_func = df_semana.groupby("Funcionário")["Duração (min)"].sum()
-    for func, total in soma_por_func.items():
-        horas = int(total // 60)
-        minutos = int(total % 60)
-        st.markdown(f"**{func}** – {horas}h {minutos}min")
+    linha = st.columns([0.05, 0.12, 0.83])
+    linha[0].markdown(f"### {idx + 1}")
 
-    mais_lento = df_semana.nlargest(1, "Duração (min)")
-    mais_espera = df_semana.nlargest(1, "Espera (min)")
-    if not mais_lento.empty:
-        st.markdown(f"📌 Atendimento mais longo: **{mais_lento['Cliente'].values[0]}** ({int(mais_lento['Duração (min)'].values[0])} min)")
-    if not mais_espera.empty:
-        st.markdown(f"⌛ Maior espera: **{mais_espera['Cliente'].values[0]}** ({int(mais_espera['Espera (min)'].values[0])} min)")
+    if membro_foto:
+        try:
+            response = requests.get(membro_foto)
+            img = Image.open(BytesIO(response.content))
+            linha[1].image(img, width=50)
+        except:
+            linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
+    else:
+        linha[1].image("https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png", width=50)
 
-# === Rankings de Tempo ===
-st.subheader("🏆 Rankings de Tempo")
-col_rank1, col_rank2 = st.columns(2)
-with col_rank1:
-    st.markdown("### Mais Rápidos")
-    st.dataframe(df_tempo.nsmallest(10, "Duração (min)")[["Data", "Cliente", "Funcionário", "Hora Início"]])
-with col_rank2:
-    st.markdown("### Mais Lentos")
-    st.dataframe(df_tempo.nlargest(10, "Duração (min)")[["Data", "Cliente", "Funcionário", "Hora Início"]])
-
-# === Gráfico: Quantidade por Período do Dia ===
-st.subheader("📊 Quantidade por Período do Dia")
-if df_tempo["Período do Dia"].notna().sum() > 0:
-    ordem = ["Manhã", "Tarde", "Noite"]
-    turno_counts = df_tempo["Período do Dia"].value_counts().reindex(ordem).fillna(0)
-    df_turno = turno_counts.reset_index()
-    df_turno.columns = ["Período do Dia", "Quantidade"]
-
-    fig_turno = px.bar(df_turno, x="Período do Dia", y="Quantidade",
-                       labels={"Período do Dia": "Turno", "Quantidade": "Qtd Atendimentos"},
-                       title="Distribuição de Atendimentos por Turno")
-    fig_turno.update_layout(title_x=0.5)
-    st.plotly_chart(fig_turno, use_container_width=True)
-else:
-    st.warning("Não há dados suficientes para o gráfico de períodos do dia.")
-
+    texto = f"""
+    Família **{nome_pai_formatado}**  
+    💰 Total gasto: R$ {valor_total:,.2f}  
+    📆 Dias distintos: {qtd_dias}  
+    🧼 Atendimentos: {qtd_atendimentos}  
+    👥 Membros: {qtd_membros}
+    """
+    linha[2].markdown(texto)
