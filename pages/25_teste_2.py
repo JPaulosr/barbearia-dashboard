@@ -11,7 +11,6 @@ st.title("⏱️ Tempos por Atendimento")
 def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
     df = pd.read_csv(url, skiprows=1)  # ESSENCIAL!
-
     df.columns = df.columns.str.strip()
     df["Data_convertida"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df[df["Data_convertida"].notna()].copy()
@@ -22,14 +21,11 @@ def carregar_dados_google_sheets():
     df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
     df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
     df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
-
     return df
-
 
 df = carregar_dados_google_sheets()
 df = df[df["Funcionário"].notna() & df["Cliente"].notna()]
 
-# Agrupamento por atendimento único
 combo_grouped = df.dropna(subset=["Hora Início", "Hora Saída", "Cliente", "Data", "Funcionário", "Tipo"]).copy()
 combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Hora Chegada": "min",
@@ -40,19 +36,18 @@ combo_grouped = combo_grouped.groupby(["Cliente", "Data"]).agg({
     "Tipo": lambda x: ', '.join(sorted(set(x)))
 }).reset_index()
 
-# Duração e Espera
 combo_grouped["Duração (min)"] = (combo_grouped["Hora Saída"] - combo_grouped["Hora Início"]).dt.total_seconds() / 60
 combo_grouped["Espera (min)"] = (combo_grouped["Hora Início"] - combo_grouped["Hora Chegada"]).dt.total_seconds() / 60
 combo_grouped["Hora Início dt"] = combo_grouped["Hora Início"]
 combo_grouped["Data Group"] = pd.to_datetime(combo_grouped["Data"])
 
-# Turno
-combo_grouped["Período do Dia"] = combo_grouped["Hora Início"].dt.hour.apply(lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite")
+combo_grouped = combo_grouped.dropna(subset=["Hora Início"])
+combo_grouped["Período do Dia"] = combo_grouped["Hora Início"].dt.hour.apply(
+    lambda h: "Manhã" if 6 <= h < 12 else "Tarde" if 12 <= h < 18 else "Noite"
+)
 
-# Filtro para análises
 df_tempo = combo_grouped.dropna(subset=["Duração (min)"]).copy()
 
-# Tempo por funcionário na semana
 st.subheader("📆 Tempo Trabalhado por Funcionário (Últimos 7 dias)")
 hoje = pd.Timestamp.now().normalize()
 ultimos_7_dias = hoje - pd.Timedelta(days=6)
@@ -63,7 +58,6 @@ for func, total in soma_por_func.items():
     minutos = int(total % 60)
     st.markdown(f"**{func}** – {horas}h {minutos}min")
 
-# Insights automáticos
 st.subheader("💬 Insights automáticos")
 mais_lento = df_semana.nlargest(1, "Duração (min)")
 mais_espera = df_semana.nlargest(1, "Espera (min)")
@@ -72,10 +66,11 @@ if not mais_lento.empty:
 if not mais_espera.empty:
     st.markdown(f"⌛ Cliente que mais esperou: **{mais_espera['Cliente'].values[0]}** ({int(mais_espera['Espera (min)'].values[0])} min)")
 
-# Gráfico comparativo por funcionário
 st.subheader("📊 Comparativo de Tempo por Funcionário")
 graf_comp = df_semana.groupby("Funcionário")[["Duração (min)", "Espera (min)"]].mean().reset_index()
-graf_comp["Duração formatada"] = graf_comp["Duração (min)"].apply(lambda x: f"{int(x//60)}h {int(x%60)}min")
+graf_comp["Duração formatada"] = graf_comp["Duração (min)"].apply(
+    lambda x: f"{int(x//60)}h {int(x%60)}min" if pd.notnull(x) else "-"
+)
 fig = px.bar(graf_comp, x="Funcionário", y="Duração (min)", color="Funcionário", text="Duração formatada",
              title="Tempo Médio por Funcionário (Últimos 7 dias)")
 fig.update_traces(textposition="outside")
