@@ -10,8 +10,16 @@ st.title("⏱️ Tempos por Atendimento")
 @st.cache_data
 def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url, skiprows=1)  # ESSENCIAL!
+    
+    # 👇 ESSENCIAL! pula a primeira linha com agrupamentos
+    df = pd.read_csv(url, skiprows=1)
+
     df.columns = df.columns.str.strip()
+
+    if "Data" not in df.columns:
+        st.error("❌ A coluna 'Data' não foi encontrada. Verifique a planilha ou se 'skiprows=1' foi aplicado.")
+        st.stop()
+
     df["Data_convertida"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df[df["Data_convertida"].notna()].copy()
     df["Data"] = df["Data_convertida"].dt.date
@@ -21,6 +29,7 @@ def carregar_dados_google_sheets():
     df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
     df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
     df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
+
     return df
 
 df = carregar_dados_google_sheets()
