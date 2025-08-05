@@ -10,17 +10,21 @@ st.title("⏱️ Tempos por Atendimento")
 @st.cache_data
 def carregar_dados_google_sheets():
     url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url, skiprows=1)
+    df = pd.read_csv(url, skiprows=1)  # ESSENCIAL!
+
     df.columns = df.columns.str.strip()
     df["Data_convertida"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df[df["Data_convertida"].notna()].copy()
     df["Data"] = df["Data_convertida"].dt.date
     df.drop(columns=["Data_convertida"], inplace=True)
+
     df["Hora Chegada"] = pd.to_datetime(df["Hora Chegada"], errors='coerce')
     df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors='coerce')
     df["Hora Saída"] = pd.to_datetime(df["Hora Saída"], errors='coerce')
     df["Hora Saída do Salão"] = pd.to_datetime(df["Hora Saída do Salão"], errors='coerce')
+
     return df
+
 
 df = carregar_dados_google_sheets()
 df = df[df["Funcionário"].notna() & df["Cliente"].notna()]
