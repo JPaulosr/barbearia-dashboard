@@ -1,90 +1,79 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from datetime import datetime
+from google.oauth2.service_account import Credentials
+import gspread
+from gspread_dataframe import get_as_dataframe
 
-st.set_page_config(page_title="Receita Mensal", layout="wide")
+st.set_page_config(page_title="Receita Mensal por Mês e Ano", layout="wide")
 st.title("📊 Receita Mensal por Mês e Ano")
 
-# === Função para carregar dados ===
+# === CONEXÃO COM GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+ABA_DADOS = "Base de Dados"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
+
 @st.cache_data
-def carregar_dados():
-    url_base = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    url_desp = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Despesas"
-    base = pd.read_csv(url_base)
-    despesas = pd.read_csv(url_desp)
-    
-    base["Data"] = pd.to_datetime(base["Data"], errors="coerce")
-    despesas["Data"] = pd.to_datetime(despesas["Data"], errors="coerce")
-    
-    base["AnoMes"] = base["Data"].dt.to_period("M")
-    base["MesNum"] = base["Data"].dt.month
-    base["MesNome"] = base["Data"].dt.strftime('%B %Y')
-    
-    return base, despesas
+def carregar_base():
+    aba = conectar_sheets().worksheet(ABA_DADOS)
+    df = get_as_dataframe(aba).dropna(how="all")
+    df.columns = [str(col).strip() for col in df.columns]
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+    df["Valor"] = pd.to_numeric(df["Valor"], errors='coerce')
+    return df
 
-base, despesas = carregar_dados()
+# === CARREGAR BASE ===
+base = carregar_base()
 
-# === Receita JPaulo ===
-df_jpaulo = base[base["Funcionário"] == "JPaulo"]
-receita_jpaulo = df_jpaulo.groupby("MesNome")["Valor"].sum().reset_index()
-receita_jpaulo["MesNum"] = pd.to_datetime(receita_jpaulo["MesNome"], format='%B %Y').dt.month
-receita_jpaulo = receita_jpaulo.rename(columns={"Valor": "Receita_JPaulo"})
+# === FILTRAR JPAULO ===
+df_jpaulo = base[base["Funcionário"] == "JPaulo"].copy()
+df_jpaulo["MesNome"] = df_jpaulo["Data"].dt.strftime('%B %Y')
+df_jpaulo["MesNum"] = df_jpaulo["Data"].dt.month
+df_jpaulo["Ano"] = df_jpaulo["Data"].dt.year
 
-# === Comissão paga ao Vinicius ===
-comissoes_vinicius = despesas[despesas["Descrição"].str.contains("comissão", case=False) & despesas["Descrição"].str.contains("vinicius", case=False)]
-comissoes_vinicius["MesNome"] = comissoes_vinicius["Data"].dt.strftime('%B %Y')
-comissoes_vinicius["MesNum"] = comissoes_vinicius["Data"].dt.month
-comissoes_mes = comissoes_vinicius.groupby("MesNome")["Valor"].sum().reset_index()
-comissoes_mes = comissoes_mes.rename(columns={"Valor": "Comissao_Vinicius"})
+receita_jpaulo = df_jpaulo.groupby(["Ano", "MesNome", "MesNum"])["Valor"].sum().reset_index()
 
-# === Receita real do salão ===
-receita_total = base.groupby("MesNome")["Valor"].sum().reset_index()
-receita_total["MesNum"] = pd.to_datetime(receita_total["MesNome"], format='%B %Y').dt.month
-receita_total = receita_total.rename(columns={"Valor": "Receita_Bruta_Total"})
+# === COMISSÕES PAGAS AO VINICIUS ===
+comissoes = base[(base["Funcionário"] == "Vinicius") & (base["Tipo"] == "Despesa")].copy()
+comissoes["MesNome"] = comissoes["Data"].dt.strftime('%B %Y')
+comissoes["MesNum"] = comissoes["Data"].dt.month
+comissoes["Ano"] = comissoes["Data"].dt.year
 
-# Merge para calcular Receita líquida do salão
-receita_merged = receita_jpaulo.merge(comissoes_mes, on="MesNome", how="outer")
-receita_merged = receita_merged.merge(receita_total, on="MesNome", how="outer")
-receita_merged["MesNum"] = receita_merged["MesNum_x"].combine_first(receita_merged["MesNum_y"])
+comissoes_mes = comissoes.groupby(["Ano", "MesNome", "MesNum"])["Valor"].sum().reset_index()
 
-receita_merged["Receita_Real_Salao"] = receita_merged["Receita_JPaulo"].fillna(0) + (
-    receita_merged["Receita_Bruta_Total"].fillna(0) - receita_merged["Receita_JPaulo"].fillna(0) - receita_merged["Comissao_Vinicius"].fillna(0)
-)
+# === JUNÇÃO E CÁLCULO ===
+receita_total = receita_jpaulo.merge(comissoes_mes, on=["Ano", "MesNome", "MesNum"], how="outer", suffixes=("_JPaulo", "_ComVinicius"))
+receita_total = receita_total.fillna(0)
+receita_total["Receita Real do Salão"] = receita_total["Valor_JPaulo"] + receita_total["Valor_ComVinicius"]
 
-# === Corrigir nomes duplicados ===
-receita_merged = receita_merged[["MesNome", "MesNum", "Receita_JPaulo", "Comissao_Vinicius", "Receita_Real_Salao"]]
+# === ORDENAR ===
+receita_total = receita_total.sort_values(["Ano", "MesNum"])
 
-# === Gráfico comparativo ===
-df_melt = receita_merged.melt(
-    id_vars=["MesNum", "MesNome"],
-    value_vars=["Receita_JPaulo", "Receita_Real_Salao"],
-    var_name="Tipo", value_name="Valor"
-).sort_values("MesNum")
+# === GRÁFICO ===
+fig = px.bar(receita_total,
+             x="MesNome",
+             y=["Valor_JPaulo", "Valor_ComVinicius"],
+             barmode="group",
+             labels={"value": "Receita (R$)", "MesNome": "Mês"},
+             height=450)
 
-df_melt["Tipo"] = df_melt["Tipo"].replace({
-    "Receita_JPaulo": "JPaulo",
-    "Receita_Real_Salao": "Com_Vinicius"
-})
+st.plotly_chart(fig, use_container_width=True)
 
-fig_mensal_comp = px.bar(
-    df_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
-    labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""}
-)
-st.plotly_chart(fig_mensal_comp, use_container_width=True, key="plot_mensal_jpaulo")
-
-# === Tabela detalhada ===
-tabela = receita_merged.sort_values("MesNum")
-tabela["Receita_JPaulo"] = tabela["Receita_JPaulo"].fillna(0).apply(lambda x: f"R$ {x:,.2f}".replace('.', ','))
-tabela["Comissao_Vinicius"] = tabela["Comissao_Vinicius"].fillna(0).apply(lambda x: f"R$ {x:,.2f}".replace('.', ','))
-tabela["Receita_Real_Salao"] = tabela["Receita_Real_Salao"].fillna(0).apply(lambda x: f"R$ {x:,.2f}".replace('.', ','))
-
+# === TABELA ===
 st.dataframe(
-    tabela[["MesNome", "Receita_JPaulo", "Comissao_Vinicius", "Receita_Real_Salao"]].rename(columns={
+    receita_total[["MesNome", "Valor_JPaulo", "Valor_ComVinicius", "Receita Real do Salão"]]
+    .rename(columns={
         "MesNome": "Mês",
-        "Receita_JPaulo": "Receita JPaulo",
-        "Comissao_Vinicius": "Comissão paga ao Vinicius",
-        "Receita_Real_Salao": "Receita Real do Salão"
+        "Valor_JPaulo": "Receita JPaulo",
+        "Valor_ComVinicius": "Comissão paga ao Vinicius"
     }),
-    use_container_width=True,
-    hide_index=True
+    use_container_width=True
 )
