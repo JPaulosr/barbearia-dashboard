@@ -163,7 +163,41 @@ df_com_vinicius = df_com_vinicius.groupby("MesNum")["Valor"].sum().reset_index(n
 
 if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     receita_merged = receita_jp.merge(df_com_vinicius, on="MesNum", how="left").fillna(0)
-    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + receita_merged["Comissão (real) do Vinicius"]
+
+    # === Receita bruta do Vinicius por mês ===
+    receita_mes_vinicius = df[
+        (df["Funcionário"] == "Vinicius") & 
+        (df["Ano"] == 2025)
+    ].copy()
+    receita_mes_vinicius["MesNum"] = receita_mes_vinicius["Data"].dt.month
+    receita_mes_vinicius = receita_mes_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="Receita_Vinicius")
+
+    # Merge com a base principal
+    receita_merged = receita_merged.merge(receita_mes_vinicius, on="MesNum", how="left").fillna(0)
+
+    # Receita real do salão = JPaulo + parte líquida do Vinicius
+    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + (
+        receita_merged["Receita_Vinicius"] - receita_merged["Comissão (real) do Vinicius"]
+    )
+
+    # Montar gráfico
+    receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
+                                       var_name="Tipo", value_name="Valor")
+    receita_melt = receita_melt.sort_values("MesNum")
+
+    fig_mensal_comp = px.bar(receita_melt, x="MesNome", y="Valor", color="Tipo", barmode="group", text_auto=True,
+                             labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""})
+    fig_mensal_comp.update_layout(height=450, template="plotly_white")
+    st.plotly_chart(fig_mensal_comp, use_container_width=True)
+
+    # Exibir tabela
+    receita_merged["Comissão (real) do Vinicius"] = receita_merged["Comissão (real) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    receita_merged["JPaulo Formatado"] = receita_merged["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+    receita_merged["Total (JPaulo + Comissão líquida)"] = receita_merged["Com_Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+    tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (real) do Vinicius", "Total (JPaulo + Comissão líquida)"]]
+    tabela.columns = ["Mês", "Receita JPaulo", "Comissão paga ao Vinicius", "Receita Real do Salão"]
+    st.dataframe(tabela, use_container_width=True)
 
     receita_melt = receita_merged.melt(id_vars=["MesNum", "MesNome"], value_vars=["JPaulo", "Com_Vinicius"],
                                        var_name="Tipo", value_name="Valor")
