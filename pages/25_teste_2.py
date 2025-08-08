@@ -1,107 +1,71 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from unidecode import unidecode
-from io import BytesIO
-import gspread
-from gspread_dataframe import get_as_dataframe
-from google.oauth2.service_account import Credentials
+from datetime import datetime
 
-st.set_page_config(layout="wide")
-st.title("🧑‍💼 Detalhes do Funcionário")
+st.set_page_config(page_title="Criar coluna Período", page_icon="🕒", layout="wide")
+st.title("🕒 Criar coluna 'Período' (Manhã/Tarde/Noite) a partir dos horários")
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-BASE_ABA = "Base de Dados"
-
-@st.cache_resource
-def conectar_sheets():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(SHEET_ID)
-
+# === 1) Carregar Base do Google Sheets (CSV público) ===
 @st.cache_data
-def carregar_dados():
-    planilha = conectar_sheets()
-    aba = planilha.worksheet(BASE_ABA)
-    df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(col).strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year.astype(int)
+def carregar_dados_google_sheets():
+    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
+    df = pd.read_csv(url)
+    # Tipos básicos
+    if "Data" in df.columns:
+        df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.date
+
+    # Converter colunas de horário para datetime (mantém NaT se vazio)
+    for col in ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+
     return df
 
-df = carregar_dados()
+df = carregar_dados_google_sheets()
 
-@st.cache_data
-def carregar_despesas():
-    planilha = conectar_sheets()
-    aba_desp = planilha.worksheet("Despesas")
-    df_desp = get_as_dataframe(aba_desp).dropna(how="all")
-    df_desp.columns = [str(col).strip() for col in df_desp.columns]
-    df_desp["Data"] = pd.to_datetime(df_desp["Data"], errors="coerce")
-    df_desp = df_desp.dropna(subset=["Data"])
-    df_desp["Ano"] = df_desp["Data"].dt.year.astype(int)
-    return df_desp
+# Validação mínima (só para garantir que as colunas existem)
+colunas_necessarias = ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"]
+faltando = [c for c in colunas_necessarias if c not in df.columns]
+if faltando:
+    st.error(f"Colunas de horário ausentes na base: {', '.join(faltando)}")
+    st.stop()
 
-df_despesas = carregar_despesas()
+st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 
-# === Lista de funcionários ===
-funcionarios = df["Funcionário"].dropna().unique().tolist()
-funcionarios.sort()
+# === 2) (BLOCO QUE VOCÊ PODE COPIAR PARA O SEU APP) Criar coluna 'Período' ===
+# Prioridade: Hora Início > Hora Chegada > Hora Saída > Hora Saída do Salão
+def definir_periodo(horario):
+    if pd.isna(horario):
+        return "Indefinido"
+    h = int(horario.hour)
+    if 6 <= h < 12:
+        return "Manhã"
+    elif 12 <= h < 18:
+        return "Tarde"
+    else:
+        return "Noite"
 
-# === Filtro por ano ===
-anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
-ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
+def primeiro_horario_valido(row):
+    for c in ["Hora Início", "Hora Chegada", "Hora Saída", "Hora Saída do Salão"]:
+        if c in row and pd.notna(row[c]):
+            return row[c]
+    return pd.NaT
 
-# === Filtros adicionais ===
-col_filtros = st.columns(3)
+df["Período"] = df.apply(lambda r: definir_periodo(primeiro_horario_valido(r)), axis=1)
 
-# === Seleção de funcionário ===
-funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
-df_func = df[(df["Funcionário"] == funcionario_escolhido) & (df["Ano"] == ano_escolhido)].copy()
+st.success("Coluna 'Período' criada com sucesso a partir dos horários existentes.")
 
-# Filtro por mês
-meses_disponiveis = df_func["Data"].dt.month.unique()
-meses_disponiveis.sort()
-mes_filtro = col_filtros[0].selectbox("📆 Filtrar por mês", options=["Todos"] + list(meses_disponiveis))
-if mes_filtro != "Todos":
-    df_func = df_func[df_func["Data"].dt.month == mes_filtro]
+# === 3) Prévia e Download ===
+st.subheader("Prévia (com a nova coluna 'Período')")
+cols_preview = [c for c in ["Data","Cliente","Funcionário","Tipo","Combo","Hora Chegada","Hora Início","Hora Saída","Hora Saída do Salão","Período"] if c in df.columns]
+st.dataframe(df[cols_preview].head(50), use_container_width=True)
 
-# Filtro por dia
-dias_disponiveis = df_func["Data"].dt.day.unique()
-dias_disponiveis.sort()
-dia_filtro = col_filtros[1].selectbox("📅 Filtrar por dia", options=["Todos"] + list(dias_disponiveis))
-if dia_filtro != "Todos":
-    df_func = df_func[df_func["Data"].dt.day == dia_filtro]
+csv_out = df.to_csv(index=False).encode("utf-8-sig")
+st.download_button(
+    label="⬇️ Baixar CSV com a coluna 'Período'",
+    data=csv_out,
+    file_name="base_com_periodo.csv",
+    mime="text/csv"
+)
 
-# Filtro por semana
-df_func["Semana"] = df_func["Data"].dt.isocalendar().week
-semanas_disponiveis = df_func["Semana"].unique().tolist()
-semanas_disponiveis.sort()
-semana_filtro = col_filtros[2].selectbox("🗓️ Filtrar por semana", options=["Todas"] + list(semanas_disponiveis))
-if semana_filtro != "Todas":
-    df_func = df_func[df_func["Semana"] == semana_filtro]
-
-# Filtro por serviço
-tipos_servico = df_func["Serviço"].dropna().unique().tolist()
-tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
-if tipo_selecionado:
-    df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
-
-# KPIs
-st.subheader("📌 Insights do Funcionário")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("🔢 Total de atendimentos", df_func.shape[0])
-col2.metric("👥 Clientes únicos", df_func["Cliente"].nunique())
-col3.metric("💰 Receita total", f"R$ {df_func['Valor'].sum():,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col4.metric("🎫 Ticket médio", f"R$ {df_func['Valor'].mean():,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-# Dia com mais atendimentos
-dia_mais_cheio = df_func.groupby(df_func["Data"].dt.date).size().reset_index(name="Atendimentos").sort_values("Atendimentos", ascending=False).head(1)
-if not dia_mais_cheio.empty:
-    data_cheia = pd.to_datetime(dia_mais_cheio.iloc[0, 0]).strftime("%d/%m/%Y")
-    qtd_atend = int(dia_mais_cheio.iloc[0, 1])
-    st.info(f"📅 Dia com mais atendimentos: **{data_cheia}** com **{qtd_atend} atendimentos**")
+st.caption("Obs.: Este app não altera sua planilha. Ele só cria a coluna em memória e permite baixar o CSV atualizado.")
