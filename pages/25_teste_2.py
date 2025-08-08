@@ -1,39 +1,43 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import gspread
+from gspread_dataframe import get_as_dataframe
+from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Criar coluna Período", page_icon="🕒", layout="wide")
-st.title("🕒 Criar coluna 'Período' (Manhã/Tarde/Noite) a partir dos horários")
+st.set_page_config(page_title="Criar coluna Período no Google Sheets", page_icon="🕒", layout="wide")
+st.title("🕒 Criar/atualizar a coluna 'Período' usando apenas 'Hora Início'")
 
-# === 1) Carregar Base do Google Sheets (CSV público) ===
+# === CONFIG ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"   # sua planilha
+ABA = "Base de Dados"                                      # aba de trabalho
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets",
+              "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client
+
 @st.cache_data
-def carregar_dados_google_sheets():
-    url = "https://docs.google.com/spreadsheets/d/1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE/gviz/tq?tqx=out:csv&sheet=Base%20de%20Dados"
-    df = pd.read_csv(url)
-    # Tipos básicos
+def carregar_df():
+    client = conectar_sheets()
+    ws = client.open_by_key(SHEET_ID).worksheet(ABA)
+    df = get_as_dataframe(ws, evaluate_formulas=True, header=0, dtype=str)
+    df = df.loc[:, ~df.columns.str.match(r"^Unnamed")]
+
     if "Data" in df.columns:
-        df["Data"] = pd.to_datetime(df["Data"], errors='coerce').dt.date
-
-    # Converter colunas de horário para datetime (mantém NaT se vazio)
-    for col in ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce").dt.date
+    if "Hora Início" in df.columns:
+        df["Hora Início"] = pd.to_datetime(df["Hora Início"], errors="coerce")
     return df
 
-df = carregar_dados_google_sheets()
-
-# Validação mínima (só para garantir que as colunas existem)
-colunas_necessarias = ["Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"]
-faltando = [c for c in colunas_necessarias if c not in df.columns]
-if faltando:
-    st.error(f"Colunas de horário ausentes na base: {', '.join(faltando)}")
-    st.stop()
-
+df = carregar_df()
 st.markdown(f"<small><i>Registros carregados: {len(df)}</i></small>", unsafe_allow_html=True)
 
-# === 2) (BLOCO QUE VOCÊ PODE COPIAR PARA O SEU APP) Criar coluna 'Período' ===
-# Prioridade: Hora Início > Hora Chegada > Hora Saída > Hora Saída do Salão
+# === Criar coluna Período baseado SOMENTE na Hora Início ===
 def definir_periodo(horario):
     if pd.isna(horario):
         return "Indefinido"
@@ -45,27 +49,35 @@ def definir_periodo(horario):
     else:
         return "Noite"
 
-def primeiro_horario_valido(row):
-    for c in ["Hora Início", "Hora Chegada", "Hora Saída", "Hora Saída do Salão"]:
-        if c in row and pd.notna(row[c]):
-            return row[c]
-    return pd.NaT
+df["Período"] = df["Hora Início"].apply(definir_periodo)
 
-df["Período"] = df.apply(lambda r: definir_periodo(primeiro_horario_valido(r)), axis=1)
+st.subheader("Prévia (com a coluna 'Período')")
+cols_preview = [c for c in ["Data", "Cliente", "Funcionário", "Hora Início", "Período"] if c in df.columns]
+st.dataframe(df[cols_preview].head(30), use_container_width=True)
 
-st.success("Coluna 'Período' criada com sucesso a partir dos horários existentes.")
+# === Escrever/Atualizar coluna 'Período' no Google Sheets ===
+def escrever_coluna_periodo(df_periodo):
+    client = conectar_sheets()
+    ws = client.open_by_key(SHEET_ID).worksheet(ABA)
 
-# === 3) Prévia e Download ===
-st.subheader("Prévia (com a nova coluna 'Período')")
-cols_preview = [c for c in ["Data","Cliente","Funcionário","Tipo","Combo","Hora Chegada","Hora Início","Hora Saída","Hora Saída do Salão","Período"] if c in df.columns]
-st.dataframe(df[cols_preview].head(50), use_container_width=True)
+    header = ws.row_values(1)
+    if not header:
+        raise RuntimeError("Não encontrei cabeçalho (linha 1 vazia).")
 
-csv_out = df.to_csv(index=False).encode("utf-8-sig")
-st.download_button(
-    label="⬇️ Baixar CSV com a coluna 'Período'",
-    data=csv_out,
-    file_name="base_com_periodo.csv",
-    mime="text/csv"
-)
+    try:
+        col_idx = header.index("Período") + 1  # já existe
+    except ValueError:
+        col_idx = len(header) + 1
+        ws.update_cell(1, col_idx, "Período")
 
-st.caption("Obs.: Este app não altera sua planilha. Ele só cria a coluna em memória e permite baixar o CSV atualizado.")
+    valores = [[v] for v in df_periodo["Período"].fillna("").astype(str).tolist()]
+    last_row = len(valores) + 1
+    cell_range = f"{gspread.utils.rowcol_to_a1(2, col_idx)}:{gspread.utils.rowcol_to_a1(last_row, col_idx)}"
+    ws.update(cell_range, valores, value_input_option="USER_ENTERED")
+
+if st.button("✍️ Escrever/Atualizar coluna 'Período' no Google Sheets"):
+    try:
+        escrever_coluna_periodo(df)
+        st.success("Coluna 'Período' criada/atualizada com sucesso na planilha! ✅")
+    except Exception as e:
+        st.error(f"Erro ao escrever na planilha: {e}")
