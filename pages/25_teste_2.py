@@ -62,6 +62,7 @@ def run():
     sh = conectar()
     ws = sh.worksheet("Base de Dados")
 
+    # Cabeçalhos e índices de coluna
     headers = ws.row_values(1)
     def col_idx(nome):
         return headers.index(nome) + 1 if nome in headers else None
@@ -71,31 +72,44 @@ def run():
         st.error("Não encontrei a coluna **Hora Início**.")
         return
 
-    col_periodo = col_idx("Período")
-    if not col_periodo:
-        col_periodo = len(headers) + 1
-        ws.update_cell(1, col_periodo, "Período")
-
-    # lê toda a coluna de Hora Início a partir da linha 2
-    nrows = ws.row_count
-    if nrows <= 1:
+    # Última linha REAL baseada na coluna A (Data)
+    try:
+        last_row = len(ws.col_values(1))  # conta linhas preenchidas na coluna Data
+    except Exception:
+        last_row = ws.row_count
+    if last_row <= 1:
         st.info("Nada para processar.")
         return
 
-    rng_inicio = f"{rowcol_to_a1(2, col_inicio)}:{rowcol_to_a1(nrows, col_inicio)}"
+    # Garante a existência da coluna 'Período' no final
+    col_periodo = col_idx("Período")
+    if not col_periodo:
+        col_periodo = len(headers) + 1
+        ws.add_cols(1)  # cria fisicamente a coluna no final
+        ws.update_cell(1, col_periodo, "Período")
+
+    # Lê Hora Início (apenas até a última linha real)
+    rng_inicio = f"{rowcol_to_a1(2, col_inicio)}:{rowcol_to_a1(last_row, col_inicio)}"
     horarios = ws.get(rng_inicio)
 
+    # Calcula períodos
     periodos = []
     for row in horarios:
         cell = row[0] if (isinstance(row, list) and row) else ""
         t = parse_time(cell)
         periodos.append([classificar_periodo(t)])
 
-    rng_saida = f"{rowcol_to_a1(2, col_periodo)}:{rowcol_to_a1(1+len(periodos), col_periodo)}"
+    # Escreve 'Período' (linhas 2..last_row)
+    rng_saida = f"{rowcol_to_a1(2, col_periodo)}:{rowcol_to_a1(last_row, col_periodo)}"
     ws.update(rng_saida, periodos, value_input_option="USER_ENTERED")
-    st.success(f"✅ 'Período' atualizado para {len(periodos)} linhas.")
+
+    st.success(f"✅ 'Período' atualizado para {len(periodos)} linhas (2 até {last_row}).")
 
 if st.button("Criar/Atualizar coluna 'Período'"):
-    run()
+    try:
+        run()
+    except Exception as e:
+        st.error(f"Erro ao processar: {e}")
+        st.stop()
 
-st.caption("Manhã = 05:00–11:59 • Tarde = 12:00–17:59 • Noite = 18:00–04:59")
+st.caption("Regras: Manhã = 05:00–11:59 • Tarde = 12:00–17:59 • Noite = 18:00–04:59")
