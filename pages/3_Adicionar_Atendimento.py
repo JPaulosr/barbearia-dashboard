@@ -22,35 +22,40 @@ def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
+
+    # >>> Agora a base oficial NÃO tem mais colunas de horário
     colunas_esperadas = [
         "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
         "Funcionário", "Fase", "Tipo",
-        "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
+        "Período"   # nova coluna oficial
     ]
     for coluna in colunas_esperadas:
         if coluna not in df.columns:
             df[coluna] = ""
+
+    # Normaliza Período
+    norm = {"manha": "Manhã", "Manha": "Manhã", "manha ": "Manhã", "tarde": "Tarde", "noite": "Noite"}
+    df["Período"] = df["Período"].astype(str).str.strip().replace(norm)
+    df.loc[~df["Período"].isin(["Manhã", "Tarde", "Noite"]), "Período"] = ""
+
     df["Combo"] = df["Combo"].fillna("")
     return df, aba
 
 def salvar_base(df_final):
+    # >>> Ordem/colunas oficiais (sem horários)
     colunas_padrao = [
         "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
         "Funcionário", "Fase", "Tipo",
-        "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
+        "Período"
     ]
     for col in colunas_padrao:
         if col not in df_final.columns:
             df_final[col] = ""
     df_final = df_final[colunas_padrao]
+
     aba = conectar_sheets().worksheet(ABA_DADOS)
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
-
-def formatar_hora(valor):
-    if re.match(r"^\d{2}:\d{2}:\d{2}$", valor):
-        return valor
-    return "00:00:00"
 
 def obter_valor_servico(servico):
     for chave in valores_servicos.keys():
@@ -62,9 +67,9 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
     df["Combo"] = df["Combo"].fillna("")
     existe = df[
-        (df["Cliente"] == cliente) & 
-        (df["Data"] == data) & 
-        (df["Serviço"] == servico) & 
+        (df["Cliente"] == cliente) &
+        (df["Data"] == data) &
+        (df["Serviço"] == servico) &
         (df["Combo"] == combo)
     ]
     return not existe.empty
@@ -84,6 +89,7 @@ valores_servicos = {
 
 # === INTERFACE ===
 st.title("📅 Adicionar Atendimento")
+
 df_existente, _ = carregar_base()
 df_existente["Data"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
 df_2025 = df_existente[df_existente["Data"].dt.year == 2025]
@@ -96,6 +102,7 @@ combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
 # === SELEÇÃO E AUTOPREENCHIMENTO ===
 col1, col2 = st.columns(2)
+
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
     cliente = st.selectbox("Nome do Cliente", clientes_existentes)
@@ -112,14 +119,16 @@ with col1:
     combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + list(dict.fromkeys([combo_sugerido] + combos_existentes)))
 
 with col2:
-    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=["JPaulo", "Vinicius"].index(funcionario_sugerido) if funcionario_sugerido in ["JPaulo", "Vinicius"] else 0)
+    funcionario = st.selectbox(
+        "Funcionário", ["JPaulo", "Vinicius"],
+        index=["JPaulo", "Vinicius"].index(funcionario_sugerido) if funcionario_sugerido in ["JPaulo", "Vinicius"] else 0
+    )
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
-    hora_chegada = st.text_input("Hora de Chegada (HH:MM:SS)", "00:00:00")
-    hora_inicio = st.text_input("Hora de Início (HH:MM:SS)", "00:00:00")
-    hora_saida = st.text_input("Hora de Saída (HH:MM:SS)", "00:00:00")
-    hora_salao = st.text_input("Hora Saída do Salão (HH:MM:SS)", "00:00:00")
 
 fase = "Dono + funcionário"
+
+# === PERÍODO (campo oficial) ===
+periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"])
 
 # === CONTROLE DE ESTADO ===
 if "combo_salvo" not in st.session_state:
@@ -137,7 +146,7 @@ def salvar_combo(combo, valores_customizados):
     df, _ = carregar_base()
     servicos = combo.split("+")
     novas_linhas = []
-    for i, servico in enumerate(servicos):
+    for servico in servicos:
         servico_formatado = servico.strip()
         valor = valores_customizados.get(servico_formatado, obter_valor_servico(servico_formatado))
         linha = {
@@ -150,10 +159,7 @@ def salvar_combo(combo, valores_customizados):
             "Funcionário": funcionario,
             "Fase": fase,
             "Tipo": tipo,
-            "Hora Chegada": hora_chegada if i == 0 else "",
-            "Hora Início": hora_inicio if i == 0 else "",
-            "Hora Saída": hora_saida if i == 0 else "",
-            "Hora Saída do Salão": hora_salao if i == 0 else "",
+            "Período": periodo_opcao,  # grava o período
         }
         novas_linhas.append(linha)
     df_final = pd.concat([df, pd.DataFrame(novas_linhas)], ignore_index=True)
@@ -171,10 +177,7 @@ def salvar_simples(servico, valor):
         "Funcionário": funcionario,
         "Fase": fase,
         "Tipo": tipo,
-        "Hora Chegada": hora_chegada,
-        "Hora Início": hora_inicio,
-        "Hora Saída": hora_saida,
-        "Hora Saída do Salão": hora_salao,
+        "Período": periodo_opcao,  # grava o período
     }
     df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
     salvar_base(df_final)
@@ -186,16 +189,15 @@ if combo:
     for servico in combo.split("+"):
         servico_formatado = servico.strip()
         valor_padrao = obter_valor_servico(servico_formatado)
-        valor = st.number_input(f"{servico_formatado} (padrão: R$ {valor_padrao})", value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}")
+        valor = st.number_input(
+            f"{servico_formatado} (padrão: R$ {valor_padrao})",
+            value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}"
+        )
         valores_customizados[servico_formatado] = valor
 
     if not st.session_state.combo_salvo:
         if st.button("✅ Confirmar e Salvar Combo"):
-            duplicado = False
-            for s in combo.split("+"):
-                if ja_existe_atendimento(cliente, data, s.strip(), combo):
-                    duplicado = True
-                    break
+            duplicado = any(ja_existe_atendimento(cliente, data, s.strip(), combo) for s in combo.split("+"))
             if duplicado:
                 st.warning("⚠️ Combo já registrado para este cliente e data.")
             else:
