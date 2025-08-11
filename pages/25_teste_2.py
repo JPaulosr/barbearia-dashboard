@@ -1,4 +1,4 @@
-# 12_Fiado.py — Fiado integrado à Base, com COMBO em múltiplas linhas e edição de valores por serviço
+# 12_Fiado.py — Fiado integrado à Base, com COMBO por linhas, edição de valores e 3 modos de operação
 import streamlit as st
 import pandas as pd
 import gspread
@@ -103,23 +103,22 @@ def gerar_id(prefixo):
     return f"{prefixo}-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}"
 
 def parse_combo(combo_str):
-    # "corte+barba" -> ["Corte","Barba"] com capitalização igual ao padrão, se existir
+    # "corte+barba" -> ["Corte","Barba"] com capitalização do dicionário, se existir
     if not combo_str: return []
     partes = [p.strip() for p in str(combo_str).split("+") if p.strip()]
-    # tenta casar com o dicionário de valores para capitalizar igual
     ajustadas = []
     for p in partes:
         hit = next((k for k in VALORES_PADRAO.keys() if k.lower() == p.lower()), p)
         ajustadas.append(hit)
     return ajustadas
 
-# =================== Página ===================
+# =================== Página (3 modos) ===================
 df_base, df_lanc, df_pagt, clientes, combos_exist, servs_exist, contas_exist = carregar_tudo()
 
 st.sidebar.header("Ações")
 acao = st.sidebar.radio("Escolha:", ["➕ Lançar fiado","💰 Registrar pagamento","📋 Em aberto & exportação"])
 
-# ---------- Lançar fiado ----------
+# ---------- 1) Lançar fiado ----------
 if acao == "➕ Lançar fiado":
     st.subheader("➕ Lançar fiado — cria UMA linha por serviço na Base (Conta='Fiado', StatusFiado='Em aberto')")
 
@@ -138,15 +137,15 @@ if acao == "➕ Lançar fiado":
         tipo = st.selectbox("Tipo", ["Serviço","Produto"], index=0)
         periodo = st.selectbox("Período (opcional)", ["","Manhã","Tarde","Noite"], index=0)
 
-    # ======= Editor de valores por serviço =======
+    # editor de valores por serviço
     servicos = parse_combo(combo_str) if combo_str else ([servico_unico] if servico_unico else [])
     valores_custom = {}
-
     if servicos:
         st.markdown("#### 💰 Edite os valores antes de salvar")
         for s in servicos:
             padrao = VALORES_PADRAO.get(s, 0.0)
-            valores_custom[s] = st.number_input(f"{s} (padrão: R$ {padrao:.2f})", value=float(padrao), step=1.0, format="%.2f", key=f"valor_{s}")
+            valores_custom[s] = st.number_input(f"{s} (padrão: R$ {padrao:.2f})",
+                                                value=float(padrao), step=1.0, format="%.2f", key=f"valor_{s}")
 
     if st.button("Salvar fiado", use_container_width=True):
         if not cliente:
@@ -158,7 +157,7 @@ if acao == "➕ Lançar fiado":
             data_str = data_atend.strftime(DATA_FMT)
             venc_str = venc.strftime(DATA_FMT) if venc else ""
 
-            # 1) Base: cria uma linha por serviço com valores editados
+            # Base: cria uma linha por serviço com valores editados
             novas = []
             for s in servicos:
                 valor_item = float(valores_custom.get(s, VALORES_PADRAO.get(s, 0.0)))
@@ -186,7 +185,7 @@ if acao == "➕ Lançar fiado":
             dfb = pd.concat([dfb, pd.DataFrame(novas)], ignore_index=True)
             salvar_df(ABA_BASE, dfb)
 
-            # 2) Log do lançamento (uma linha por ID com total)
+            # Log do lançamento (uma linha por ID com total)
             valor_total = float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum())
             append_row(ABA_LANC, [
                 idl, data_str, cliente, combo_str, "+".join(servicos), valor_total, venc_str, funcionario, fase, tipo, periodo
@@ -195,7 +194,7 @@ if acao == "➕ Lançar fiado":
             st.success(f"Fiado criado para **{cliente}** — ID: {idl}. Geradas {len(novas)} linhas na Base.")
             st.cache_data.clear()
 
-# ---------- Registrar pagamento ----------
+# ---------- 2) Registrar pagamento ----------
 elif acao == "💰 Registrar pagamento":
     st.subheader("💰 Registrar pagamento — quita todas as linhas do mesmo ID e cria linhas normais na data do pagamento")
 
@@ -256,12 +255,13 @@ elif acao == "💰 Registrar pagamento":
 
             # 2) Log do pagamento
             total_pago = float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum())
-            append_row(ABA_PAGT, [gera_id := f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}", id_sel, data_pag.strftime(DATA_FMT), cliente, forma, total_pago, obs])
+            append_row(ABA_PAGT, [f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}", id_sel,
+                                  data_pag.strftime(DATA_FMT), cliente, forma, total_pago, obs])
 
             st.success(f"Pagamento registrado para **{cliente}**. Fiado **{id_sel}** quitado ({len(novas)} linhas criadas).")
             st.cache_data.clear()
 
-# ---------- Em aberto & exportação ----------
+# ---------- 3) Em aberto & exportação ----------
 else:
     st.subheader("📋 Fiados em aberto (agrupados por ID)")
     if df_base.empty:
