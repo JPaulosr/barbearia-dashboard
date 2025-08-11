@@ -1,4 +1,4 @@
-# 12_Fiado.py — Fiado integrado à Base de Dados, com COMBO em múltiplas linhas
+# 12_Fiado.py — Fiado integrado à Base, com COMBO em múltiplas linhas e edição de valores por serviço
 import streamlit as st
 import pandas as pd
 import gspread
@@ -9,19 +9,32 @@ from io import BytesIO
 import pytz
 
 st.set_page_config(page_title="Fiado | Salão JP", page_icon="💳", layout="wide")
-st.title("💳 Controle de Fiado (integrado à Base, com combo por linhas)")
+st.title("💳 Controle de Fiado (combo por linhas + edição de valores)")
 
 # === CONFIG ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_BASE = "Base de Dados"
-ABA_LANC = "Fiado_Lancamentos"     # log de fiados (um por ID)
-ABA_PAGT = "Fiado_Pagamentos"      # log de pagamentos
+ABA_LANC = "Fiado_Lancamentos"     # log por ID
+ABA_PAGT = "Fiado_Pagamentos"      # log de pagamento
 TZ = pytz.timezone("America/Sao_Paulo")
+DATA_FMT = "%d/%m/%Y"  # igual ao seu 3_Adicionar_Atendimento.py
 
-# === Colunas oficiais da Base (sem horários) + extras de fiado ===
+# Colunas oficiais da Base + extras
 BASE_COLS_MIN = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário","Fase","Tipo","Período"]
 EXTRA_COLS    = ["StatusFiado","IDLancFiado","VencimentoFiado"]
-DATA_FMT = "%d/%m/%Y"  # MESMO FORMATO do seu 3_Adicionar_Atendimento.py
+
+# Tabela de valores padrão (ajuste à vontade)
+VALORES_PADRAO = {
+    "Corte": 25.0,
+    "Pezinho": 7.0,
+    "Barba": 15.0,
+    "Sobrancelha": 7.0,
+    "Luzes": 45.0,
+    "Pintura": 35.0,
+    "Alisamento": 40.0,
+    "Gel": 10.0,
+    "Pomada": 15.0,
+}
 
 # === Conexão ===
 @st.cache_resource
@@ -39,7 +52,6 @@ def garantir_aba(ss, nome, cols):
         ws = ss.add_worksheet(title=nome, rows=200, cols=max(10, len(cols)))
         ws.append_row(cols)
         return ws
-    # garante cabeçalho mínimo
     if not ws.row_values(1):
         ws.append_row(cols)
     return ws
@@ -49,7 +61,6 @@ def garantir_base_cols(ss):
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
     for c in BASE_COLS_MIN + EXTRA_COLS:
         if c not in df.columns: df[c] = ""
-    # reordenar
     df = df[[*BASE_COLS_MIN, *EXTRA_COLS, *[c for c in df.columns if c not in BASE_COLS_MIN+EXTRA_COLS]]]
     ws.clear()
     set_with_dataframe(ws, df)
@@ -66,7 +77,7 @@ def carregar_tudo():
     df_lanc = get_as_dataframe(ws_lanc, evaluate_formulas=True, header=0).dropna(how="all")
     df_pagt = get_as_dataframe(ws_pagt, evaluate_formulas=True, header=0).dropna(how="all")
 
-    # clientes/combos/serviços existentes
+    # listas para selects
     try:
         dfb = df_base.copy()
         dfb["Cliente"] = dfb["Cliente"].astype(str).str.strip()
@@ -91,35 +102,34 @@ def append_row(nome_aba, vals):
 def gerar_id(prefixo):
     return f"{prefixo}-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}"
 
-# === Utils ===
 def parse_combo(combo_str):
-    # "corte+barba" -> ["corte","barba"]
+    # "corte+barba" -> ["Corte","Barba"] com capitalização igual ao padrão, se existir
     if not combo_str: return []
-    return [p.strip() for p in str(combo_str).split("+") if p.strip()]
+    partes = [p.strip() for p in str(combo_str).split("+") if p.strip()]
+    # tenta casar com o dicionário de valores para capitalizar igual
+    ajustadas = []
+    for p in partes:
+        hit = next((k for k in VALORES_PADRAO.keys() if k.lower() == p.lower()), p)
+        ajustadas.append(hit)
+    return ajustadas
 
-def saldo_em_aberto_cliente(df_base, cliente):
-    if df_base.empty: return 0.0
-    x = df_base[(df_base["Cliente"]==cliente) & (df_base["StatusFiado"]=="Em aberto")]
-    return float(pd.to_numeric(x["Valor"], errors="coerce").fillna(0).sum()) if not x.empty else 0.0
-
-# === Página ===
+# =================== Página ===================
 df_base, df_lanc, df_pagt, clientes, combos_exist, servs_exist, contas_exist = carregar_tudo()
 
 st.sidebar.header("Ações")
-acao = st.sidebar.radio("Escolha:", ["➕ Lançar fiado (com combo)","💰 Registrar pagamento","📋 Em aberto & exportação"])
+acao = st.sidebar.radio("Escolha:", ["➕ Lançar fiado","💰 Registrar pagamento","📋 Em aberto & exportação"])
 
-# ===================== Lançar Fiado =====================
-if acao == "➕ Lançar fiado (com combo)":
-    st.subheader("➕ Lançar fiado — grava na Base uma linha por serviço (Conta='Fiado', StatusFiado='Em aberto')")
+# ---------- Lançar fiado ----------
+if acao == "➕ Lançar fiado":
+    st.subheader("➕ Lançar fiado — cria UMA linha por serviço na Base (Conta='Fiado', StatusFiado='Em aberto')")
 
     c1, c2 = st.columns(2)
     with c1:
         cliente = st.selectbox("Cliente", options=[""]+clientes, index=0)
         if not cliente:
             cliente = st.text_input("Ou digite o nome do cliente", "")
-        combo = st.selectbox("Combo (use 'corte+barba')", [""] + combos_exist)
+        combo_str = st.selectbox("Combo (use 'corte+barba')", [""] + combos_exist)
         servico_unico = st.selectbox("Ou selecione um serviço (se não usar combo)", [""] + servs_exist)
-        valor_unico = st.number_input("Valor do serviço (R$)", min_value=0.0, step=1.0, format="%.2f")
         funcionario = st.selectbox("Funcionário", ["JPaulo","Vinicius"], index=0)
     with c2:
         data_atend = st.date_input("Data do atendimento", value=date.today())
@@ -128,137 +138,132 @@ if acao == "➕ Lançar fiado (com combo)":
         tipo = st.selectbox("Tipo", ["Serviço","Produto"], index=0)
         periodo = st.selectbox("Período (opcional)", ["","Manhã","Tarde","Noite"], index=0)
 
+    # ======= Editor de valores por serviço =======
+    servicos = parse_combo(combo_str) if combo_str else ([servico_unico] if servico_unico else [])
+    valores_custom = {}
+
+    if servicos:
+        st.markdown("#### 💰 Edite os valores antes de salvar")
+        for s in servicos:
+            padrao = VALORES_PADRAO.get(s, 0.0)
+            valores_custom[s] = st.number_input(f"{s} (padrão: R$ {padrao:.2f})", value=float(padrao), step=1.0, format="%.2f", key=f"valor_{s}")
+
     if st.button("Salvar fiado", use_container_width=True):
         if not cliente:
             st.error("Informe o cliente.")
+        elif not servicos:
+            st.error("Informe combo ou um serviço.")
         else:
             idl = gerar_id("L")
             data_str = data_atend.strftime(DATA_FMT)
             venc_str = venc.strftime(DATA_FMT) if venc else ""
 
-            # 1) Se combo informado -> cria UMA linha na Base por serviço; se não, usa serviço único
+            # 1) Base: cria uma linha por serviço com valores editados
             novas = []
-            servicos = parse_combo(combo) if combo else ([servico_unico] if servico_unico else [])
-            if not servicos:
-                st.error("Informe combo ou um serviço.")
-            else:
-                # Caixa para digitou valor por item? Aqui usamos um valor único se não combo.
-                if combo:
-                    st.warning("Este lançamento de FIADO vai criar uma linha por serviço do combo na Base. Valores devem ser informados individualmente no momento do atendimento (ou edite depois).")
-                for s in servicos:
-                    novas.append({
-                        "Data": data_str,
-                        "Serviço": s,
-                        "Valor": valor_unico if not combo else "",  # pode deixar em branco se preferir editar depois
-                        "Conta": "Fiado",
-                        "Cliente": cliente,
-                        "Combo": combo if combo else "",
-                        "Funcionário": funcionario,
-                        "Fase": fase,
-                        "Tipo": tipo,
-                        "Período": periodo,
-                        "StatusFiado": "Em aberto",
-                        "IDLancFiado": idl,
-                        "VencimentoFiado": venc_str
-                    })
+            for s in servicos:
+                valor_item = float(valores_custom.get(s, VALORES_PADRAO.get(s, 0.0)))
+                novas.append({
+                    "Data": data_str,
+                    "Serviço": s,
+                    "Valor": valor_item,
+                    "Conta": "Fiado",
+                    "Cliente": cliente,
+                    "Combo": combo_str if combo_str else "",
+                    "Funcionário": funcionario,
+                    "Fase": fase,
+                    "Tipo": tipo,
+                    "Período": periodo,
+                    "StatusFiado": "Em aberto",
+                    "IDLancFiado": idl,
+                    "VencimentoFiado": venc_str
+                })
 
-                # Anexa na Base
-                ss = conectar_sheets()
-                ws_base = ss.worksheet(ABA_BASE)
-                dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
-                for c in BASE_COLS_MIN + EXTRA_COLS:
-                    if c not in dfb.columns: dfb[c] = ""
-                dfb = pd.concat([dfb, pd.DataFrame(novas)], ignore_index=True)
-                salvar_df(ABA_BASE, dfb)
+            ss = conectar_sheets()
+            ws_base = ss.worksheet(ABA_BASE)
+            dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
+            for c in BASE_COLS_MIN + EXTRA_COLS:
+                if c not in dfb.columns: dfb[c] = ""
+            dfb = pd.concat([dfb, pd.DataFrame(novas)], ignore_index=True)
+            salvar_df(ABA_BASE, dfb)
 
-                # 2) Log do lançamento (1 linha por ID)
-                valor_total = 0.0
-                try:
-                    valor_total = float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum())
-                except:
-                    pass
-                append_row(ABA_LANC, [
-                    idl, data_str, cliente, combo, "+".join(servicos), valor_total, venc_str, funcionario, fase, tipo, periodo
-                ])
+            # 2) Log do lançamento (uma linha por ID com total)
+            valor_total = float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum())
+            append_row(ABA_LANC, [
+                idl, data_str, cliente, combo_str, "+".join(servicos), valor_total, venc_str, funcionario, fase, tipo, periodo
+            ])
 
-                st.success(f"Fiado criado para **{cliente}** — ID: {idl}. Foram geradas {len(novas)} linhas na Base (uma por serviço).")
-                st.cache_data.clear()
+            st.success(f"Fiado criado para **{cliente}** — ID: {idl}. Geradas {len(novas)} linhas na Base.")
+            st.cache_data.clear()
 
-# ===================== Registrar Pagamento =====================
+# ---------- Registrar pagamento ----------
 elif acao == "💰 Registrar pagamento":
-    st.subheader("💰 Registrar pagamento — quita TODAS as linhas da Base com o mesmo ID do fiado e cria linhas normais na data do pagamento")
+    st.subheader("💰 Registrar pagamento — quita todas as linhas do mesmo ID e cria linhas normais na data do pagamento")
+
+    # IDs em aberto
+    abertos = df_base[df_base.get("StatusFiado","")=="Em aberto"].copy()
+    ids = sorted([i for i in abertos.get("IDLancFiado", pd.Series([],dtype=str)).dropna().unique() if i])
 
     c1, c2 = st.columns(2)
     with c1:
-        # IDs de fiados em aberto (group by IDLancFiado)
-        abertos = df_base[df_base.get("StatusFiado","")=="Em aberto"].copy()
-        ids = sorted([i for i in abertos.get("IDLancFiado", pd.Series([],dtype=str)).dropna().unique() if i])
         id_sel = st.selectbox("Selecione o ID do fiado (em aberto)", options=ids)
         forma = st.selectbox("Forma de pagamento", ["Pix","Dinheiro","Cartão","Transferência","Outro"])
     with c2:
-        hoje = date.today()
-        data_pag = st.date_input("Data do pagamento", value=hoje)
+        data_pag = st.date_input("Data do pagamento", value=date.today())
         obs = st.text_input("Observação (opcional)", "")
 
     if id_sel:
         grupo = abertos[abertos["IDLancFiado"]==id_sel].copy()
         cliente = grupo["Cliente"].iloc[0] if not grupo.empty else ""
-        # resumo
-        servicos = grupo["Serviço"].tolist()
-        total = float(pd.to_numeric(grupo["Valor"], errors="coerce").fillna(0).sum())
-        st.info(f"Cliente: **{cliente}** | Serviços: {', '.join(servicos)} | Total (somando linhas): **R$ {total:,.2f}**".replace(",", "X").replace(".", ",").replace("X","."))
+        grupo["Valor"] = pd.to_numeric(grupo["Valor"], errors="coerce").fillna(0)
+        total = float(grupo["Valor"].sum())
+        st.info(f"Cliente: **{cliente}** | Serviços: {', '.join(grupo['Serviço'].tolist())} | Total: **R$ {total:,.2f}**".replace(",", "X").replace(".", ",").replace("X","."))
 
     if st.button("Registrar pagamento", use_container_width=True, disabled=(not id_sel)):
-        if not id_sel:
-            st.error("Selecione um ID.")
+        ss = conectar_sheets()
+        # 1) Atualiza Base: marca pago e cria linhas normais (uma por serviço)
+        ws_base = ss.worksheet(ABA_BASE)
+        dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
+        mask = dfb.get("IDLancFiado","") == id_sel
+        if not mask.any():
+            st.error("ID não encontrado na Base.")
         else:
-            ss = conectar_sheets()
-            # 1) Marca Base como Pago para todas as linhas daquele ID e cria LINHAS NORMAIS na data do pagamento (uma por serviço)
-            ws_base = ss.worksheet(ABA_BASE)
-            dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
-            mask = dfb.get("IDLancFiado","") == id_sel
-            if not mask.any():
-                st.error("ID não encontrado na Base.")
-            else:
-                subset = dfb[mask].copy()
-                cliente = subset["Cliente"].iloc[0] if not subset.empty else ""
-                # marcar pago (mantém Conta=Fiado para histórico não financeiro)
-                dfb.loc[mask, "StatusFiado"] = "Pago"
+            subset = dfb[mask].copy()
+            cliente = subset["Cliente"].iloc[0] if not subset.empty else ""
 
-                # cria novas linhas normais (uma por serviço) com a forma real
-                novas = []
-                for _, r in subset.iterrows():
-                    novas.append({
-                        "Data": data_pag.strftime(DATA_FMT),
-                        "Serviço": r.get("Serviço",""),
-                        "Valor": r.get("Valor",""),
-                        "Conta": forma,                    # agora entra na sua receita
-                        "Cliente": r.get("Cliente",""),
-                        "Combo": r.get("Combo",""),
-                        "Funcionário": r.get("Funcionário",""),
-                        "Fase": r.get("Fase",""),
-                        "Tipo": r.get("Tipo","Serviço"),
-                        "Período": r.get("Período",""),
-                        "StatusFiado": "",                 # linha normal
-                        "IDLancFiado": id_sel,             # mantém referência
-                        "VencimentoFiado": ""
-                    })
-                dfb = pd.concat([dfb, pd.DataFrame(novas)], ignore_index=True)
-                salvar_df(ABA_BASE, dfb)
+            # marca como Pago (histórico do fiado)
+            dfb.loc[mask, "StatusFiado"] = "Pago"
 
-                # 2) Log do pagamento
-                append_row(ABA_PAGT, [
-                    gerar_id("P"), id_sel, data_pag.strftime(DATA_FMT), cliente, forma, 
-                    float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum()),
-                    obs
-                ])
+            # cria novas linhas normais (entram na receita)
+            novas = []
+            for _, r in subset.iterrows():
+                novas.append({
+                    "Data": data_pag.strftime(DATA_FMT),
+                    "Serviço": r.get("Serviço",""),
+                    "Valor": r.get("Valor",""),
+                    "Conta": forma,
+                    "Cliente": r.get("Cliente",""),
+                    "Combo": r.get("Combo",""),
+                    "Funcionário": r.get("Funcionário",""),
+                    "Fase": r.get("Fase",""),
+                    "Tipo": r.get("Tipo","Serviço"),
+                    "Período": r.get("Período",""),
+                    "StatusFiado": "",
+                    "IDLancFiado": id_sel,
+                    "VencimentoFiado": ""
+                })
+            dfb = pd.concat([dfb, pd.DataFrame(novas)], ignore_index=True)
+            salvar_df(ABA_BASE, dfb)
 
-                st.success(f"Pagamento registrado para **{cliente}**. Fiado **{id_sel}** quitado e linhas normais criadas ({len(novas)}).")
-                st.cache_data.clear()
+            # 2) Log do pagamento
+            total_pago = float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum())
+            append_row(ABA_PAGT, [gera_id := f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}", id_sel, data_pag.strftime(DATA_FMT), cliente, forma, total_pago, obs])
 
-# ===================== Em aberto & exportação =====================
+            st.success(f"Pagamento registrado para **{cliente}**. Fiado **{id_sel}** quitado ({len(novas)} linhas criadas).")
+            st.cache_data.clear()
+
+# ---------- Em aberto & exportação ----------
 else:
-    st.subheader("📋 Fiados em aberto (a partir da Base — agrupados por ID)")
+    st.subheader("📋 Fiados em aberto (agrupados por ID)")
     if df_base.empty:
         st.info("Sem dados.")
     else:
@@ -266,7 +271,6 @@ else:
         if em_aberto.empty:
             st.success("Nenhum fiado em aberto 🎉")
         else:
-            # grupo por ID e mostra resumo
             em_aberto["Valor"] = pd.to_numeric(em_aberto["Valor"], errors="coerce").fillna(0)
             resumo = (em_aberto
                       .groupby(["IDLancFiado","Cliente"], as_index=False)
@@ -277,7 +281,7 @@ else:
 
             total = float(resumo["ValorTotal"].sum())
             st.metric("Total em aberto", f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-            # exportar linhas detalhadas
+
             buf = BytesIO()
             with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
                 em_aberto.sort_values(["Cliente","IDLancFiado","Data"]).to_excel(w, index=False, sheet_name="Fiado_Em_Aberto")
