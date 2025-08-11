@@ -1,438 +1,277 @@
-# 12_Fiado.py
-# Página de FIADO para barbearia — registro de débitos, pagamentos, limites e saldos
-# ✔ Integra Google Sheets (mesma planilha do projeto)
-# ✔ Cria as abas automaticamente se não existirem
-# ✔ Busca lista de clientes da própria planilha (Base de Dados e clientes_status)
-# ✔ Aplica limite por cliente (coluna 'LimiteFiado' em clientes_status) com fallback padrão
-# ✔ Mostra saldos, pendências, atrasos, filtros, exportação
-# ✔ Operações: novo fiado, registrar pagamento, quitar total, editar limite rápido
-
+# 12_Fiado.py — Fiado integrado à Base de Dados
 import streamlit as st
 import pandas as pd
 import gspread
-from gspread_dataframe import set_with_dataframe, get_as_dataframe
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
-from datetime import datetime, date
+from datetime import date, datetime
 from io import BytesIO
 import pytz
 
-# =========================
-# CONFIG BÁSICA DA PÁGINA
-# =========================
 st.set_page_config(page_title="Fiado | Salão JP", page_icon="💳", layout="wide")
-st.title("💳 Controle de Fiado")
+st.title("💳 Controle de Fiado (integrado à Base de Dados)")
 
-# Id da planilha principal (mesma do projeto)
+# === CONFIG ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-
-# Nomes das abas usadas
-ABA_LANC = "Fiado_Lancamentos"     # lançamentos de fiado (dívidas)
-ABA_PAGT = "Fiado_Pagamentos"      # pagamentos efetuados
-ABA_STATUS = "clientes_status"     # onde opcionalmente mora o 'LimiteFiado'
-ABA_BASE = "Base de Dados"         # para lista de clientes
-
-# Padrões
+ABA_BASE = "Base de Dados"
+ABA_STATUS = "clientes_status"
+ABA_LANC = "Fiado_Lancamentos"
+ABA_PAGT = "Fiado_Pagamentos"
 TZ = pytz.timezone("America/Sao_Paulo")
-LIMITE_PADRAO = 150.0  # valor padrão se cliente não tiver limite definido no clientes_status
 
-# =========================
-# CONEXÃO GOOGLE SHEETS
-# =========================
+# Campos que existem hoje na sua Base de Dados (ajuste se usar outros)
+BASE_COLS_MIN = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário","Fase","Tipo","Período"]
+# Colunas novas para fiado
+EXTRA_COLS = ["StatusFiado","IDLancFiado","VencimentoFiado"]
+
+# === Conexão ===
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scopes = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
 
-def garantir_aba(planilha, nome_aba, colunas):
+def garantir_aba(ss, nome, cols):
     try:
-        ws = planilha.worksheet(nome_aba)
+        ws = ss.worksheet(nome)
     except gspread.WorksheetNotFound:
-        ws = planilha.add_worksheet(title=nome_aba, rows=100, cols=max(10, len(colunas)))
-        ws.append_row(colunas)
-    # Garante cabeçalho correto
-    cabecalho = ws.row_values(1)
-    if cabecalho != colunas:
-        # se estiver vazio, escreve cabeçalho
-        if len(cabecalho) == 0:
-            ws.append_row(colunas)
-        else:
-            # baixa dados existentes e reescreve com cabeçalho correto
-            df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-            df = df.dropna(how="all")
-            out = pd.DataFrame(columns=colunas)
-            if not df.empty:
-                # realinha colunas (mantém as que existem)
-                for c in df.columns:
-                    if c in out.columns:
-                        out[c] = df[c]
-            ws.clear()
-            set_with_dataframe(ws, out)
+        ws = ss.add_worksheet(title=nome, rows=200, cols=max(10, len(cols)))
+        ws.append_row(cols)
+        return ws
+    # garante cabeçalho mínimo
+    header = ws.row_values(1)
+    if not header:
+        ws.append_row(cols)
+    return ws
 
-    return planilha.worksheet(nome_aba)
+def garantir_colunas_base(ss):
+    ws = garantir_aba(ss, ABA_BASE, BASE_COLS_MIN + EXTRA_COLS)
+    df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
+    # garante existência das colunas mínimas e extras
+    for c in BASE_COLS_MIN + EXTRA_COLS:
+        if c not in df.columns:
+            df[c] = None
+    # reordena para padronizar
+    df = df[[*BASE_COLS_MIN, *EXTRA_COLS, *[c for c in df.columns if c not in BASE_COLS_MIN+EXTRA_COLS]]]
+    ws.clear()
+    set_with_dataframe(ws, df)
+    return ws
 
 @st.cache_data
 def carregar_tudo():
     ss = conectar_sheets()
+    # garantir abas
+    ws_base = garantir_colunas_base(ss)
+    ws_lanc = garantir_aba(ss, ABA_LANC, ["Data","Cliente","Descricao","Valor","Vencimento","Funcionario","Tipo","Servico","Combo","IDLanc"])
+    ws_pagt = garantir_aba(ss, ABA_PAGT, ["Data","Cliente","Valor","FormaPagamento","IDLanc","Obs","IDPagamento"])
 
-    # Cria/garante as abas de trabalho
-    col_lanc = ["Data", "Cliente", "Descricao", "Valor", "Vencimento", "Funcionario", "FormaPagamentoPrevista", "IDLanc"]
-    col_pagt = ["Data", "Cliente", "Valor", "Observacao", "IDPagamento"]
-    ws_lanc = garantir_aba(ss, ABA_LANC, col_lanc)
-    ws_pagt = garantir_aba(ss, ABA_PAGT, col_pagt)
-
-    # Carrega dados
+    df_base = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
     df_lanc = get_as_dataframe(ws_lanc, evaluate_formulas=True, header=0).dropna(how="all")
     df_pagt = get_as_dataframe(ws_pagt, evaluate_formulas=True, header=0).dropna(how="all")
 
-    # Tipagem e defaults
-    for c in ["Data", "Vencimento"]:
+    # normalizações
+    if "Data" in df_base.columns:
+        df_base["Data"] = pd.to_datetime(df_base["Data"], errors="coerce").dt.date
+    if "Valor" in df_base.columns:
+        df_base["Valor"] = pd.to_numeric(df_base["Valor"], errors="coerce")
+    for c in ["Data","Vencimento"]:
         if c in df_lanc.columns:
             df_lanc[c] = pd.to_datetime(df_lanc[c], errors="coerce").dt.date
     if "Valor" in df_lanc.columns:
-        df_lanc["Valor"] = pd.to_numeric(df_lanc["Valor"], errors="coerce").fillna(0.0)
-    if "IDLanc" not in df_lanc.columns:
-        df_lanc["IDLanc"] = ""
-
+        df_lanc["Valor"] = pd.to_numeric(df_lanc["Valor"], errors="coerce")
     if "Data" in df_pagt.columns:
         df_pagt["Data"] = pd.to_datetime(df_pagt["Data"], errors="coerce").dt.date
     if "Valor" in df_pagt.columns:
-        df_pagt["Valor"] = pd.to_numeric(df_pagt["Valor"], errors="coerce").fillna(0.0)
-    if "IDPagamento" not in df_pagt.columns:
-        df_pagt["IDPagamento"] = ""
+        df_pagt["Valor"] = pd.to_numeric(df_pagt["Valor"], errors="coerce")
 
-    # Clientes existentes
-    df_status = pd.DataFrame()
+    # lista de clientes (Base + Lanc + status)
+    clientes = set(df_base.get("Cliente", pd.Series(dtype=str)).dropna().astype(str).str.strip())
     try:
         df_status = get_as_dataframe(ss.worksheet(ABA_STATUS), evaluate_formulas=True, header=0).dropna(how="all")
+        if "Cliente" in df_status.columns:
+            clientes |= set(df_status["Cliente"].dropna().astype(str).str.strip())
     except gspread.WorksheetNotFound:
         pass
-
-    df_base = pd.DataFrame()
-    try:
-        df_base = get_as_dataframe(ss.worksheet(ABA_BASE), evaluate_formulas=True, header=0).dropna(how="all")
-    except gspread.WorksheetNotFound:
-        pass
-
-    # Monta lista única de clientes
-    clientes = set()
-    if not df_status.empty and "Cliente" in df_status.columns:
-        clientes.update(df_status["Cliente"].dropna().astype(str).str.strip())
-    if not df_base.empty and "Cliente" in df_base.columns:
-        clientes.update(df_base["Cliente"].dropna().astype(str).str.strip())
     if "Cliente" in df_lanc.columns:
-        clientes.update(df_lanc["Cliente"].dropna().astype(str).str.strip())
-    if "Cliente" in df_pagt.columns:
-        clientes.update(df_pagt["Cliente"].dropna().astype(str).str.strip())
+        clientes |= set(df_lanc["Cliente"].dropna().astype(str).str.strip())
     clientes = sorted([c for c in clientes if c])
 
-    # Limites por cliente a partir de clientes_status
-    limites = {}
-    if not df_status.empty:
-        if "Cliente" in df_status.columns:
-            if "LimiteFiado" in df_status.columns:
-                for _, r in df_status.iterrows():
-                    nome = str(r.get("Cliente", "")).strip()
-                    lim = r.get("LimiteFiado", None)
-                    try:
-                        lim = float(str(lim).replace(",", "."))
-                    except:
-                        lim = None
-                    if nome:
-                        limites[nome] = lim
+    return df_base, df_lanc, df_pagt, clientes
 
-    return df_lanc, df_pagt, clientes, limites
-
-def atualizar_df_na_aba(nome_aba, df):
+def salvar_df(nome_aba, df):
     ss = conectar_sheets()
     ws = ss.worksheet(nome_aba)
     ws.clear()
     set_with_dataframe(ws, df)
 
-def append_linha(nome_aba, lista_valores):
+def append_row(nome_aba, vals):
     ss = conectar_sheets()
-    ws = ss.worksheet(nome_aba)
-    ws.append_row(lista_valores, value_input_option="USER_ENTERED")
+    ss.worksheet(nome_aba).append_row(vals, value_input_option="USER_ENTERED")
 
-# =========================
-# FUNÇÕES DE NEGÓCIO
-# =========================
 def gerar_id(prefixo):
-    agora = datetime.now(TZ).strftime("%Y%m%d%H%M%S%f")[:-3]
-    return f"{prefixo}-{agora}"
+    return f"{prefixo}-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}"
 
-def saldo_cliente(df_lanc, df_pagt, cliente):
-    debito = df_lanc.loc[df_lanc["Cliente"]==cliente, "Valor"].sum() if not df_lanc.empty else 0.0
-    credito = df_pagt.loc[df_pagt["Cliente"]==cliente, "Valor"].sum() if not df_pagt.empty else 0.0
-    return round(debito - credito, 2)
+# === Cálculos de saldo por cliente (baseado em fiados em aberto) ===
+def saldo_em_aberto_por_cliente(df_base, cliente):
+    if df_base.empty: return 0.0
+    df = df_base[(df_base["Cliente"]==cliente) & (df_base["StatusFiado"]=="Em aberto")]
+    return float(df["Valor"].sum()) if "Valor" in df.columns else 0.0
 
-def df_saldos(df_lanc, df_pagt):
-    clientes = sorted(set(df_lanc["Cliente"].dropna().astype(str)) | set(df_pagt["Cliente"].dropna().astype(str)))
-    rows = []
-    for c in clientes:
-        rows.append({"Cliente": c, "Saldo": saldo_cliente(df_lanc, df_pagt, c)})
-    return pd.DataFrame(rows).sort_values("Saldo", ascending=False)
+# === UI ===
+df_base, df_lanc, df_pagt, clientes = carregar_tudo()
 
-def obter_limite_cliente(limites, cliente):
-    lim = limites.get(cliente, None)
-    return lim if (lim is not None and lim > 0) else LIMITE_PADRAO
-
-def atrasados(df_lanc, df_pagt):
-    hoje = date.today()
-    if df_lanc.empty:
-        return pd.DataFrame(columns=["Cliente","Descricao","Valor","Vencimento","DiasAtraso"])
-    # Calcula pago por cliente para deduzir do mais antigo
-    # Estratégia simples: saldo > 0 e vencimento < hoje => atrasado
-    df = df_lanc.copy()
-    df["PagoAcum"] = 0.0
-    # Monta um DF por cliente ordenado por vencimento (FIFO) e abate pagamentos
-    saida = []
-    for cliente in sorted(df["Cliente"].dropna().unique()):
-        dfl = df[df["Cliente"]==cliente].sort_values("Vencimento")
-        total_pago = df_pagt[df_pagt["Cliente"]==cliente]["Valor"].sum() if not df_pagt.empty else 0.0
-        for _, r in dfl.iterrows():
-            valor = float(r.get("Valor",0.0))
-            if total_pago >= valor:
-                total_pago -= valor
-                resto = 0.0
-            else:
-                resto = valor - total_pago
-                total_pago = 0.0
-            if resto > 0 and pd.notna(r.get("Vencimento")) and r["Vencimento"] < hoje:
-                dias = (hoje - r["Vencimento"]).days
-                saida.append({
-                    "Cliente": cliente,
-                    "Descricao": r.get("Descricao",""),
-                    "Valor": round(resto,2),
-                    "Vencimento": r["Vencimento"],
-                    "DiasAtraso": dias
-                })
-    if not saida:
-        return pd.DataFrame(columns=["Cliente","Descricao","Valor","Vencimento","DiasAtraso"])
-    return pd.DataFrame(saida).sort_values(["DiasAtraso","Vencimento"], ascending=[False, True])
-
-# =========================
-# CARREGA DADOS
-# =========================
-df_lanc, df_pagt, clientes_lista, limites_dict = carregar_tudo()
-
-# =========================
-# SIDEBAR – AÇÕES
-# =========================
 st.sidebar.header("Ações")
-acao = st.sidebar.radio("O que deseja fazer?", ["📌 Novo fiado", "✅ Registrar pagamento", "🧾 Saldos & atrasos", "⚙️ Ajustes de limite"])
+acao = st.sidebar.radio("Escolha:", ["➕ Lançar fiado","💰 Registrar pagamento","📋 Em aberto & exportação"])
 
-# =========================
-# AÇÃO: NOVO FIADO
-# =========================
-if acao == "📌 Novo fiado":
-    st.subheader("📌 Lançar novo fiado (débito)")
-    col1, col2 = st.columns(2)
-    with col1:
-        cliente = st.selectbox("Cliente", options=[""] + clientes_lista, index=0, help="Digite para buscar. Pode cadastrar manualmente se não existir.")
-        if not cliente:
-            cliente = st.text_input("Ou digite o nome do cliente", value="")
-        descricao = st.text_input("Descrição (ex.: Corte + Barba)", "")
+# =============== Lançar fiado ===============
+if acao == "➕ Lançar fiado":
+    st.subheader("➕ Lançar fiado (gera linha na Base de Dados com StatusFiado='Em aberto')")
+    c1, c2 = st.columns(2)
+    with c1:
+        cli = st.selectbox("Cliente", options=[""]+clientes, index=0, help="Digite para buscar; pode digitar um nome novo.")
+        if not cli:
+            cli = st.text_input("Ou digite o nome do cliente", "")
+        serv = st.text_input("Serviço", value="Corte")
+        tipo = st.selectbox("Tipo", ["Serviço","Produto"], index=0)
+        combo = st.text_input("Combo (opcional)", value="")
         valor = st.number_input("Valor (R$)", min_value=0.0, step=5.0, format="%.2f")
-    with col2:
-        data_lanc = st.date_input("Data do lançamento", value=date.today())
-        vencimento = st.date_input("Vencimento (opcional)", value=date.today())
-        funcionario = st.text_input("Funcionário", value="JPaulo")
-        forma_prevista = st.selectbox("Forma de pagamento prevista", ["", "Dinheiro", "Pix", "Cartão", "Transferência", "Outro"])
+    with c2:
+        data_atend = st.date_input("Data do atendimento", value=date.today())
+        venc = st.date_input("Vencimento (opcional)", value=date.today())
+        func = st.text_input("Funcionário", value="JPaulo")
+        fase = st.text_input("Fase", value="Dono + funcionário")
+        periodo = st.selectbox("Período (opcional)", ["", "Manhã","Tarde","Noite"], index=0)
 
-    if st.button("➕ Registrar fiado", use_container_width=True):
-        if not cliente or valor <= 0:
-            st.error("Informe cliente e valor válido.")
+    if st.button("Salvar fiado", use_container_width=True):
+        if not cli or valor <= 0:
+            st.error("Informe cliente e valor.")
         else:
-            # checa limite
-            limite = obter_limite_cliente(limites_dict, cliente)
-            saldo_atual = saldo_cliente(df_lanc, df_pagt, cliente)
-            if saldo_atual + valor > limite:
-                st.error(f"Limite estourado: saldo atual R$ {saldo_atual:.2f} + novo R$ {valor:.2f} > limite R$ {limite:.2f}")
-            else:
-                idl = gerar_id("L")
-                append_linha(
-                    ABA_LANC,
-                    [
-                        data_lanc.strftime("%Y-%m-%d"),
-                        cliente.strip(),
-                        descricao.strip(),
-                        valor,
-                        vencimento.strftime("%Y-%m-%d") if vencimento else "",
-                        funcionario.strip(),
-                        forma_prevista,
-                        idl
-                    ]
-                )
-                st.success(f"Fiado registrado para **{cliente}** no valor de **R$ {valor:.2f}** (IDLanc: {idl}).")
-                st.cache_data.clear()
+            idl = gerar_id("L")
+            # 1) controle
+            append_row(ABA_LANC, [
+                data_atend.strftime("%Y-%m-%d"), cli, serv, valor,
+                venc.strftime("%Y-%m-%d") if venc else "", func, tipo, serv, combo, idl
+            ])
+            # 2) linha na Base de Dados (não entra em receita)
+            # garantir colunas
+            ss = conectar_sheets()
+            ws_base = garantir_colunas_base(ss)
+            dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
+            # cria registro
+            nova = {
+                "Data": data_atend.strftime("%Y-%m-%d"),
+                "Serviço": serv,
+                "Valor": valor,
+                "Conta": "Fiado",
+                "Cliente": cli,
+                "Combo": combo,
+                "Funcionário": func,
+                "Fase": fase,
+                "Tipo": tipo,
+                "Período": periodo if periodo else "",
+                "StatusFiado": "Em aberto",
+                "IDLancFiado": idl,
+                "VencimentoFiado": venc.strftime("%Y-%m-%d") if venc else ""
+            }
+            # garante colunas e anexa
+            for c in BASE_COLS_MIN + EXTRA_COLS:
+                if c not in dfb.columns: dfb[c] = None
+            dfb = pd.concat([dfb, pd.DataFrame([nova])], ignore_index=True)
+            salvar_df(ABA_BASE, dfb)
+            st.success(f"Fiado salvo para **{cli}** — ID: {idl}")
+            st.cache_data.clear()
 
-# =========================
-# AÇÃO: REGISTRAR PAGAMENTO
-# =========================
-elif acao == "✅ Registrar pagamento":
-    st.subheader("✅ Registrar pagamento de fiado")
-    col1, col2 = st.columns(2)
-    with col1:
-        cliente_p = st.selectbox("Cliente", options=clientes_lista)
+# =============== Registrar pagamento ===============
+elif acao == "💰 Registrar pagamento":
+    st.subheader("💰 Registrar pagamento (marca fiado como Pago e cria linha normal na Base)")
+    c1, c2 = st.columns(2)
+    with c1:
+        cli = st.selectbox("Cliente", options=clientes)
         hoje = date.today()
-        data_p = st.date_input("Data do pagamento", value=hoje)
-    with col2:
-        saldo = saldo_cliente(df_lanc, df_pagt, cliente_p) if cliente_p else 0.0
-        valor_p = st.number_input(f"Valor pago (Saldo atual: R$ {saldo:.2f})", min_value=0.0, step=5.0, format="%.2f")
-        obs = st.text_input("Observação", value="")
+        data_pag = st.date_input("Data do pagamento", value=hoje)
+        forma = st.selectbox("Forma de pagamento", ["Pix","Dinheiro","Cartão","Transferência","Outro"])
+    with c2:
+        # fiados em aberto desse cliente para escolher qual ID quitar
+        abertos = df_base[(df_base.get("Cliente","")==cli) & (df_base.get("StatusFiado","")=="Em aberto")]
+        ids_disp = abertos.get("IDLancFiado", pd.Series(dtype=str)).fillna("").tolist()
+        id_sel = st.selectbox("IDLancFiado a quitar", options=ids_disp, help="Escolha o fiado em aberto deste cliente")
+        valor_total = float(abertos[abertos["IDLancFiado"]==id_sel]["Valor"].sum()) if id_sel else 0.0
+        st.metric("Valor do fiado selecionado", f"R$ {valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
+        obs = st.text_input("Observação (opcional)", "")
 
-    colb1, colb2 = st.columns(2)
-    if colb1.button("💰 Registrar pagamento", use_container_width=True):
-        if not cliente_p or valor_p <= 0:
-            st.error("Informe cliente e valor de pagamento válido.")
+    if st.button("Registrar pagamento", use_container_width=True, disabled=(not id_sel)):
+        if not id_sel:
+            st.error("Selecione um ID de fiado.")
         else:
-            idp = gerar_id("P")
-            append_linha(
-                ABA_PAGT,
-                [
-                    data_p.strftime("%Y-%m-%d"),
-                    cliente_p.strip(),
-                    valor_p,
-                    obs.strip(),
-                    idp
-                ]
-            )
-            st.success(f"Pagamento de **R$ {valor_p:.2f}** registrado para **{cliente_p}** (IDPagamento: {idp}).")
-            st.cache_data.clear()
+            # 1) registrar pagamento no controle
+            append_row(ABA_PAGT, [
+                data_pag.strftime("%Y-%m-%d"), cli, valor_total, forma, id_sel, obs, gerar_id("P")
+            ])
+            # 2) atualizar Base: marcar fiado como Pago e criar linha normal (entra na receita)
+            ss = conectar_sheets()
+            ws_base = ss.worksheet(ABA_BASE)
+            dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
+            if dfb.empty:
+                st.error("Base de Dados vazia.")
+            else:
+                mask = (dfb.get("IDLancFiado","") == id_sel) & (dfb.get("Cliente","")==cli)
+                # guarda campos do serviço original
+                if mask.any():
+                    row = dfb[mask].iloc[0].copy()
+                    serv = row.get("Serviço","")
+                    tipo = row.get("Tipo","Serviço")
+                    combo = row.get("Combo","")
+                    func = row.get("Funcionário","")
+                    fase = row.get("Fase","")
+                    periodo = row.get("Período","")
+                    valor = float(row.get("Valor", 0.0))
 
-    if colb2.button("✅ Quitar tudo (pagar saldo total)", type="secondary", use_container_width=True, disabled=(saldo <= 0.0)):
-        if saldo > 0:
-            idp = gerar_id("P")
-            append_linha(
-                ABA_PAGT,
-                [
-                    hoje.strftime("%Y-%m-%d"),
-                    cliente_p.strip(),
-                    saldo,
-                    "Quitação total",
-                    idp
-                ]
-            )
-            st.success(f"Saldo total **R$ {saldo:.2f}** quitado para **{cliente_p}** (IDPagamento: {idp}).")
-            st.cache_data.clear()
-        else:
-            st.info("Cliente já está com saldo zerado.")
+                    # marca como Pago (mas continua Conta=Fiado para não somar receita)
+                    dfb.loc[mask, "StatusFiado"] = "Pago"
 
-# =========================
-# AÇÃO: SALDOS & ATRASOS
-# =========================
-elif acao == "🧾 Saldos & atrasos":
-    st.subheader("🧾 Saldos por cliente")
-    df_s = df_saldos(df_lanc, df_pagt) if not df_lanc.empty or not df_pagt.empty else pd.DataFrame(columns=["Cliente","Saldo"])
+                    # cria nova linha normal na data do pagamento
+                    novo = {
+                        "Data": data_pag.strftime("%Y-%m-%d"),
+                        "Serviço": serv,
+                        "Valor": valor,
+                        "Conta": forma,
+                        "Cliente": cli,
+                        "Combo": combo,
+                        "Funcionário": func,
+                        "Fase": fase,
+                        "Tipo": tipo,
+                        "Período": periodo,
+                        "StatusFiado": "",           # linha normal
+                        "IDLancFiado": id_sel,       # mantém referência
+                        "VencimentoFiado": ""
+                    }
+                    for c in BASE_COLS_MIN + EXTRA_COLS:
+                        if c not in dfb.columns: dfb[c] = None
+                    dfb = pd.concat([dfb, pd.DataFrame([novo])], ignore_index=True)
 
-    filtro_nome = st.text_input("Filtrar por nome", "")
-    min_saldo = st.number_input("Saldo mínimo", value=0.0, step=10.0)
-    if not df_s.empty:
-        df_show = df_s.copy()
-        if filtro_nome.strip():
-            df_show = df_show[df_show["Cliente"].str.contains(filtro_nome.strip(), case=False, na=False)]
-        df_show = df_show[df_show["Saldo"] >= min_saldo]
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+                    salvar_df(ABA_BASE, dfb)
+                    st.success(f"Pagamento registrado e fiado **{id_sel}** quitado para **{cli}**.")
+                    st.cache_data.clear()
+                else:
+                    st.error("IDLancFiado não encontrado na Base de Dados.")
 
-        total_aberto = df_show["Saldo"].sum()
-        st.metric("Total em aberto (após filtros)", f"R$ {total_aberto:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-
-        # Exportação
-        buf = BytesIO()
-        with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-            df_show.to_excel(writer, index=False, sheet_name="Saldos")
-        st.download_button("⬇️ Exportar saldos (Excel)", data=buf.getvalue(), file_name="saldos_fiado.xlsx")
-
-    st.markdown("---")
-    st.subheader("⏰ Atrasados")
-    df_a = atrasados(df_lanc, df_pagt)
-    if df_a.empty:
-        st.success("Nenhum fiado atrasado 🎉")
+# =============== Em aberto & exportação ===============
+else:
+    st.subheader("📋 Fiados em aberto (a partir da Base de Dados)")
+    if df_base.empty:
+        st.info("Sem dados na Base.")
     else:
-        st.dataframe(df_a, use_container_width=True, hide_index=True)
-        total_atrasado = df_a["Valor"].sum()
-        st.metric("Total atrasado", f"R$ {total_atrasado:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
+        em_aberto = df_base[df_base.get("StatusFiado","")=="Em aberto"].copy()
+        if not em_aberto.empty and "Data" in em_aberto.columns:
+            em_aberto["Data"] = pd.to_datetime(em_aberto["Data"], errors="coerce").dt.date
+        st.dataframe(em_aberto.sort_values("Data", ascending=False), use_container_width=True, hide_index=True)
 
-        buf2 = BytesIO()
-        with pd.ExcelWriter(buf2, engine="xlsxwriter") as writer:
-            df_a.to_excel(writer, index=False, sheet_name="Atrasados")
-        st.download_button("⬇️ Exportar atrasados (Excel)", data=buf2.getvalue(), file_name="atrasados_fiado.xlsx")
+        total = float(em_aberto.get("Valor", pd.Series([0])).sum())
+        st.metric("Total em aberto", f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
 
-# =========================
-# AÇÃO: AJUSTES DE LIMITE
-# =========================
-elif acao == "⚙️ Ajustes de limite":
-    st.subheader("⚙️ Limites por cliente (usa aba clientes_status → coluna 'LimiteFiado')")
-    st.info("Se o cliente não tiver 'LimiteFiado' definido, uso o padrão: R$ {:.2f}".format(LIMITE_PADRAO))
-
-    # Tabela resumida: Cliente | Limite atual | Saldo | Espaço disponível
-    rows = []
-    for c in sorted(clientes_lista):
-        lim = obter_limite_cliente(limites_dict, c)
-        sal = saldo_cliente(df_lanc, df_pagt, c)
-        disp = round(lim - sal, 2)
-        rows.append({"Cliente": c, "LimiteAtual": lim, "Saldo": sal, "Disponivel": disp})
-    df_lim = pd.DataFrame(rows)
-    st.dataframe(df_lim, use_container_width=True, hide_index=True)
-
-    st.markdown("#### Atualizar limite de um cliente")
-    col1, col2, col3 = st.columns([2,1,1])
-    with col1:
-        cli = st.selectbox("Cliente", options=clientes_lista)
-    with col2:
-        novo_limite = st.number_input("Novo limite (R$)", min_value=0.0, step=10.0, format="%.2f")
-    with col3:
-        aplicar = st.button("💾 Salvar limite", use_container_width=True)
-
-    if aplicar:
-        ss = conectar_sheets()
-        try:
-            ws = ss.worksheet(ABA_STATUS)
-        except gspread.WorksheetNotFound:
-            ws = ss.add_worksheet(title=ABA_STATUS, rows=1000, cols=10)
-            ws.append_row(["Cliente", "Status", "Imagem", "LimiteFiado"])
-
-        df_status = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
-        if df_status.empty:
-            df_status = pd.DataFrame(columns=["Cliente","Status","Imagem","LimiteFiado"])
-
-        if "Cliente" not in df_status.columns:
-            df_status["Cliente"] = []
-        if "LimiteFiado" not in df_status.columns:
-            df_status["LimiteFiado"] = []
-
-        # Atualiza ou cria linha
-        idx = None
-        if not df_status.empty:
-            poss = df_status.index[df_status["Cliente"].astype(str).str.strip().str.lower() == cli.strip().lower()].tolist()
-            idx = poss[0] if poss else None
-
-        if idx is None:
-            df_status = pd.concat([
-                df_status,
-                pd.DataFrame([{"Cliente": cli, "LimiteFiado": novo_limite}])
-            ], ignore_index=True)
-        else:
-            df_status.loc[idx, "LimiteFiado"] = novo_limite
-
-        atualizar_df_na_aba(ABA_STATUS, df_status)
-        st.success(f"Limite de **{cli}** atualizado para **R$ {novo_limite:.2f}**.")
-        st.cache_data.clear()
-
-# =========================
-# RODAPÉ – VISÃO RÁPIDA
-# =========================
-st.markdown("---")
-colk1, colk2, colk3, colk4 = st.columns(4)
-total_debitos = df_lanc["Valor"].sum() if not df_lanc.empty else 0.0
-total_pagos = df_pagt["Valor"].sum() if not df_pagt.empty else 0.0
-em_aberto = total_debitos - total_pagos
-qtd_clientes_em_aberto = (df_saldos(df_lanc, df_pagt)["Saldo"] > 0).sum() if (not df_lanc.empty or not df_pagt.empty) else 0
-
-colk1.metric("Débitos lançados", f"R$ {total_debitos:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-colk2.metric("Pagamentos registrados", f"R$ {total_pagos:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-colk3.metric("Em aberto", f"R$ {em_aberto:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-colk4.metric("Clientes devendo", f"{qtd_clientes_em_aberto}")
+        buf = BytesIO()
+        with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
+            (em_aberto.sort_values(["Cliente","Data"])).to_excel(w, index=False, sheet_name="FiadoEmAberto")
+        st.download_button("⬇️ Exportar (Excel)", data=buf.getvalue(), file_name="fiado_em_aberto.xlsx")
