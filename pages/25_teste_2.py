@@ -267,7 +267,15 @@ else:
     if df_base.empty:
         st.info("Sem dados.")
     else:
-        "count"),
+        em_aberto = df_base[df_base.get("StatusFiado","")=="Em aberto"].copy()
+        if em_aberto.empty:
+            st.success("Nenhum fiado em aberto 🎉")
+        else:
+            em_aberto["Valor"] = pd.to_numeric(em_aberto["Valor"], errors="coerce").fillna(0)
+            resumo = (em_aberto
+                      .groupby(["IDLancFiado","Cliente"], as_index=False)
+                      .agg(ValorTotal=("Valor","sum"),
+                           QtdeServicos=("Serviço","count"),
                            Combo=("Combo","first")))
             st.dataframe(resumo.sort_values("ValorTotal", ascending=False), use_container_width=True, hide_index=True)
 
