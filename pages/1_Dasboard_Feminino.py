@@ -25,6 +25,40 @@ ABA_NOME = "Base de Dados Feminino"
 GID_FEMININO = "400923272"
 
 # =========================
+# HELPERS
+# =========================
+def encontrar_coluna_valor(df: pd.DataFrame) -> str | None:
+    """
+    Tenta localizar a coluna de valor por nomes comuns (valor, preço, total).
+    Retorna o nome exato da coluna no DF ou None.
+    """
+    if df is None or df.empty:
+        return None
+    candidatos = []
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if any(k in cl for k in ["valor", "preço", "preco", "total"]):
+            candidatos.append(c)
+    # preferências: exatamente "Valor" > contém "valor" > "preço" > "total"
+    if "Valor" in df.columns:
+        return "Valor"
+    if candidatos:
+        # escolhe o mais curto (tende a ser o principal), ex: "Valor (R$)" -> ainda funciona
+        return sorted(candidatos, key=lambda x: len(x))[0]
+    return None
+
+def normalizar_moeda(serie: pd.Series) -> pd.Series:
+    """
+    Remove R$, espaços, NBSP, pontos de milhar; converte vírgula->ponto.
+    """
+    s = serie.astype(str)
+    s = s.str.replace("\u00A0", " ", regex=False)  # NBSP -> espaço
+    s = s.str.replace(r"[^\d,.\-]", "", regex=True)  # remove qualquer símbolo que não seja dígito . , -
+    s = s.str.replace(".", "", regex=False)         # remove ponto de milhar
+    s = s.str.replace(",", ".", regex=False)        # vírgula -> ponto decimal
+    return pd.to_numeric(s, errors="coerce")
+
+# =========================
 # CARREGAMENTO DE DADOS
 # =========================
 @st.cache_data(ttl=300)
@@ -54,8 +88,7 @@ def carregar_dados():
             ws = gc.open_by_key(SHEET_ID).worksheet(ABA_NOME)
             df = get_as_dataframe(ws, evaluate_formulas=True, dtype=str)
             usou_gspread = True
-    except Exception as e:
-        # Mostra aviso mas segue para fallback
+    except Exception:
         st.warning("Não foi possível usar a Service Account nesta página. Tentando via CSV público…")
 
     # 2) Fallback CSV (exige compartilhamento público de leitura)
@@ -74,13 +107,16 @@ def carregar_dados():
     if "Data" in df.columns:
         df["Data"] = pd.to_datetime(df["Data"], errors="coerce", dayfirst=True)
 
-    # Valor numérico (aceita R$, espaços, NBSP etc.)
-    if "Valor" in df.columns:
-        v = df["Valor"].astype(str)
-        v = v.str.replace(r"[^\d,.\-]", "", regex=True)  # remove símbolos
-        v = v.str.replace(".", "", regex=False)          # milhar
-        v = v.str.replace(",", ".", regex=False)         # vírgula -> ponto
-        df["Valor"] = pd.to_numeric(v, errors="coerce")
+    # Valor (auto-detecta o nome da coluna)
+    col_valor = encontrar_coluna_valor(df)
+    if col_valor is not None:
+        df[col_valor] = normalizar_moeda(df[col_valor])
+        # Para o restante do código, padronizamos o nome para "Valor"
+        if col_valor != "Valor":
+            df["Valor"] = df[col_valor]
+    else:
+        # garante a existência da coluna "Valor" mesmo que vazia
+        df["Valor"] = pd.Series(dtype=float)
 
     # Limpa espaços
     for col in df.columns:
@@ -94,7 +130,6 @@ def carregar_dados():
     origem = "Service Account" if usou_gspread else "CSV público"
     st.caption(f"Fonte de dados: **{origem}** · Linhas lidas: **{len(df)}**")
     return df
-
 
 df_raw = carregar_dados()
 
@@ -128,9 +163,6 @@ with st.sidebar:
     funcionarios_sel = st.multiselect("Funcionário", unique_sorted("Funcionário"))
     contas_sel = st.multiselect("Forma de pagamento (Conta)", unique_sorted("Conta"))
     tipos_sel = st.multiselect("Tipo (Produto/Serviço)", unique_sorted("Tipo"))
-
-    # Remover nomes genéricos apenas para rankings
-    NOMES_GENERICOS = {"boliviano", "brasileiro", "menino", "menina", "cliente", "clientes"}
 
 # Aplica filtros
 mask = (
