@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from datetime import datetime, date
+from datetime import date
 
 # =========================
 # CONFIGURAÇÃO GERAL
@@ -19,10 +19,9 @@ st.title("💅 Dashboard Feminino")
 
 PLOTLY_TEMPLATE = "plotly_dark"  # visual escuro
 
-# ID da planilha principal (a mesma que você já usa)
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVIZHbI3rAV_haEcil0lUE"  # mantenha o seu ID correto aqui
+# ID da planilha principal (CORRETO)
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_NOME = "Base de Dados Feminino"
-# GID da aba Feminino
 GID_FEMININO = "400923272"
 
 # =========================
@@ -35,29 +34,40 @@ def carregar_dados():
     Caso não tenha, faz fallback para CSV público do Google Sheets.
     """
     df = None
+    usou_gspread = False
 
-    # 1) Tentativa com Service Account (se o usuário tiver secrets)
+    # 1) Tentativa com Service Account
     try:
         from google.oauth2.service_account import Credentials
         import gspread
         from gspread_dataframe import get_as_dataframe
 
         if "gcp_service_account" in st.secrets:
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=[
-                "https://www.googleapis.com/auth/spreadsheets.readonly",
-                "https://www.googleapis.com/auth/drive.readonly",
-            ])
+            creds = Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=[
+                    "https://www.googleapis.com/auth/spreadsheets.readonly",
+                    "https://www.googleapis.com/auth/drive.readonly",
+                ],
+            )
             gc = gspread.authorize(creds)
-            sh = gc.open_by_key(SHEET_ID)
-            ws = sh.worksheet(ABA_NOME)
+            ws = gc.open_by_key(SHEET_ID).worksheet(ABA_NOME)
             df = get_as_dataframe(ws, evaluate_formulas=True, dtype=str)
-    except Exception:
-        pass  # cai no fallback
+            usou_gspread = True
+    except Exception as e:
+        # Mostra aviso mas segue para fallback
+        st.warning("Não foi possível usar a Service Account nesta página. Tentando via CSV público…")
 
-    # 2) Fallback CSV (exige que a aba esteja compartilhada para leitura por link)
+    # 2) Fallback CSV (exige compartilhamento público de leitura)
     if df is None or df.empty:
         url_csv = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID_FEMININO}"
-        df = pd.read_csv(url_csv, dtype=str)
+        try:
+            df = pd.read_csv(url_csv, dtype=str)
+        except Exception as e:
+            raise RuntimeError(
+                "Falha ao carregar a aba via CSV. "
+                "Verifique se o ID da planilha está correto e se a aba está compartilhada para leitura por link."
+            ) from e
 
     # ---------- Padronizações ----------
     # Data
@@ -67,9 +77,9 @@ def carregar_dados():
     # Valor numérico (aceita R$, espaços, NBSP etc.)
     if "Valor" in df.columns:
         v = df["Valor"].astype(str)
-        v = v.str.replace(r"[^\d,.\-]", "", regex=True)   # remove símbolos
-        v = v.str.replace(".", "", regex=False)           # remove milhar
-        v = v.str.replace(",", ".", regex=False)          # vírgula -> ponto
+        v = v.str.replace(r"[^\d,.\-]", "", regex=True)  # remove símbolos
+        v = v.str.replace(".", "", regex=False)          # milhar
+        v = v.str.replace(",", ".", regex=False)         # vírgula -> ponto
         df["Valor"] = pd.to_numeric(v, errors="coerce")
 
     # Limpa espaços
@@ -79,6 +89,10 @@ def carregar_dados():
 
     # Remove linhas totalmente vazias
     df = df.dropna(how="all")
+
+    # Informação útil no topo
+    origem = "Service Account" if usou_gspread else "CSV público"
+    st.caption(f"Fonte de dados: **{origem}** · Linhas lidas: **{len(df)}**")
     return df
 
 
@@ -99,14 +113,15 @@ with st.sidebar:
 
     periodo = st.date_input(
         "Período",
-        value=(min_data.date() if isinstance(min_data, pd.Timestamp) else date.today(),
-               max_data.date() if isinstance(max_data, pd.Timestamp) else date.today())
+        value=(min_data.date() if pd.notna(min_data) else date.today(),
+               max_data.date() if pd.notna(max_data) else date.today())
     )
 
     def unique_sorted(col):
         if col not in df_raw.columns:
             return []
-        return sorted([x for x in df_raw[col].dropna().unique() if str(x).strip() != ""], key=lambda s: str(s).lower())
+        vals = [x for x in df_raw[col].dropna().unique() if str(x).strip() != ""]
+        return sorted(vals, key=lambda s: str(s).lower())
 
     servicos_sel = st.multiselect("Serviço", unique_sorted("Serviço"))
     clientes_sel = st.multiselect("Cliente", unique_sorted("Cliente"))
@@ -114,7 +129,7 @@ with st.sidebar:
     contas_sel = st.multiselect("Forma de pagamento (Conta)", unique_sorted("Conta"))
     tipos_sel = st.multiselect("Tipo (Produto/Serviço)", unique_sorted("Tipo"))
 
-    # Remover nomes genéricos apenas para rankings (config do projeto)
+    # Remover nomes genéricos apenas para rankings
     NOMES_GENERICOS = {"boliviano", "brasileiro", "menino", "menina", "cliente", "clientes"}
 
 # Aplica filtros
@@ -153,57 +168,45 @@ receita = float(np.nansum(df["Valor"])) if "Valor" in df.columns else 0.0
 atendimentos = contar_atendimentos(df)
 ticket_medio = (receita / atendimentos) if atendimentos > 0 else 0.0
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Receita no período", f"R$ {receita:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-col2.metric("Atendimentos (únicos)", f"{atendimentos}")
-col3.metric("Ticket médio", f"R$ {ticket_medio:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-col4.metric("Registros (linhas)", f"{len(df):,}".replace(",", "."))
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Receita no período", f"R$ {receita:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+c2.metric("Atendimentos (únicos)", f"{atendimentos}")
+c3.metric("Ticket médio", f"R$ {ticket_medio:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+c4.metric("Registros (linhas)", f"{len(df):,}".replace(",", "."))
 
 # =========================
 # GRÁFICOS PRINCIPAIS
 # =========================
-# 1) Receita por mês (barra)
+fig_mes = fig_serv = fig_func = fig_conta = fig_dia = None
+
 if ("Data" in df.columns) and ("Valor" in df.columns):
     base_mes = df.copy()
     base_mes["Ano-Mês"] = base_mes["Data"].dt.to_period("M").astype(str)
     gm = base_mes.groupby("Ano-Mês", as_index=False)["Valor"].sum()
     fig_mes = px.bar(gm, x="Ano-Mês", y="Valor", title="Receita por mês", template=PLOTLY_TEMPLATE)
     fig_mes.update_layout(xaxis_title="", yaxis_title="R$")
-else:
-    fig_mes = None
 
-# 2) Receita por serviço (top 15)
 if ("Serviço" in df.columns) and ("Valor" in df.columns):
     gs = df.groupby("Serviço", as_index=False)["Valor"].sum().sort_values("Valor", ascending=False).head(15)
     fig_serv = px.bar(gs, x="Serviço", y="Valor", title="Receita por serviço (Top 15)", template=PLOTLY_TEMPLATE)
     fig_serv.update_layout(xaxis_title="", yaxis_title="R$")
-else:
-    fig_serv = None
 
-# 3) Receita por funcionário
 if ("Funcionário" in df.columns) and ("Valor" in df.columns):
     gf = df.groupby("Funcionário", as_index=False)["Valor"].sum().sort_values("Valor", ascending=False)
     fig_func = px.bar(gf, x="Funcionário", y="Valor", title="Receita por funcionário", template=PLOTLY_TEMPLATE)
     fig_func.update_layout(xaxis_title="", yaxis_title="R$")
-else:
-    fig_func = None
 
-# 4) Distribuição por forma de pagamento (pizza)
-fig_conta = None
 if ("Conta" in df.columns) and ("Valor" in df.columns) and not df["Conta"].isna().all():
     gc = df.groupby("Conta", as_index=False)["Valor"].sum()
     if not gc.empty:
         fig_conta = px.pie(gc, names="Conta", values="Valor", title="Receita por forma de pagamento", template=PLOTLY_TEMPLATE, hole=0.3)
 
-# 5) Evolução diária (linha)
-fig_dia = None
 if ("Data" in df.columns) and ("Valor" in df.columns):
     gd = df.groupby(df["Data"].dt.date, as_index=False)["Valor"].sum()
     if not gd.empty:
         fig_dia = px.line(gd, x="Data", y="Valor", markers=True, title="Evolução diária de receita", template=PLOTLY_TEMPLATE)
         fig_dia.update_layout(xaxis_title="", yaxis_title="R$")
 
-# Layout dos gráficos
 g1, g2 = st.columns([1, 1])
 with g1:
     if fig_mes: st.plotly_chart(fig_mes, use_container_width=True)
@@ -219,10 +222,9 @@ with g2:
 st.subheader("🏆 Top clientes (por receita)")
 df_rank = df.copy()
 
-# remove nomes genéricos só no ranking (não afeta totais)
 if "Cliente" in df_rank.columns:
     df_rank["Cliente_limpo"] = df_rank["Cliente"].str.strip().str.lower()
-    df_rank = df_rank[~df_rank["Cliente_limpo"].isin(NOMES_GENERICOS)]
+    df_rank = df_rank[~df_rank["Cliente_limpo"].isin({"boliviano","brasileiro","menino","menina","cliente","clientes"})]
     df_rank = df_rank.drop(columns=["Cliente_limpo"], errors="ignore")
 
 if ("Cliente" in df_rank.columns) and ("Valor" in df_rank.columns):
@@ -232,15 +234,13 @@ if ("Cliente" in df_rank.columns) and ("Valor" in df_rank.columns):
         .sort_values("Receita", ascending=False)
         .head(20)
     )
-    # Atendimentos únicos por cliente
-    if ("Data" in df_rank.columns):
+    if "Data" in df_rank.columns:
         aux = df_rank.dropna(subset=["Cliente", "Data"]).copy()
         aux["DataDia"] = aux["Data"].dt.date
         atend_por_cli = aux.groupby("Cliente")["DataDia"].nunique().reset_index().rename(columns={"DataDia": "Atendimentos"})
         top_clientes = top_clientes.merge(atend_por_cli, on="Cliente", how="left")
         top_clientes["Ticket médio"] = top_clientes["Receita"] / top_clientes["Atendimentos"].replace(0, np.nan)
 
-    # Formatação
     def moeda(x):
         if pd.isna(x): return "-"
         return f"R$ {x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -250,15 +250,10 @@ if ("Cliente" in df_rank.columns) and ("Valor" in df_rank.columns):
     if "Ticket médio" in top_clientes_fmt.columns:
         top_clientes_fmt["Ticket médio"] = top_clientes_fmt["Ticket médio"].apply(moeda)
 
-    st.dataframe(
-        top_clientes_fmt,
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(top_clientes_fmt, use_container_width=True, hide_index=True)
 
-    # Downloads
-    colA, colB = st.columns(2)
-    with colA:
+    cA, cB = st.columns(2)
+    with cA:
         st.download_button(
             "⬇️ Baixar ranking (CSV)",
             data=top_clientes.to_csv(index=False).encode("utf-8"),
@@ -266,7 +261,7 @@ if ("Cliente" in df_rank.columns) and ("Valor" in df_rank.columns):
             mime="text/csv",
             use_container_width=True
         )
-    with colB:
+    with cB:
         st.download_button(
             "⬇️ Baixar base filtrada (CSV)",
             data=df.to_csv(index=False).encode("utf-8"),
@@ -283,7 +278,6 @@ else:
 st.subheader("✨ Insights rápidos")
 insights = []
 
-# Produto vs Serviço se existir 'Tipo'
 if ("Tipo" in df.columns) and ("Valor" in df.columns):
     mix = df.groupby("Tipo", as_index=False)["Valor"].sum().sort_values("Valor", ascending=False)
     if not mix.empty:
@@ -293,19 +287,16 @@ if ("Tipo" in df.columns) and ("Valor" in df.columns):
             .replace(",", "X").replace(".", ",").replace("X", ".")
         )
 
-# Serviço campeão
 if ("Serviço" in df.columns) and ("Valor" in df.columns) and not df["Serviço"].isna().all():
     s = df.groupby("Serviço", as_index=False)["Valor"].sum().sort_values("Valor", ascending=False)
     if not s.empty:
         insights.append(f"Serviço campeão: **{s.iloc[0]['Serviço']}**.")
 
-# Funcionário com maior receita
 if ("Funcionário" in df.columns) and ("Valor" in df.columns) and not df["Funcionário"].isna().all():
     f = df.groupby("Funcionário", as_index=False)["Valor"].sum().sort_values("Valor", ascending=False)
     if not f.empty:
         insights.append(f"Maior faturamento por: **{f.iloc[0]['Funcionário']}**.")
 
-# Melhor mês no período filtrado
 if ("Data" in df.columns) and ("Valor" in df.columns):
     m = df.copy()
     m["Ano-Mês"] = m["Data"].dt.to_period("M").astype(str)
