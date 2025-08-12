@@ -84,9 +84,13 @@ def carregar_tudo():
         clientes = sorted([c for c in dfb["Cliente"].dropna().unique() if c])
         combos  = sorted([c for c in dfb["Combo"].dropna().unique() if c])
         servs   = sorted([s for s in dfb["Serviço"].dropna().unique() if s])
-        contas  = sorted([c for c in dfb["Conta"].dropna().unique() if c])
+
+        # contas existentes (pra usar também no pagamento). Tira "Fiado"
+        contas_raw = [c for c in dfb["Conta"].dropna().astype(str).str.strip().unique() if c]
+        contas  = sorted([c for c in contas_raw if c.lower() != "fiado"])
     except Exception:
         clientes, combos, servs, contas = [], [], [], []
+
     return df_base, df_lanc, df_pagt, clientes, combos, servs, contas
 
 def salvar_df(nome_aba, df):
