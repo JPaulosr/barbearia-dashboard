@@ -14,7 +14,8 @@ st.title("🧑‍🤝‍🧑 Comparativo entre Funcionários")
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 MES_ORD = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
-CUTOFF_COMBO = pd.Timestamp("2025-05-11")  # regra oficial
+MAP_MES_NUM = {n:i+1 for i, n in enumerate(MES_ORD)}
+CUTOFF_COMBO = pd.Timestamp("2025-05-11")
 NOMES_IGNORAR = ["boliviano","brasileiro","menino","menino boliviano"]
 
 def fmt_moeda(v: float) -> str:
@@ -47,7 +48,7 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     # Valor
     df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
-    # Tipo/Funcionário/Cliente
+    # Colunas textuais
     for c in ["Tipo","Funcionário","Cliente","Conta","StatusFiado","Combo","Serviço","Período","Fase"]:
         if c not in df.columns:
             df[c] = ""
@@ -81,20 +82,31 @@ funcs_sel = st.sidebar.multiselect("👤 Funcionários", options=funcs, default=
 tipos_disponiveis = sorted(df["Tipo"].replace("", pd.NA).dropna().unique().tolist()) or ["Serviço","Produto"]
 tipos_sel = st.sidebar.multiselect("🧾 Tipo", options=tipos_disponiveis, default=tipos_disponiveis)
 
+# 🔹 Novo: filtro por Período
+periodos_disponiveis = sorted([p for p in df["Período"].replace("", pd.NA).dropna().unique().tolist()])
+periodos_sel = st.sidebar.multiselect("⌛ Período", options=periodos_disponiveis, default=periodos_disponiveis)
+
 ignorar_fiado = st.sidebar.checkbox("Ignorar FIADO em aberto (conta='Fiado' com StatusFiado≠'Pago')", value=True)
 
-# Aplica filtros
-f = df[df["Ano"] == ano_sel].copy()
+# Função para aplicar filtros comuns
+def aplicar_filtros_base(_df):
+    f = _df.copy()
+    if funcs_sel:
+        f = f[f["Funcionário"].isin(funcs_sel)]
+    if tipos_sel:
+        f = f[f["Tipo"].isin(tipos_sel)]
+    if periodos_sel:
+        f = f[f["Período"].isin(periodos_sel)]
+    if ignorar_fiado:
+        mask_fiado_aberto = (f["Conta"].str.lower() == "fiado") & (~f["StatusFiado"].str.lower().eq("pago"))
+        f = f[~mask_fiado_aberto]
+    return f
+
+# Aplica filtros para a visão do ano selecionado
+f_base = aplicar_filtros_base(df)
+f = f_base[f_base["Ano"] == ano_sel].copy()
 if meses_sel:
     f = f[f["Mês_Nome"].isin(meses_sel)]
-if funcs_sel:
-    f = f[f["Funcionário"].isin(funcs_sel)]
-if tipos_sel:
-    f = f[f["Tipo"].isin(tipos_sel)]
-if ignorar_fiado:
-    # Considera fiado pago; remove fiado em aberto
-    mask_fiado_aberto = (f["Conta"].str.lower() == "fiado") & (~f["StatusFiado"].str.lower().eq("pago"))
-    f = f[~mask_fiado_aberto]
 
 # Guard rail
 if f.empty:
@@ -109,8 +121,7 @@ receita_mensal = (
     f.groupby(["Funcionário","Mês","Mês_Nome"], as_index=False)["Valor"].sum()
     .sort_values("Mês")
 )
-
-# Média móvel de 3 meses (por funcionário) – ajuda a enxergar tendência
+# Média móvel (3 meses)
 receita_mensal["MM3"] = (
     receita_mensal.sort_values(["Funcionário","Mês"])
     .groupby("Funcionário")["Valor"]
@@ -125,7 +136,6 @@ fig = px.bar(
 )
 st.plotly_chart(fig, use_container_width=True)
 
-# Linha de tendência (média móvel) separada
 fig_trend = px.line(
     receita_mensal.sort_values("Mês"),
     x="Mês_Nome", y="MM3", color="Funcionário",
@@ -139,11 +149,9 @@ st.plotly_chart(fig_trend, use_container_width=True)
 # =============================
 st.subheader("📋 Total de Atendimentos por Funcionário (com lógica de 11/05/2025)")
 
-# Pré-corte: cada linha = 1 atendimento
 df_pre = f[f["Data"] < CUTOFF_COMBO].copy()
 df_pre["Qtd_Serviços"] = 1
 
-# Pós-corte: 1 atendimento/dia por Cliente+Data+Funcionário
 df_pos = (
     f[f["Data"] >= CUTOFF_COMBO]
     .groupby(["Cliente","Data","Funcionário"], as_index=False)
@@ -181,7 +189,6 @@ receita_total = f.groupby("Funcionário", as_index=False)["Valor"].sum()
 receita_total["Valor Formatado"] = receita_total["Valor"].map(fmt_moeda)
 st.dataframe(receita_total[["Funcionário","Valor Formatado"]], use_container_width=True, hide_index=True)
 
-# Diferença (se ambos presentes)
 valores = receita_total.set_index("Funcionário")["Valor"].to_dict()
 if all(k in valores for k in ["JPaulo","Vinicius"]):
     dif = valores["JPaulo"] - valores["Vinicius"]
@@ -200,7 +207,8 @@ clientes_por_func = (
 )
 
 col1, col2 = st.columns(2)
-for func, col in zip(funcs_sel or funcs, [col1, col2] if len(funcs_sel or funcs) > 1 else [st.container(), st.container()]):
+alvo_funcs = funcs_sel or funcs
+for func, col in zip(alvo_funcs, [col1, col2] if len(alvo_funcs) > 1 else [st.container(), st.container()]):
     top = clientes_por_func[clientes_por_func["Funcionário"] == func].head(10).copy()
     if top.empty:
         continue
@@ -209,7 +217,7 @@ for func, col in zip(funcs_sel or funcs, [col1, col2] if len(funcs_sel or funcs)
     col.dataframe(top[["Cliente","Valor Formatado"]], use_container_width=True, hide_index=True)
 
 # =============================
-# 📆 Receita por Ano x Funcionário
+# 📆 Receita por Ano x Funcionário (tabela geral)
 # =============================
 st.subheader("📆 Receita Total por Funcionário em Cada Ano")
 receita_ano_func = (
@@ -222,6 +230,33 @@ tbl_fmt = receita_ano_func.applymap(fmt_moeda)
 st.dataframe(tbl_fmt, use_container_width=True)
 
 # =============================
+# 🔄 Comparativo Ano vs Ano (mês escolhido)
+# =============================
+st.subheader("🔄 Comparativo Ano vs Ano (mês escolhido)")
+
+mes_yoy = st.selectbox("Escolha o mês para comparar entre anos", options=[m for m in MES_ORD if m in df["Mês_Nome"].unique()], index=0)
+
+# usa os mesmos filtros (funcionário, tipo, fiado, período) mas não fixa o ano
+g = f_base[f_base["Mês_Nome"] == mes_yoy].copy()
+if g.empty:
+    st.info("Sem dados para o mês selecionado com os filtros atuais.")
+else:
+    # gráfico: Ano no eixo X, cor por Funcionário
+    yoy = g.groupby(["Ano","Funcionário"], as_index=False)["Valor"].sum().sort_values(["Ano","Funcionário"])
+    fig_y = px.bar(yoy, x="Ano", y="Valor", color="Funcionário", barmode="group", text_auto=True)
+    st.plotly_chart(fig_y, use_container_width=True)
+
+    # tabela com variação R$ e %
+    base_totais = g.groupby(["Ano"], as_index=False)["Valor"].sum().sort_values("Ano")
+    base_totais["Var_R$"] = base_totais["Valor"].diff()
+    base_totais["Var_%"] = base_totais["Valor"].pct_change().fillna(0.0) * 100.0
+    tbl = base_totais.copy()
+    tbl["Valor"] = tbl["Valor"].map(fmt_moeda)
+    tbl["Var_R$"] = tbl["Var_R$"].apply(lambda x: fmt_moeda(x) if pd.notnull(x) else "—")
+    tbl["Var_%"] = tbl["Var_%"].apply(lambda x: f"{x:,.1f}%".replace(",", "v").replace(".", ",").replace("v", ".") if pd.notnull(x) else "—")
+    st.dataframe(tbl.rename(columns={"Valor":"Receita (mês)"}), use_container_width=True, hide_index=True)
+
+# =============================
 # Export dos dados filtrados
 # =============================
 st.download_button(
@@ -232,4 +267,4 @@ st.download_button(
 )
 
 st.markdown("---")
-st.caption("Dica: ative/desative o filtro de fiado em aberto para comparar competência vs. atendimento.")
+st.caption("Dica: use o filtro de Período para enxergar picos (manhã/tarde/noite) e o comparativo por mês para medir sazonalidade por ano.")
