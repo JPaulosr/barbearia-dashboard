@@ -302,7 +302,7 @@ elif acao == "💰 Registrar pagamento":
 
             # Atualiza no lugar (COMPETÊNCIA): muda Conta, limpa StatusFiado e Vencimento, grava DataPagamento
             dfb.loc[mask, "Conta"] = forma_pag
-            dfb.loc[mask, "StatusFiado"] = ""
+            dfb.loc[mask, "StatusFiado"] = "Pago"
             dfb.loc[mask, "VencimentoFiado"] = ""
             dfb.loc[mask, "DataPagamento"] = data_pag.strftime(DATA_FMT)
 
