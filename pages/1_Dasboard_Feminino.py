@@ -66,15 +66,15 @@ def carregar_dados():
     if "Data" in df.columns:
         df["Data"] = pd.to_datetime(df["Data"], errors="coerce", dayfirst=True)
     # Valor numérico
-    if "Valor" in df.columns:
-        df["Valor"] = (
-            df["Valor"]
-            .astype(str)
-            .str.replace("R$", "", regex=False)
-            .str.replace(".", "", regex=False)
-            .str.replace(",", ".", regex=False)
-        )
-        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+    # Valor numérico (aceita R$, espaços, NBSP etc.)
+if "Valor" in df.columns:
+    v = df["Valor"].astype(str)
+    # remove tudo que não for dígito, vírgula, ponto, hífen
+    v = v.str.replace(r"[^\d,.\-]", "", regex=True)
+    # normaliza milhar/decimal no padrão BR -> ponto milhar, vírgula decimal
+    # primeiro remove pontos de milhar, depois troca vírgula por ponto
+    v = v.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+    df["Valor"] = pd.to_numeric(v, errors="coerce")
 
     # Limpa espaços
     for col in df.columns:
