@@ -78,12 +78,7 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# === Sidebar: toggle para incluir fiado nos valores ===
-st.sidebar.header("🎛️ Opções de cálculo")
-st.sidebar.caption("Os gráficos e somatórios de VALOR consideram este ajuste.")
-incluir_fiado = st.sidebar.toggle("Incluir **FIADO** nos gráficos de valor", value=False)
-
-# === Base sem FIADO para cálculos de VALOR (padrão) ===
+# === Base sem FIADO para cálculos de VALOR ===
 col_conta = next((c for c in df.columns
                   if c.strip().lower() in ["conta", "forma de pagamento", "pagamento", "status"]), None)
 
@@ -99,18 +94,8 @@ if col_conta:
 else:
     mask_fiado = pd.Series(False, index=df.index)
 
-# Decide a base de valores conforme o toggle
-if incluir_fiado:
-    df_valores = df.copy()
-else:
-    df_valores = df[~mask_fiado].copy()
-
+df_valores = df[~mask_fiado].copy()  # usar APENAS para somatórios/gráficos de valor
 df_valores["ValorNum"] = pd.to_numeric(df_valores["Valor"], errors="coerce").fillna(0)
-
-# Badge de contexto
-st.caption("🔎 Cálculo de valor atual: **{}**".format(
-    "Inclui FIADO" if incluir_fiado else "Exclui FIADO"
-))
 
 # === Seleção do Cliente ===
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
@@ -142,8 +127,8 @@ else:
     st.info("Cliente sem imagem cadastrada.")
 
 # === Dados do cliente (duas visões) ===
-df_cliente = df[df["Cliente"] == cliente].copy()                     # histórico/frequência (inclui fiado)
-df_cliente_val = df_valores[df_valores["Cliente"] == cliente].copy()  # valores (com/sem fiado conforme toggle)
+df_cliente = df[df["Cliente"] == cliente].copy()                 # histórico/frequência (inclui fiado)
+df_cliente_val = df_valores[df_valores["Cliente"] == cliente].copy()  # valores (sem fiado)
 
 # Aplicar tempo formatado
 if "Duração (min)" in df_cliente.columns:
@@ -157,10 +142,10 @@ st.dataframe(
     use_container_width=True
 )
 
-# === Receita mensal (valor conforme toggle) ===
+# === Receita mensal (sem fiado) ===
 st.subheader("📊 Receita mensal")
 if df_cliente_val.empty:
-    st.info("Sem valores para exibir.")
+    st.info("Sem valores recebidos para exibir.")
 else:
     df_cliente_val["Data_Ref_Mensal"] = df_cliente_val["Data"].dt.to_period("M").dt.to_timestamp()
     receita_mensal = df_cliente_val.groupby("Data_Ref_Mensal")["ValorNum"].sum().reset_index()
@@ -182,10 +167,10 @@ else:
     fig_receita.update_layout(height=400)
     st.plotly_chart(fig_receita, use_container_width=True)
 
-# === Receita por Serviço e Produto (valor conforme toggle) ===
+# === Receita por Serviço e Produto (sem fiado) ===
 st.subheader("📊 Receita por Serviço e Produto")
 if df_cliente_val.empty:
-    st.info("Sem valores para exibir.")
+    st.info("Sem valores recebidos para exibir.")
 else:
     df_tipos = df_cliente_val[["Serviço", "Tipo", "ValorNum"]].copy()
     receita_geral = (
@@ -257,6 +242,7 @@ mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcion
 tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
 tempo_total_str = formatar_tempo(tempo_total)
 ticket_medio = df_cliente_val["ValorNum"].mean() if not df_cliente_val.empty else 0
+# intervalo_medio já calculado acima se houver 2+ atendimentos
 intervalo_medio = (sum([(datas[i] - datas[i-1]).days for i in range(1, len(datas))]) / len(datas[1:])) if len(datas) >= 2 else None
 
 col5, col6, col7 = st.columns(3)
