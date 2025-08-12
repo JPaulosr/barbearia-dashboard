@@ -25,8 +25,12 @@ def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [col.strip() for col in df.columns]
-    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+
+    # padroniza colunas
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # datas
+    df["Data"] = pd.to_datetime(df.get("Data"), errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Ano"] = df["Data"].dt.year.astype(int)
     df["Mês"] = df["Data"].dt.month
@@ -34,30 +38,81 @@ def carregar_dados():
         1: "Jan", 2: "Fev", 3: "Mar", 4: "Abr", 5: "Mai", 6: "Jun",
         7: "Jul", 8: "Ago", 9: "Set", 10: "Out", 11: "Nov", 12: "Dez"
     })
+
+    # valor numérico
+    if "Valor" in df.columns:
+        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+    else:
+        df["Valor"] = 0.0
+
+    # normaliza coluna de forma de pagamento/conta
+    # tenta "Conta" primeiro; se não houver, tenta "Forma de Pagamento"
+    conta_col = "Conta" if "Conta" in df.columns else ("Forma de Pagamento" if "Forma de Pagamento" in df.columns else None)
+    if conta_col:
+        df["Conta_norm"] = (
+            df[conta_col]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace({"nan": ""})
+        )
+    else:
+        df["Conta_norm"] = ""
+
+    # normaliza funcionário/cliente/serviço
+    for c in ["Funcionário", "Cliente", "Serviço"]:
+        if c not in df.columns:
+            df[c] = ""
+
     return df
 
 df = carregar_dados()
 
+# =============================
+# 🔎 Filtro por ano e FIADO
+# =============================
 anos = sorted(df["Ano"].unique(), reverse=True)
 ano = st.selectbox("📅 Selecione o Ano", anos, index=0)
-df_filtrado = df[df["Ano"] == ano]
+
+col_f1, col_f2 = st.columns([1, 3])
+modo_pag = col_f1.radio(
+    "Filtro de pagamento",
+    ["Apenas pagos", "Apenas fiado", "Incluir tudo"],
+    index=0,
+    help="Aplica o filtro a todos os gráficos e tabelas desta página."
+)
+
+df_filtrado = df[df["Ano"] == ano].copy()
+
+# aplica FIADO
+# considera fiado quando Conta_norm == 'fiado'
+if modo_pag == "Apenas pagos":
+    df_filtrado = df_filtrado[df_filtrado["Conta_norm"] != "fiado"]
+elif modo_pag == "Apenas fiado":
+    df_filtrado = df_filtrado[df_filtrado["Conta_norm"] == "fiado"]
+# "Incluir tudo" não filtra
 
 # =============================
 # 📈 Receita Mensal por Funcionário
 # =============================
 st.subheader("📈 Receita Mensal por Funcionário")
-receita_mensal = df_filtrado.groupby(["Funcionário", "Mês", "Mês_Nome"])["Valor"].sum().reset_index()
-receita_mensal = receita_mensal.sort_values("Mês")
-fig = px.bar(
-    receita_mensal,
-    x="Mês_Nome",
-    y="Valor",
-    color="Funcionário",
-    barmode="group",
-    text_auto=True,
-    category_orders={"Mês_Nome": ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]}
-)
-st.plotly_chart(fig, use_container_width=True)
+if not df_filtrado.empty:
+    receita_mensal = (
+        df_filtrado.groupby(["Funcionário", "Mês", "Mês_Nome"], as_index=False)["Valor"].sum()
+        .sort_values("Mês")
+    )
+    fig = px.bar(
+        receita_mensal,
+        x="Mês_Nome",
+        y="Valor",
+        color="Funcionário",
+        barmode="group",
+        text_auto=True,
+        category_orders={"Mês_Nome": ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]}
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Sem dados para os filtros selecionados.")
 
 # =============================
 # 📋 Total de Atendimentos e Combos com lógica de 11/05
@@ -75,25 +130,25 @@ df_atendimentos = pd.concat([
     df_pos[["Cliente", "Data", "Funcionário", "Qtd_Serviços"]]
 ], ignore_index=True)
 
-df_atendimentos["Combo"] = df_atendimentos["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
-df_atendimentos["Simples"] = df_atendimentos["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
+df_atendimentos["Combo"] = (df_atendimentos["Qtd_Serviços"] > 1).astype(int)
+df_atendimentos["Simples"] = (df_atendimentos["Qtd_Serviços"] == 1).astype(int)
 
-combo_simples = df_atendimentos.groupby("Funcionário").agg(
+combo_simples = df_atendimentos.groupby("Funcionário", as_index=False).agg(
     Total_Atendimentos=("Data", "count"),
     Qtd_Combo=("Combo", "sum"),
     Qtd_Simples=("Simples", "sum")
-).reset_index()
+)
 
 col1, col2 = st.columns(2)
 for _, row in combo_simples.iterrows():
     if row["Funcionário"] == "JPaulo":
-        col1.metric("Atendimentos - JPaulo", row["Total_Atendimentos"])
-        col1.metric("Combos - JPaulo", row["Qtd_Combo"])
-        col1.metric("Simples - JPaulo", row["Qtd_Simples"])
+        col1.metric("Atendimentos - JPaulo", int(row["Total_Atendimentos"]))
+        col1.metric("Combos - JPaulo", int(row["Qtd_Combo"]))
+        col1.metric("Simples - JPaulo", int(row["Qtd_Simples"]))
     elif row["Funcionário"] == "Vinicius":
-        col2.metric("Atendimentos - Vinicius", row["Total_Atendimentos"])
-        col2.metric("Combos - Vinicius", row["Qtd_Combo"])
-        col2.metric("Simples - Vinicius", row["Qtd_Simples"])
+        col2.metric("Atendimentos - Vinicius", int(row["Total_Atendimentos"]))
+        col2.metric("Combos - Vinicius", int(row["Qtd_Combo"]))
+        col2.metric("Simples - Vinicius", int(row["Qtd_Simples"]))
 
 st.dataframe(combo_simples, use_container_width=True)
 
@@ -101,7 +156,7 @@ st.dataframe(combo_simples, use_container_width=True)
 # 💰 Receita Total no Ano
 # =============================
 st.subheader("💰 Receita Total no Ano por Funcionário")
-receita_total = df_filtrado.groupby("Funcionário")["Valor"].sum().reset_index()
+receita_total = df_filtrado.groupby("Funcionário", as_index=False)["Valor"].sum()
 receita_total["Valor Formatado"] = receita_total["Valor"].apply(
     lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 )
@@ -114,7 +169,7 @@ st.subheader("📊 Diferença de Receita (R$)")
 valores = receita_total.set_index("Funcionário")["Valor"].to_dict()
 if "JPaulo" in valores and "Vinicius" in valores:
     dif = valores["JPaulo"] - valores["Vinicius"]
-    label = "JPaulo ganhou mais" if dif > 0 else "Vinicius ganhou mais"
+    label = "JPaulo ganhou mais" if dif > 0 else ("Vinicius ganhou mais" if dif < 0 else "Empate")
     st.metric(label=label, value=f"R$ {abs(dif):,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 
 # =============================
@@ -122,14 +177,16 @@ if "JPaulo" in valores and "Vinicius" in valores:
 # =============================
 st.subheader("🏅 Top 10 Clientes por Receita (por Funcionário)")
 nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
-df_rank = df_filtrado[~df_filtrado["Cliente"].str.lower().str.strip().isin(nomes_ignorar)]
+df_rank = df_filtrado[~df_filtrado["Cliente"].astype(str).str.lower().str.strip().isin(nomes_ignorar)]
 
-clientes_por_func = df_rank.groupby(["Funcionário", "Cliente"])["Valor"].sum().reset_index()
-clientes_por_func = clientes_por_func.sort_values(["Funcionário", "Valor"], ascending=[True, False])
+clientes_por_func = (
+    df_rank.groupby(["Funcionário", "Cliente"], as_index=False)["Valor"].sum()
+    .sort_values(["Funcionário", "Valor"], ascending=[True, False])
+)
 
 col1, col2 = st.columns(2)
 for func, col in zip(["JPaulo", "Vinicius"], [col1, col2]):
-    top_clientes = clientes_por_func[clientes_por_func["Funcionário"] == func].head(10)
+    top_clientes = clientes_por_func[clientes_por_func["Funcionário"] == func].head(10).copy()
     top_clientes["Valor Formatado"] = top_clientes["Valor"].apply(
         lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
     )
@@ -146,7 +203,7 @@ receita_ano_func = (
     .reset_index()
     .pivot(index="Ano", columns="Funcionário", values="Valor")
     .fillna(0)
-    .sort_index(ascending=False)  # mostra 2025 primeiro
+    .sort_index(ascending=False)
 )
 
 receita_formatada = receita_ano_func.copy()
