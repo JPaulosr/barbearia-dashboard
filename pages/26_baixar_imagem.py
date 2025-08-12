@@ -1,30 +1,37 @@
-# 2_Pagamentos.py — com painel de valores (KPIs + gráficos)
+# 2_Pagamentos.py — Painel financeiro + CRUD (aba "Financeiro casulo")
 import streamlit as st
 import pandas as pd
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
+
 import plotly.express as px
 
 st.set_page_config(page_title="Pagamentos", page_icon="💳", layout="wide")
 st.title("💳 Pagamentos")
 
+# === CONFIG ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_FIN = "Financeiro casulo"  # aba de financeiro
-
+ABA_FIN = "Financeiro casulo"          # sua aba de financeiro
 COLS_FIN = ["Paciente","Valor","Data de pagamento","Vencimento"]
 
-# ====== helpers ======
+# ====== HELPERS ======
 def brl(v):
     try:
-        v = float(v)
+        v = 0.0 if v is None or pd.isna(v) else float(v)
     except:
-        return "R$ 0,00"
+        v = 0.0
     s = f"{v:,.2f}"
     return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
 
-# ====== conexão e carga ======
+def fmt_date(d):
+    return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
+
+def fmt_num(v):
+    return 0.0 if v is None or pd.isna(v) else float(v)
+
+# ====== CONEXÃO / CARGA ======
 @st.cache_resource
 def conectar():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -38,29 +45,36 @@ def carregar_fin():
     wks = conectar().worksheet(ABA_FIN)
     df = get_as_dataframe(wks, evaluate_formulas=True, header=0, dtype=str).dropna(how="all")
 
-    # cabecalho truncado "Data de pagame..." -> "Data de pagamento"
+    # Padroniza cabeçalho "Data de pag..." -> "Data de pagamento"
     for c in df.columns:
         if c.lower().startswith("data de pag"):
             df = df.rename(columns={c: "Data de pagamento"})
             break
 
     for c in COLS_FIN:
-        if c not in df.columns: df[c] = ""
+        if c not in df.columns:
+            df[c] = ""
     df = df[COLS_FIN].copy()
-    df["__row__"] = (df.index + 2).astype(int)
+    df["__row__"] = (df.index + 2).astype(int)   # linha real na planilha
 
     def to_date(x):
         s = str(x).strip()
         if not s: return pd.NaT
-        for fmt in ("%d/%m/%Y","%Y-%m-%d"):
-            try: return pd.to_datetime(s, format=fmt).date()
-            except: pass
-        try: return pd.to_datetime(s, dayfirst=True).date()
-        except: return pd.NaT
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return pd.to_datetime(s, format=fmt).date()
+            except:
+                pass
+        try:
+            return pd.to_datetime(s, dayfirst=True).date()
+        except:
+            return pd.NaT
 
     def to_float(x):
-        try: return float(str(x).replace(",", "."))
-        except: return None
+        try:
+            return float(str(x).replace(",", "."))
+        except:
+            return None
 
     df["Vencimento"] = df["Vencimento"].apply(to_date)
     df["Data de pagamento"] = df["Data de pagamento"].apply(to_date)
@@ -72,6 +86,7 @@ def carregar_fin():
         if pd.notna(row["Data de pagamento"]): return "Pago"
         if pd.isna(row["Vencimento"]): return ""
         return "Em atraso" if row["Vencimento"] < hoje else "Em dia"
+
     df["Status"] = df.apply(status, axis=1)
     return df
 
@@ -79,7 +94,8 @@ def update_cell(row_idx, col_name, value):
     wks = conectar().worksheet(ABA_FIN)
     header = wks.row_values(1)
     col_idx = header.index(col_name) + 1
-    if isinstance(value, date): value = value.strftime("%d/%m/%Y")
+    if isinstance(value, date):
+        value = value.strftime("%d/%m/%Y")
     wks.update_cell(row_idx, col_idx, value)
 
 def append_row(values_list):
@@ -96,9 +112,9 @@ prox7 = hoje + timedelta(days=7)
 
 # ================== PAINEL (KPIs) ==================
 pago_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]["Valor"].sum() or 0.0
-aberto = df[df["Status"].isin(["Em dia","Em atraso"])]["Valor"].sum() or 0.0
-atraso = df[df["Status"]=="Em atraso"]["Valor"].sum() or 0.0
-vence_7 = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))]["Valor"].sum() or 0.0
+aberto   = df[df["Status"].isin(["Em dia","Em atraso"])]["Valor"].sum() or 0.0
+atraso   = df[df["Status"]=="Em atraso"]["Valor"].sum() or 0.0
+vence_7  = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))]["Valor"].sum() or 0.0
 
 pagos_no_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]
 ticket_medio = (pagos_no_mes["Valor"].mean() or 0.0) if not pagos_no_mes.empty else 0.0
@@ -115,30 +131,48 @@ st.markdown("")
 # ================== GRÁFICOS ==================
 gc1, gc2 = st.columns([1,1])
 
+# --- Pizza por Status ---
 with gc1:
-    base_status = df.copy()
-    base_status["Valor"] = base_status["Valor"].fillna(0)
-    pie = px.pie(
-        base_status[base_status["Status"]!=""],
-        names="Status", values="Valor", hole=0.35,
-        title="Distribuição por Status"
-    )
-    st.plotly_chart(pie, use_container_width=True)
+    pie_df = df[df["Status"] != ""].copy()
+    pie_df["Valor"] = pie_df["Valor"].apply(fmt_num)
+    if pie_df.empty or pie_df["Valor"].sum() == 0:
+        st.info("Sem valores para exibir na pizza de Status.")
+    else:
+        pie_df = pie_df.groupby("Status", as_index=False)["Valor"].sum()
+        pie = px.pie(
+            pie_df, names="Status", values="Valor", hole=0.35,
+            title="Distribuição por Status"
+        )
+        st.plotly_chart(pie, use_container_width=True)
 
+# --- Linha: valores pagos por mês (últimos 12) ---
 with gc2:
-    base_linha = df[df["Status"]=="Pago"].copy()
-    if not base_linha.empty:
-        base_linha["Mês"] = base_linha["Data de pagamento"].apply(lambda d: date(d.year, d.month, 1) if pd.notna(d) else pd.NaT)
-        base_linha = base_linha.dropna(subset=["Mês"])
-        serie = (base_linha.groupby("Mês")["Valor"].sum()
-                 .reindex(pd.period_range((hoje - pd.DateOffset(months=11)).to_period("M").start_time.date(),
-                                          hoje.to_period("M").start_time.date(), freq="M").to_timestamp().date, fill_value=0))
-        linha = px.line(x=[d.strftime("%m/%Y") for d in serie.index], y=serie.values, markers=True,
-                        title="Pagos por mês (últimos 12)")
+    base_linha = df[df["Status"] == "Pago"].copy()
+    if base_linha.empty:
+        st.info("Sem pagamentos para a série mensal.")
+    else:
+        # Converte para início do mês (Timestamp) – robusto para qualquer input
+        base_linha["Mes"] = base_linha["Data de pagamento"].apply(
+            lambda d: pd.Timestamp(d).to_period("M").to_timestamp() if pd.notna(d) else pd.NaT
+        )
+        base_linha = base_linha.dropna(subset=["Mes"])
+        base_linha["Valor"] = base_linha["Valor"].apply(fmt_num)
+
+        serie = base_linha.groupby("Mes")["Valor"].sum()
+
+        # Eixo completo dos últimos 12 meses
+        start = (pd.Timestamp(hoje).to_period("M") - 11).to_timestamp()
+        end   = pd.Timestamp(hoje).to_period("M").to_timestamp()
+        idx = pd.date_range(start=start, end=end, freq="MS")
+
+        serie = serie.reindex(idx, fill_value=0)
+
+        linha = px.line(
+            x=[d.strftime("%m/%Y") for d in serie.index],
+            y=serie.values, markers=True, title="Pagos por mês (últimos 12)"
+        )
         linha.update_layout(xaxis_title="", yaxis_title="Valor (R$)")
         st.plotly_chart(linha, use_container_width=True)
-    else:
-        st.info("Sem pagamentos para exibir série mensal.")
 
 # ================== FILTROS DA LISTA ==================
 st.markdown("---")
@@ -163,7 +197,6 @@ if ven_ate:
     visu = visu[visu["Vencimento"] <= ven_ate]
 
 st.subheader("Cobranças")
-def fmt_date(d): return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
 
 tbl = visu.copy()
 tbl["Vencimento"] = tbl["Vencimento"].apply(fmt_date)
@@ -178,23 +211,24 @@ def color_status(val):
         return "background-color: rgba(239,68,68,0.2); color:#ef4444; font-weight:700"
     return ""
 
-styled = tbl[["Paciente","Valor","Vencimento","Data de pagamento","Status","__row__"]] \
-           .rename(columns={"__row__":"Linha"}) \
-           .sort_values(by=["Status","Vencimento"], na_position="last") \
-           .style.apply(lambda s: [color_status(v) for v in s], subset=["Status"])
-
+styled = (
+    tbl[["Paciente","Valor","Vencimento","Data de pagamento","Status","__row__"]]
+    .rename(columns={"__row__": "Linha"})
+    .sort_values(by=["Status","Vencimento"], na_position="last")
+    .style.apply(lambda s: [color_status(v) for v in s], subset=["Status"])
+)
 st.dataframe(styled, use_container_width=True)
 
 # ================== PRÓXIMOS VENCIMENTOS ==================
 st.markdown("### 🔔 Próximos vencimentos (7 dias)")
 proximos = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))] \
-            .sort_values("Vencimento")
+          .sort_values("Vencimento")
 if proximos.empty:
     st.info("Sem vencimentos nos próximos 7 dias.")
 else:
     prox = proximos.copy()
     prox["Vencimento"] = prox["Vencimento"].apply(fmt_date)
-    prox["Valor"] = prox["Valor"].apply(lambda v: f"{v:.2f}".replace(".", ",") if v is not None else "")
+    prox["Valor"] = prox["Valor"].apply(lambda v: f"{fmt_num(v):.2f}".replace(".", ","))
     st.dataframe(prox[["Paciente","Vencimento","Valor"]], use_container_width=True)
 
 # ================== CRUD ==================
@@ -207,10 +241,11 @@ with colB:
     valor = st.number_input("Valor", min_value=0.0, step=10.0)
 with colC:
     venc = st.date_input("Vencimento", value=None)
+
 if st.button("➕ Adicionar cobrança"):
     nova = [
         paciente.strip(),
-        (str(valor).replace(".", ",")),
+        str(valor).replace(".", ","),
         "",  # Data de pagamento
         venc.strftime("%d/%m/%Y") if venc else ""
     ]
@@ -225,7 +260,7 @@ with col1:
     if not df.empty:
         escolha = st.selectbox(
             "Selecione (linha – paciente – vencimento – valor)",
-            df.apply(lambda r: f"{r['__row__']} – {r['Paciente']} – {fmt_date(r['Vencimento'])} – R${(r['Valor'] or 0):.2f}", axis=1)
+            df.apply(lambda r: f"{r['__row__']} – {r['Paciente']} – {fmt_date(r['Vencimento'])} – R${fmt_num(r['Valor']):.2f}", axis=1)
         )
         row_sel = int(escolha.split("–")[0].strip())
     else:
