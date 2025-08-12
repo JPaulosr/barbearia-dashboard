@@ -1,264 +1,135 @@
-# 2_Pagamentos.py — com painel de valores (KPIs + gráficos)
-import streamlit as st
-import pandas as pd
-import gspread
-from gspread_dataframe import get_as_dataframe
-from google.oauth2.service_account import Credentials
-from datetime import date, datetime, timedelta
-import plotly.express as px
+elif acao == "💰 Registrar pagamento":
+    st.subheader("💰 Registrar pagamento — escolha o cliente e depois o(s) fiado(s) em aberto")
 
-st.set_page_config(page_title="Pagamentos", page_icon="💳", layout="wide")
-st.title("💳 Pagamentos")
+    df_abertos = df_base[df_base.get("StatusFiado", "") == "Em aberto"].copy()
+    clientes_abertos = sorted(df_abertos["Cliente"].dropna().unique().tolist())
 
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_FIN = "Financeiro casulo"  # aba de financeiro
-
-COLS_FIN = ["Paciente","Valor","Data de pagamento","Vencimento"]
-
-# ====== helpers ======
-def brl(v):
-    try:
-        v = float(v)
-    except:
-        return "R$ 0,00"
-    s = f"{v:,.2f}"
-    return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
-
-# ====== conexão e carga ======
-@st.cache_resource
-def conectar():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    scopes = ["https://www.googleapis.com/auth/spreadsheets",
-              "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    return gspread.authorize(creds).open_by_key(SHEET_ID)
-
-@st.cache_data(ttl=60)
-def carregar_fin():
-    wks = conectar().worksheet(ABA_FIN)
-    df = get_as_dataframe(wks, evaluate_formulas=True, header=0, dtype=str).dropna(how="all")
-
-    # cabecalho truncado "Data de pagame..." -> "Data de pagamento"
-    for c in df.columns:
-        if c.lower().startswith("data de pag"):
-            df = df.rename(columns={c: "Data de pagamento"})
-            break
-
-    for c in COLS_FIN:
-        if c not in df.columns: df[c] = ""
-    df = df[COLS_FIN].copy()
-    df["__row__"] = (df.index + 2).astype(int)
-
-    def to_date(x):
-        s = str(x).strip()
-        if not s: return pd.NaT
-        for fmt in ("%d/%m/%Y","%Y-%m-%d"):
-            try: return pd.to_datetime(s, format=fmt).date()
-            except: pass
-        try: return pd.to_datetime(s, dayfirst=True).date()
-        except: return pd.NaT
-
-    def to_float(x):
-        try: return float(str(x).replace(",", "."))
-        except: return None
-
-    df["Vencimento"] = df["Vencimento"].apply(to_date)
-    df["Data de pagamento"] = df["Data de pagamento"].apply(to_date)
-    df["Valor"] = df["Valor"].apply(to_float)
-
-    # Status
-    hoje = date.today()
-    def status(row):
-        if pd.notna(row["Data de pagamento"]): return "Pago"
-        if pd.isna(row["Vencimento"]): return ""
-        return "Em atraso" if row["Vencimento"] < hoje else "Em dia"
-    df["Status"] = df.apply(status, axis=1)
-    return df
-
-def update_cell(row_idx, col_name, value):
-    wks = conectar().worksheet(ABA_FIN)
-    header = wks.row_values(1)
-    col_idx = header.index(col_name) + 1
-    if isinstance(value, date): value = value.strftime("%d/%m/%Y")
-    wks.update_cell(row_idx, col_idx, value)
-
-def append_row(values_list):
-    conectar().worksheet(ABA_FIN).append_row(values_list, value_input_option="USER_ENTERED")
-
-def delete_row(row_idx):
-    conectar().worksheet(ABA_FIN).delete_rows(row_idx)
-
-# ================== DADOS ==================
-df = carregar_fin()
-hoje = date.today()
-ini_mes = date(hoje.year, hoje.month, 1)
-prox7 = hoje + timedelta(days=7)
-
-# ================== PAINEL (KPIs) ==================
-pago_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]["Valor"].sum() or 0.0
-aberto = df[df["Status"].isin(["Em dia","Em atraso"])]["Valor"].sum() or 0.0
-atraso = df[df["Status"]=="Em atraso"]["Valor"].sum() or 0.0
-vence_7 = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))]["Valor"].sum() or 0.0
-
-pagos_no_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]
-ticket_medio = (pagos_no_mes["Valor"].mean() or 0.0) if not pagos_no_mes.empty else 0.0
-
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Pago no mês", brl(pago_mes))
-k2.metric("A receber (aberto)", brl(aberto))
-k3.metric("Em atraso", brl(atraso))
-k4.metric("Vence nos próximos 7 dias", brl(vence_7))
-k5.metric("Ticket médio (mês)", brl(ticket_medio))
-
-st.markdown("")
-
-# ================== GRÁFICOS ==================
-gc1, gc2 = st.columns([1,1])
-
-with gc1:
-    base_status = df.copy()
-    base_status["Valor"] = base_status["Valor"].fillna(0)
-    pie = px.pie(
-        base_status[base_status["Status"]!=""],
-        names="Status", values="Valor", hole=0.35,
-        title="Distribuição por Status"
-    )
-    st.plotly_chart(pie, use_container_width=True)
-
-with gc2:
-    base_linha = df[df["Status"]=="Pago"].copy()
-    if not base_linha.empty:
-        base_linha["Mês"] = base_linha["Data de pagamento"].apply(lambda d: date(d.year, d.month, 1) if pd.notna(d) else pd.NaT)
-        base_linha = base_linha.dropna(subset=["Mês"])
-        serie = (base_linha.groupby("Mês")["Valor"].sum()
-                 .reindex(pd.period_range((hoje - pd.DateOffset(months=11)).to_period("M").start_time.date(),
-                                          hoje.to_period("M").start_time.date(), freq="M").to_timestamp().date, fill_value=0))
-        linha = px.line(x=[d.strftime("%m/%Y") for d in serie.index], y=serie.values, markers=True,
-                        title="Pagos por mês (últimos 12)")
-        linha.update_layout(xaxis_title="", yaxis_title="Valor (R$)")
-        st.plotly_chart(linha, use_container_width=True)
-    else:
-        st.info("Sem pagamentos para exibir série mensal.")
-
-# ================== FILTROS DA LISTA ==================
-st.markdown("---")
-c1, c2, c3, c4 = st.columns([2,2,2,2])
-with c1:
-    paciente_f = st.text_input("🔎 Paciente (contém)")
-with c2:
-    status_f = st.selectbox("Status", ["Todos","Pago","Em dia","Em atraso"])
-with c3:
-    ven_de = st.date_input("Vencimento de", value=None)
-with c4:
-    ven_ate = st.date_input("Vencimento até", value=None)
-
-visu = df.copy()
-if paciente_f:
-    visu = visu[visu["Paciente"].str.contains(paciente_f, case=False, na=False)]
-if status_f != "Todos":
-    visu = visu[visu["Status"] == status_f]
-if ven_de:
-    visu = visu[visu["Vencimento"] >= ven_de]
-if ven_ate:
-    visu = visu[visu["Vencimento"] <= ven_ate]
-
-st.subheader("Cobranças")
-def fmt_date(d): return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
-
-tbl = visu.copy()
-tbl["Vencimento"] = tbl["Vencimento"].apply(fmt_date)
-tbl["Data de pagamento"] = tbl["Data de pagamento"].apply(fmt_date)
-
-def color_status(val):
-    if val == "Pago":
-        return "background-color: rgba(16,185,129,0.2); color:#10b981; font-weight:600"
-    if val == "Em dia":
-        return "background-color: rgba(59,130,246,0.2); color:#3b82f6; font-weight:600"
-    if val == "Em atraso":
-        return "background-color: rgba(239,68,68,0.2); color:#ef4444; font-weight:700"
-    return ""
-
-styled = tbl[["Paciente","Valor","Vencimento","Data de pagamento","Status","__row__"]] \
-           .rename(columns={"__row__":"Linha"}) \
-           .sort_values(by=["Status","Vencimento"], na_position="last") \
-           .style.apply(lambda s: [color_status(v) for v in s], subset=["Status"])
-
-st.dataframe(styled, use_container_width=True)
-
-# ================== PRÓXIMOS VENCIMENTOS ==================
-st.markdown("### 🔔 Próximos vencimentos (7 dias)")
-proximos = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))] \
-            .sort_values("Vencimento")
-if proximos.empty:
-    st.info("Sem vencimentos nos próximos 7 dias.")
-else:
-    prox = proximos.copy()
-    prox["Vencimento"] = prox["Vencimento"].apply(fmt_date)
-    prox["Valor"] = prox["Valor"].apply(lambda v: f"{v:.2f}".replace(".", ",") if v is not None else "")
-    st.dataframe(prox[["Paciente","Vencimento","Valor"]], use_container_width=True)
-
-# ================== CRUD ==================
-st.markdown("---")
-st.subheader("Criar cobrança")
-colA, colB, colC = st.columns([3,2,2])
-with colA:
-    paciente = st.text_input("Paciente")
-with colB:
-    valor = st.number_input("Valor", min_value=0.0, step=10.0)
-with colC:
-    venc = st.date_input("Vencimento", value=None)
-if st.button("➕ Adicionar cobrança"):
-    nova = [
-        paciente.strip(),
-        (str(valor).replace(".", ",")),
-        "",  # Data de pagamento
-        venc.strftime("%d/%m/%Y") if venc else ""
-    ]
-    append_row(nova)
-    st.success("Cobrança criada.")
-    st.cache_data.clear()
-
-st.markdown("---")
-st.subheader("Marcar como pago / Editar / Excluir")
-col1, col2 = st.columns([2,2])
-with col1:
-    if not df.empty:
-        escolha = st.selectbox(
-            "Selecione (linha – paciente – vencimento – valor)",
-            df.apply(lambda r: f"{r['__row__']} – {r['Paciente']} – {fmt_date(r['Vencimento'])} – R${(r['Valor'] or 0):.2f}", axis=1)
+    colc1, colc2 = st.columns([1, 1])
+    with colc1:
+        cliente_sel = st.selectbox(
+            "Cliente com fiado em aberto", options=[""] + clientes_abertos, index=0
         )
-        row_sel = int(escolha.split("–")[0].strip())
-    else:
-        st.info("Sem registros.")
-        row_sel = None
 
-with col2:
-    acao = st.radio("Ação", ["Marcar pago","Editar vencimento/valor","Excluir"], horizontal=True)
+    # forma de pagamento (lista vinda da Base) + sugestão da última usada pelo cliente
+    ultima = ultima_forma_pagto_cliente(df_base, cliente_sel) if cliente_sel else None
+    lista_contas = contas_exist or ["Pix", "Dinheiro", "Cartão", "Transferência", "Outro"]
+    default_idx = lista_contas.index(ultima) if (ultima in lista_contas) else 0
+    with colc2:
+        forma_pag = st.selectbox("Forma de pagamento", options=lista_contas, index=default_idx)
 
-if row_sel:
-    if acao == "Marcar pago":
-        data_pag = st.date_input("Data de pagamento", value=date.today())
-        if st.button("✅ Confirmar pagamento"):
-            update_cell(row_sel, "Data de pagamento", data_pag)
-            st.success("Pagamento registrado.")
-            st.cache_data.clear()
+    # IDs do cliente com rótulo amigável
+    ids_opcoes = []
+    if cliente_sel:
+        grupo_cli = df_abertos[df_abertos["Cliente"] == cliente_sel].copy()
+        grupo_cli["Data"] = pd.to_datetime(grupo_cli["Data"], errors="coerce").dt.strftime(DATA_FMT)
+        grupo_cli["Valor"] = pd.to_numeric(grupo_cli["Valor"], errors="coerce").fillna(0)
 
-    elif acao == "Editar vencimento/valor":
-        novo_venc = st.date_input("Novo vencimento", value=None, key="nv")
-        novo_valor = st.number_input("Novo valor", min_value=0.0, step=10.0, key="vl")
-        b1, b2 = st.columns(2)
-        if b1.button("💾 Salvar edição"):
-            if novo_venc: update_cell(row_sel, "Vencimento", novo_venc)
-            update_cell(row_sel, "Valor", str(novo_valor).replace(".", ","))
-            st.success("Atualizado.")
-            st.cache_data.clear()
-        if b2.button("🧹 Limpar pagamento"):
-            update_cell(row_sel, "Data de pagamento", "")
-            st.success("Pagamento removido.")
-            st.cache_data.clear()
+        def atraso_max(idval):
+            v = grupo_cli.loc[grupo_cli["IDLancFiado"] == idval, "VencimentoFiado"].dropna().astype(str)
+            try:
+                vdt = pd.to_datetime(v.iloc[0], format=DATA_FMT, errors="coerce").date() if not v.empty else None
+            except Exception:
+                vdt = None
+            if vdt:
+                d = (date.today() - vdt).days
+                return d if d > 0 else 0
+            return 0
 
-    elif acao == "Excluir":
-        if st.button("🗑️ Excluir cobrança"):
-            delete_row(row_sel)
-            st.success("Registro excluído.")
+        resumo_ids = (
+            grupo_cli.groupby("IDLancFiado", as_index=False)
+            .agg(Data=("Data", "min"), ValorTotal=("Valor", "sum"), Qtde=("Serviço", "count"), Combo=("Combo", "first"))
+        )
+        for _, r in resumo_ids.iterrows():
+            atraso = atraso_max(r["IDLancFiado"])
+            badge = "Em dia" if atraso <= 0 else f"{int(atraso)}d atraso"
+            rotulo = f"{r['IDLancFiado']} • {r['Data']} • {int(r['Qtde'])} serv. • R$ {r['ValorTotal']:.2f} • {badge}"
+            if pd.notna(r["Combo"]) and str(r["Combo"]).strip():
+                rotulo += f" • {r['Combo']}"
+            ids_opcoes.append((r["IDLancFiado"], rotulo))
+
+    ids_valores = [i[0] for i in ids_opcoes]
+    labels = {i: l for i, l in ids_opcoes}
+
+    # Selecionar todos
+    select_all = st.checkbox("Selecionar todos os fiados deste cliente", value=False, disabled=not bool(ids_valores))
+    id_selecionados = st.multiselect(
+        "Selecione 1 ou mais fiados do cliente",
+        options=ids_valores,
+        default=(ids_valores if select_all else []),
+        format_func=lambda x: labels.get(x, x),
+    )
+
+    cold1, cold2 = st.columns([1, 1])
+    with cold1:
+        data_pag = st.date_input("Data do pagamento", value=date.today())
+    with cold2:
+        obs = st.text_input("Observação (opcional)", "")
+
+    # Resumo dos selecionados (total e por serviço)
+    total_sel = 0.0
+    if id_selecionados:
+        subset = df_abertos[df_abertos["IDLancFiado"].isin(id_selecionados)].copy()
+        subset["Valor"] = pd.to_numeric(subset["Valor"], errors="coerce").fillna(0)
+        total_sel = float(subset["Valor"].sum())
+        st.info(
+            f"Cliente: **{cliente_sel}** • IDs: {', '.join(id_selecionados)} • "
+            f"Total: **R$ {total_sel:,.2f}**".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+
+        resumo_srv = (
+            subset.groupby("Serviço", as_index=False)
+            .agg(Qtd=("Serviço", "count"), Total=("Valor", "sum"))
+            .sort_values(["Qtd", "Total"], ascending=[False, False])
+        )
+        resumo_srv["Total"] = resumo_srv["Total"].map(
+            lambda v: f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
+        st.caption("Resumo por serviço selecionado:")
+        st.dataframe(resumo_srv, use_container_width=True, hide_index=True)
+
+    # BOTÃO — QUITAR POR COMPETÊNCIA (atualiza as linhas, sem criar novas)
+    disabled_btn = not (cliente_sel and id_selecionados and forma_pag)
+    if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
+        ss = conectar_sheets()
+        ws_base = ss.worksheet(ABA_BASE)
+        dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
+
+        if "DataPagamento" not in dfb.columns:
+            dfb["DataPagamento"] = ""
+
+        mask = dfb.get("IDLancFiado", "").isin(id_selecionados)
+        if not mask.any():
+            st.error("Nenhuma linha encontrada para os IDs selecionados.")
+        else:
+            subset_all = dfb[mask].copy()
+            subset_all["Valor"] = pd.to_numeric(subset_all["Valor"], errors="coerce").fillna(0)
+            total_pago = float(subset_all["Valor"].sum())
+
+            # Atualiza no lugar (competência)
+            dfb.loc[mask, "Conta"] = forma_pag
+            dfb.loc[mask, "StatusFiado"] = ""
+            dfb.loc[mask, "VencimentoFiado"] = ""
+            dfb.loc[mask, "DataPagamento"] = data_pag.strftime(DATA_FMT)
+
+            salvar_df(ABA_BASE, dfb)
+
+            # Log do pagamento
+            append_row(
+                ABA_PAGT,
+                [
+                    f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}",
+                    ";".join(id_selecionados),
+                    data_pag.strftime(DATA_FMT),
+                    cliente_sel,
+                    forma_pag,
+                    total_pago,
+                    obs,
+                ],
+            )
+
+            st.success(
+                f"Pagamento registrado para **{cliente_sel}** (competência). "
+                f"IDs quitados: {', '.join(id_selecionados)}. "
+                f"Total: R$ {total_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            )
             st.cache_data.clear()
