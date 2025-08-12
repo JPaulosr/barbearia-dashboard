@@ -4,16 +4,31 @@ import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
+import datetime
+import requests
+from PIL import Image
+from io import BytesIO
+from babel.dates import format_date  # meses pt-BR
 
 st.set_page_config(layout="wide")
-st.title("🧍‍♂️ Clientes - Receita Total")
+st.title("📌 Detalhamento do Cliente")
+
+# === Função para formatar minutos como "Xh Ymin"
+def formatar_tempo(minutos):
+    if pd.isna(minutos) or minutos is None:
+        return "Indisponível"
+    try:
+        minutos = int(minutos)
+    except Exception:
+        return "Indisponível"
+    horas = minutos // 60
+    resto = minutos % 60
+    return f"{horas}h {resto}min" if horas > 0 else f"{resto} min"
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
-STATUS_ABA = "clientes_status"
 
-# === Função para conectar ao Google Sheets ===
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -22,56 +37,48 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
-# === Carregar dados principais ===
 @st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [col.strip() for col in df.columns]
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # Datas
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["Ano"] = df["Data"].dt.year.astype(int)
+    df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
+    df["Ano"] = df["Data"].dt.year
+    df["Mês"] = df["Data"].dt.month
+
+    meses_pt = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    }
+    df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
+
+    # Duração (min) se não existir
+    if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
+        if set(["Hora Chegada", "Hora Saída do Salão", "Hora Saída"]).intersection(df.columns):
+            def calcular_duracao(row):
+                try:
+                    chegada = pd.to_datetime(row.get("Hora Chegada"), format="%H:%M:%S", errors="coerce")
+                    saida_salao = pd.to_datetime(row.get("Hora Saída do Salão"), format="%H:%M:%S", errors="coerce")
+                    saida_cadeira = pd.to_datetime(row.get("Hora Saída"), format="%H:%M:%S", errors="coerce")
+                    fim = saida_salao if pd.notnull(saida_salao) else saida_cadeira
+                    if pd.notnull(chegada) and pd.notnull(fim) and fim > chegada:
+                        return (fim - chegada).total_seconds() / 60
+                    return None
+                except Exception:
+                    return None
+            df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+
     return df
 
-@st.cache_data
-def carregar_status():
-    try:
-        planilha = conectar_sheets()
-        aba = planilha.worksheet(STATUS_ABA)
-        df_status = get_as_dataframe(aba).dropna(how="all")
-        df_status.columns = [col.strip() for col in df_status.columns]
-        return df_status[["Cliente", "Status"]]
-    except:
-        return pd.DataFrame(columns=["Cliente", "Status"])
-
-# === Atualizar status de clientes automaticamente ===
-def atualizar_status_clientes(ultimos_status):
-    try:
-        planilha = conectar_sheets()
-        aba_status = planilha.worksheet(STATUS_ABA)
-        dados = aba_status.get_all_records()
-
-        atualizados = 0
-        for i, linha in enumerate(dados, start=2):
-            nome = linha.get("Cliente", "").strip()
-            status_atual = linha.get("Status", "").strip()
-            status_novo = ultimos_status.get(nome)
-
-            if status_novo and status_novo != status_atual:
-                aba_status.update_cell(i, 2, status_novo)
-                atualizados += 1
-
-        return atualizados
-    except Exception as e:
-        st.warning(f"⚠️ Erro ao atualizar status dos clientes: {e}")
-        return 0
-
-# === Executa carregamento e atualiza status ===
 df = carregar_dados()
-df_status = carregar_status()
 
-# === Filtro de RECEITA: excluir FIADO dos valores, mas manter frequência/histórico ===
+# === Base sem FIADO para cálculos de VALOR ===
 col_conta = next((c for c in df.columns
                   if c.strip().lower() in ["conta", "forma de pagamento", "pagamento", "status"]), None)
 
@@ -87,165 +94,162 @@ if col_conta:
 else:
     mask_fiado = pd.Series(False, index=df.index)
 
-df_receita = df[~mask_fiado].copy()
-df_receita["ValorNum"] = pd.to_numeric(df_receita["Valor"], errors="coerce").fillna(0)
+df_valores = df[~mask_fiado].copy()  # usar APENAS para somatórios/gráficos de valor
+df_valores["ValorNum"] = pd.to_numeric(df_valores["Valor"], errors="coerce").fillna(0)
 
-df_fiado = df[mask_fiado].copy()
-df_fiado["ValorNum"] = pd.to_numeric(df_fiado["Valor"], errors="coerce").fillna(0)
+# === Seleção do Cliente ===
+clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
+cliente = st.selectbox("👤 Selecione o cliente para detalhamento", clientes_disponiveis,
+                       index=clientes_disponiveis.index(cliente_default))
 
-# === Lógica de atualização de status ===
-hoje = pd.Timestamp.today().normalize()
-limite_dias = 90
+# === Mostrar imagem do cliente (clientes_status.Foto) ===
+def buscar_link_foto(nome):
+    try:
+        planilha = conectar_sheets()
+        aba_status = planilha.worksheet("clientes_status")
+        df_status = get_as_dataframe(aba_status).dropna(how="all")
+        df_status.columns = [str(col).strip() for col in df_status.columns]
+        foto = df_status[df_status["Cliente"] == nome]["Foto"].dropna().values
+        return foto[0] if len(foto) > 0 else None
+    except Exception:
+        return None
 
-ultimos = df.groupby("Cliente")["Data"].max().reset_index()
-ultimos["DiasDesde"] = (hoje - ultimos["Data"]).dt.days
-ultimos["StatusNovo"] = ultimos["DiasDesde"].apply(lambda x: "Inativo" if x > limite_dias else "Ativo")
-
-status_atualizado = dict(zip(ultimos["Cliente"], ultimos["StatusNovo"]))
-qtd = atualizar_status_clientes(status_atualizado)
-if qtd > 0:
-    st.success(f"🔄 {qtd} cliente(s) tiveram seus status atualizados automaticamente.")
-
-# === Indicadores ===
-clientes_unicos = df["Cliente"].nunique()
-contagem_status = df_status["Status"].value_counts().to_dict()
-ativos = contagem_status.get("Ativo", 0)
-ignorados = contagem_status.get("Ignorado", 0)
-inativos = contagem_status.get("Inativo", 0)
-
-st.markdown("### 📊 Indicadores Gerais")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("👥 Clientes únicos", clientes_unicos)
-col2.metric("✅ Ativos", ativos)
-col3.metric("🚫 Ignorados", ignorados)
-col4.metric("🚩 Inativos", inativos)
-
-# === Remove nomes genéricos ===
-nomes_ignorar = ["boliviano", "brasileiro", "menino", "menino boliviano"]
-normalizar = lambda s: str(s).lower().strip()
-df = df[~df["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
-df_receita = df_receita[~df_receita["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
-df_fiado = df_fiado[~df_fiado["Cliente"].apply(lambda x: normalizar(x) in nomes_ignorar)]
-
-# === Ranking geral ===
-ranking = df_receita.groupby("Cliente")["ValorNum"].sum().reset_index().rename(columns={"ValorNum": "Valor"})
-ranking = ranking.sort_values(by="Valor", ascending=False)
-ranking["Valor Formatado"] = ranking["Valor"].apply(
-    lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-)
-
-# === Busca dinâmica ===
-st.subheader("📟 Receita total por cliente")
-busca = st.text_input("🔎 Filtrar por nome").lower().strip()
-if busca:
-    ranking_exibido = ranking[ranking["Cliente"].str.lower().str.contains(busca)]
+link_foto = buscar_link_foto(cliente)
+if link_foto:
+    try:
+        response = requests.get(link_foto, timeout=8)
+        img = Image.open(BytesIO(response.content))
+        st.image(img, caption=cliente, width=200)
+    except Exception:
+        st.warning("Erro ao carregar imagem.")
 else:
-    ranking_exibido = ranking.copy()
-st.dataframe(ranking_exibido[["Cliente", "Valor Formatado"]], use_container_width=True)
+    st.info("Cliente sem imagem cadastrada.")
 
-# === Top 5 ===
-st.subheader("🏆 Top 5 Clientes por Receita")
-top5 = ranking.head(5)
-fig_top = px.bar(
-    top5,
-    x="Cliente",
-    y="Valor",
-    text=top5["Valor"].apply(lambda x: f"R$ {x:,.0f}".replace(",", "v").replace(".", ",").replace("v", ".")),
-    labels={"Valor": "Receita (R$)"},
-    color="Cliente"
+# === Dados do cliente (duas visões) ===
+df_cliente = df[df["Cliente"] == cliente].copy()                 # histórico/frequência (inclui fiado)
+df_cliente_val = df_valores[df_valores["Cliente"] == cliente].copy()  # valores (sem fiado)
+
+# Aplicar tempo formatado
+if "Duração (min)" in df_cliente.columns:
+    df_cliente["Tempo Formatado"] = df_cliente["Duração (min)"].apply(formatar_tempo)
+
+st.subheader(f"📅 Histórico de atendimentos - {cliente}")
+colunas_exibir = ["Data_str", "Serviço", "Tipo", "Valor", "Funcionário", "Tempo Formatado"]
+colunas_exibir = [col for col in colunas_exibir if col in df_cliente.columns]
+st.dataframe(
+    df_cliente.sort_values("Data", ascending=False)[colunas_exibir].rename(columns={"Data_str": "Data"}),
+    use_container_width=True
 )
-fig_top.update_traces(textposition="outside")
-fig_top.update_layout(showlegend=False, height=400, template="plotly_white")
-st.plotly_chart(fig_top, use_container_width=True)
 
-# === Comparativo ===
-st.subheader("⚖️ Comparar dois clientes")
-clientes_disponiveis = ranking["Cliente"].tolist()
-colA, colB = st.columns(2)
-c1 = colA.selectbox("👤 Cliente 1", clientes_disponiveis)
-c2 = colB.selectbox("👤 Cliente 2", clientes_disponiveis, index=1 if len(clientes_disponiveis) > 1 else 0)
+# === Receita mensal (sem fiado) ===
+st.subheader("📊 Receita mensal")
+if df_cliente_val.empty:
+    st.info("Sem valores recebidos para exibir.")
+else:
+    df_cliente_val["Data_Ref_Mensal"] = df_cliente_val["Data"].dt.to_period("M").dt.to_timestamp()
+    receita_mensal = df_cliente_val.groupby("Data_Ref_Mensal")["ValorNum"].sum().reset_index()
+    receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].apply(
+        lambda d: format_date(d, format="MMMM 'de' y", locale="pt_BR").capitalize()
+    )
+    receita_mensal["Valor_str"] = receita_mensal["ValorNum"].apply(
+        lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+    )
+    fig_receita = px.bar(
+        receita_mensal,
+        x="Mês_Ano",
+        y="ValorNum",
+        text="Valor_str",
+        labels={"ValorNum": "Receita (R$)", "Mês_Ano": "Mês"},
+        category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
+    )
+    fig_receita.update_traces(textposition="inside")
+    fig_receita.update_layout(height=400)
+    st.plotly_chart(fig_receita, use_container_width=True)
 
-df_c1_val = df_receita[df_receita["Cliente"] == c1]
-df_c2_val = df_receita[df_receita["Cliente"] == c2]
-df_c1_hist = df[df["Cliente"] == c1]
-df_c2_hist = df[df["Cliente"] == c2]
-
-def resumo_cliente(df_val, df_hist):
-    total = df_val["ValorNum"].sum()
-    servicos = df_hist["Serviço"].nunique()
-    media = df_val.groupby("Data")["ValorNum"].sum().mean()
-    media = 0 if pd.isna(media) else media
-    servicos_detalhados = df_hist["Serviço"].value_counts().rename("Quantidade")
-    return pd.Series({
-        "Total Receita": f"R$ {total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."),
-        "Serviços Distintos": servicos,
-        "Tique Médio": f"R$ {media:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    }), servicos_detalhados
-
-resumo1, servicos1 = resumo_cliente(df_c1_val, df_c1_hist)
-resumo2, servicos2 = resumo_cliente(df_c2_val, df_c2_hist)
-
-resumo_geral = pd.concat([resumo1.rename(c1), resumo2.rename(c2)], axis=1)
-servicos_comparativo = pd.concat([servicos1.rename(c1), servicos2.rename(c2)], axis=1).fillna(0).astype(int)
-
-st.dataframe(resumo_geral, use_container_width=True)
-st.markdown("**Serviços Realizados por Tipo**")
-st.dataframe(servicos_comparativo, use_container_width=True)
-
-# === BLOCO DE FIADOS ===
-st.markdown("### 💳 Fiados — Resumo e Detalhes")
-
-colf1, colf2, colf3 = st.columns(3)
-total_fiado = df_fiado["ValorNum"].sum()
-clientes_fiado = df_fiado["Cliente"].nunique()
-registros_fiado = len(df_fiado)
-colf1.metric("💸 Total em fiado (aberto)", f"R$ {total_fiado:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-colf2.metric("👤 Clientes com fiado", int(clientes_fiado))
-colf3.metric("🧾 Registros de fiado", int(registros_fiado))
-
-if not df_fiado.empty:
-    st.markdown("**Top 10 clientes em fiado (valor em aberto)**")
-    top_fiado = (
-        df_fiado.groupby("Cliente")["ValorNum"]
+# === Receita por Serviço e Produto (sem fiado) ===
+st.subheader("📊 Receita por Serviço e Produto")
+if df_cliente_val.empty:
+    st.info("Sem valores recebidos para exibir.")
+else:
+    df_tipos = df_cliente_val[["Serviço", "Tipo", "ValorNum"]].copy()
+    receita_geral = (
+        df_tipos.groupby(["Serviço", "Tipo"])["ValorNum"]
         .sum()
         .reset_index()
-        .sort_values(by="ValorNum", ascending=False)
-        .head(10)
+        .sort_values("ValorNum", ascending=False)
     )
-    top_fiado["Valor Formatado"] = top_fiado["ValorNum"].apply(
-        lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+    fig_receita_tipos = px.bar(
+        receita_geral, x="Serviço", y="ValorNum", color="Tipo",
+        text=receita_geral["ValorNum"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")),
+        labels={"ValorNum": "Receita (R$)", "Serviço": "Item"}, barmode="group"
     )
-    fig_fiado = px.bar(
-        top_fiado,
-        x="Cliente",
-        y="ValorNum",
-        text=top_fiado["Valor Formatado"],
-        labels={"ValorNum": "Fiado (R$)"},
-        color="Cliente"
-    )
-    fig_fiado.update_traces(textposition="outside")
-    fig_fiado.update_layout(showlegend=False, height=380, template="plotly_white")
-    st.plotly_chart(fig_fiado, use_container_width=True)
+    fig_receita_tipos.update_traces(textposition="outside")
+    st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-    fiado_detalhe = df_fiado[["Data", "Cliente", "Serviço", "ValorNum"]].sort_values(
-        by=["Cliente", "Data"], ascending=[True, False]
-    )
-    fiado_detalhe.rename(columns={"ValorNum": "Valor"}, inplace=True)
-    fiado_detalhe["Valor"] = fiado_detalhe["Valor"].apply(
-        lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-    )
-    st.markdown("**Detalhamento (fiados em aberto)**")
-    st.dataframe(fiado_detalhe, use_container_width=True)
+# === Atendimentos por Funcionário (histórico) ===
+st.subheader("📊 Atendimentos por Funcionário")
+atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
+atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
+st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
-    csv_bytes = fiado_detalhe.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("⬇️ Baixar fiados (CSV)", data=csv_bytes, file_name="fiados_em_aberto.csv", mime="text/csv")
+# === Resumo por data (histórico) ===
+st.subheader("📋 Resumo de Atendimentos")
+df_cliente_dt = df[df["Cliente"] == cliente].copy()
+resumo = df_cliente_dt.groupby("Data").agg(
+    Qtd_Serviços=("Serviço", "count"),
+    Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
+).reset_index()
+resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
+resumo_final = pd.DataFrame({
+    "Total Atendimentos": [resumo.shape[0]],
+    "Qtd Combos": [resumo["Qtd_Combo"].sum()],
+    "Qtd Simples": [resumo["Qtd_Simples"].sum()]
+})
+st.dataframe(resumo_final, use_container_width=True)
+
+# === Frequência de atendimento (histórico) ===
+st.subheader("📈 Frequência de Atendimento")
+data_corte = pd.to_datetime("2025-05-11")
+df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
+df_depois = df_cliente_dt[df_cliente_dt["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
+df_freq = pd.concat([df_antes, df_depois]).sort_values("Data")
+datas = df_freq["Data"].tolist()
+
+if len(datas) < 2:
+    st.info("Cliente possui apenas um atendimento.")
 else:
-    st.info("Nenhum fiado em aberto encontrado para os filtros atuais.")
+    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
+    media_freq = sum(diffs) / len(diffs)
+    ultimo_atendimento = datas[-1]
+    dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
+    status = "🟢 Em dia" if dias_desde_ultimo <= media_freq else ("🟠 Pouco atrasado" if dias_desde_ultimo <= media_freq * 1.5 else "🔴 Muito atrasado")
 
-# === Navegar para detalhamento ===
-st.subheader("🔍 Ver detalhamento de um cliente")
-cliente_escolhido = st.selectbox("📌 Escolha um cliente", ranking["Cliente"].tolist())
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
+    col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
+    col3.metric("⏱️ Desde Último", dias_desde_ultimo)
+    col4.metric("📌 Status", status)
 
-if st.button("➡ Ver detalhes"):
-    st.session_state["cliente"] = cliente_escolhido
-    st.switch_page("pages/2_DetalhesCliente.py")
+# === Insights do cliente ===
+st.subheader("💡 Insights Adicionais")
+meses_ativos = df_cliente["Mês_Ano"].nunique()
+gasto_mensal_medio = (df_cliente_val["ValorNum"].sum() / meses_ativos) if meses_ativos > 0 else 0
+status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
+mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
+tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
+tempo_total_str = formatar_tempo(tempo_total)
+ticket_medio = df_cliente_val["ValorNum"].mean() if not df_cliente_val.empty else 0
+# intervalo_medio já calculado acima se houver 2+ atendimentos
+intervalo_medio = (sum([(datas[i] - datas[i-1]).days for i in range(1, len(datas))]) / len(datas[1:])) if len(datas) >= 2 else None
+
+col5, col6, col7 = st.columns(3)
+col5.metric("🏅 Cliente VIP", status_vip)
+col6.metric("💇 Mais atendido por", mais_frequente)
+col7.metric("🕒 Tempo Total no Salão", tempo_total_str)
+
+col8, col9 = st.columns(2)
+col8.metric("💸 Ticket Médio", f"R$ {ticket_medio:.2f}".replace(".", ","))
+col9.metric("📆 Intervalo Médio", f"{intervalo_medio:.1f} dias" if intervalo_medio else "Indisponível")
