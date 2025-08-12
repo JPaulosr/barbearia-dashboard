@@ -1,11 +1,11 @@
 # 2_Pagamentos.py — Painel financeiro + CRUD (aba "Financeiro casulo")
+import re
 import streamlit as st
 import pandas as pd
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
 from datetime import date, timedelta
-
 import plotly.express as px
 
 st.set_page_config(page_title="Pagamentos", page_icon="💳", layout="wide")
@@ -13,7 +13,7 @@ st.title("💳 Pagamentos")
 
 # === CONFIG ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_FIN = "Financeiro casulo"          # sua aba de financeiro
+ABA_FIN = "Financeiro casulo"
 COLS_FIN = ["Paciente","Valor","Data de pagamento","Vencimento"]
 
 # ====== HELPERS ======
@@ -45,7 +45,7 @@ def carregar_fin():
     wks = conectar().worksheet(ABA_FIN)
     df = get_as_dataframe(wks, evaluate_formulas=True, header=0, dtype=str).dropna(how="all")
 
-    # Padroniza cabeçalho "Data de pag..." -> "Data de pagamento"
+    # Padroniza "Data de pag..." -> "Data de pagamento"
     for c in df.columns:
         if c.lower().startswith("data de pag"):
             df = df.rename(columns={c: "Data de pagamento"})
@@ -55,7 +55,7 @@ def carregar_fin():
         if c not in df.columns:
             df[c] = ""
     df = df[COLS_FIN].copy()
-    df["__row__"] = (df.index + 2).astype(int)   # linha real na planilha
+    df["__row__"] = (df.index + 2).astype(int)   # linha real
 
     def to_date(x):
         s = str(x).strip()
@@ -71,8 +71,26 @@ def carregar_fin():
             return pd.NaT
 
     def to_float(x):
+        """
+        Converte 'R$ 250,00', '1.234,56', '250', '  250,00 ' -> 250.0
+        Ignora símbolos e espaços, trata milhar e vírgula.
+        """
+        if x is None:
+            return None
+        s = str(x).strip()
+        if s == "":
+            return None
+        # remove tudo que não é dígito, vírgula, ponto ou sinal
+        s = re.sub(r"[^\d,.\-]", "", s)
+        # se vírgula é o separador decimal, remove pontos de milhar e troca vírgula por ponto
+        if "," in s and (s.rfind(",") > s.rfind(".")):
+            s = s.replace(".", "").replace(",", ".")
+        # se ainda sobrou mais de um ponto, mantém só o último como decimal
+        if s.count(".") > 1:
+            partes = s.split(".")
+            s = "".join(partes[:-1]) + "." + partes[-1]
         try:
-            return float(str(x).replace(",", "."))
+            return float(s)
         except:
             return None
 
@@ -151,7 +169,6 @@ with gc2:
     if base_linha.empty:
         st.info("Sem pagamentos para a série mensal.")
     else:
-        # Converte para início do mês (Timestamp) – robusto para qualquer input
         base_linha["Mes"] = base_linha["Data de pagamento"].apply(
             lambda d: pd.Timestamp(d).to_period("M").to_timestamp() if pd.notna(d) else pd.NaT
         )
@@ -160,7 +177,6 @@ with gc2:
 
         serie = base_linha.groupby("Mes")["Valor"].sum()
 
-        # Eixo completo dos últimos 12 meses
         start = (pd.Timestamp(hoje).to_period("M") - 11).to_timestamp()
         end   = pd.Timestamp(hoje).to_period("M").to_timestamp()
         idx = pd.date_range(start=start, end=end, freq="MS")
@@ -245,7 +261,7 @@ with colC:
 if st.button("➕ Adicionar cobrança"):
     nova = [
         paciente.strip(),
-        str(valor).replace(".", ","),
+        str(valor).replace(".", ","),  # grava como texto BR
         "",  # Data de pagamento
         venc.strftime("%d/%m/%Y") if venc else ""
     ]
