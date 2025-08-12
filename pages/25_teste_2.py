@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from unidecode import unidecode
 from io import BytesIO
 import gspread
 from gspread_dataframe import get_as_dataframe
@@ -43,9 +42,7 @@ def carregar_dados():
     # normaliza coluna de pagamento (fiado/pago)
     conta_col = "Conta" if "Conta" in df.columns else ("Forma de Pagamento" if "Forma de Pagamento" in df.columns else None)
     if conta_col:
-        df["Conta_norm"] = (
-            df[conta_col].astype(str).str.strip().str.lower().replace({"nan": ""})
-        )
+        df["Conta_norm"] = df[conta_col].astype(str).str.strip().str.lower().replace({"nan": ""})
     else:
         df["Conta_norm"] = ""
 
@@ -72,7 +69,7 @@ def carregar_despesas():
     else:
         df_desp["Valor"] = 0.0
 
-    # normaliza Prestador/Descrição
+    # normaliza texto
     for c in ["Prestador", "Descrição"]:
         if c not in df_desp.columns:
             df_desp[c] = ""
@@ -84,16 +81,15 @@ def carregar_despesas():
 df = carregar_dados()
 df_despesas = carregar_despesas()
 
-# === Lista de funcionários ===
+# === Lista de funcionários / Ano ===
 funcionarios = sorted(df["Funcionário"].dropna().unique().tolist())
-
-# === Filtro por ano ===
 anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
+
 ano_escolhido = st.selectbox("🗕️ Filtrar por ano", anos)
 
 # === Filtro por pagamento (fiado/pago) ===
-col_filtros_top = st.columns([1,1,2])
-modo_pag = col_filtros_top[0].radio(
+col_top = st.columns([1,1,2])
+modo_pag = col_top[0].radio(
     "Filtro de pagamento",
     ["Apenas pagos", "Apenas fiado", "Incluir tudo"],
     index=0,
@@ -105,46 +101,42 @@ if modo_pag == "Apenas pagos":
     df_base_ano = df_base_ano[df_base_ano["Conta_norm"] != "fiado"]
 elif modo_pag == "Apenas fiado":
     df_base_ano = df_base_ano[df_base_ano["Conta_norm"] == "fiado"]
-# "Incluir tudo": não filtra
+# "Incluir tudo": sem filtro adicional
 
 # === Seleção de funcionário ===
 funcionario_escolhido = st.selectbox("📋 Escolha um funcionário", funcionarios)
-
-# Base filtrada por funcionário + ano (+ pagamento)
 df_func = df_base_ano[df_base_ano["Funcionário"] == funcionario_escolhido].copy()
 
 # === Filtros adicionais ===
 col_filtros = st.columns(3)
 
-# Filtro por mês
+# Mês
 meses_disponiveis = sorted(df_func["Data"].dt.month.unique())
 mes_filtro = col_filtros[0].selectbox("📆 Filtrar por mês", options=["Todos"] + list(meses_disponiveis))
 if mes_filtro != "Todos":
     df_func = df_func[df_func["Data"].dt.month == mes_filtro]
 
-# Filtro por dia
+# Dia
 dias_disponiveis = sorted(df_func["Data"].dt.day.unique())
 dia_filtro = col_filtros[1].selectbox("📅 Filtrar por dia", options=["Todos"] + list(dias_disponiveis))
 if dia_filtro != "Todos":
     df_func = df_func[df_func["Data"].dt.day == dia_filtro]
 
-# Filtro por semana
+# Semana ISO
 df_func["Semana"] = df_func["Data"].dt.isocalendar().week
 semanas_disponiveis = sorted(df_func["Semana"].unique().tolist())
 semana_filtro = col_filtros[2].selectbox("🗓️ Filtrar por semana", options=["Todas"] + list(semanas_disponiveis))
 if semana_filtro != "Todas":
     df_func = df_func[df_func["Semana"] == semana_filtro]
 
-# === Filtro por tipo de serviço ===
+# Tipo de serviço
 tipos_servico = sorted(df_func["Serviço"].dropna().unique().tolist())
 tipo_selecionado = st.multiselect("Filtrar por tipo de serviço", tipos_servico)
 if tipo_selecionado:
     df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
 
-# === Insights do Funcionário ===
+# === INSIGHTS ===
 st.subheader("📌 Insights do Funcionário")
-
-# KPIs
 col1, col2, col3, col4 = st.columns(4)
 total_atendimentos = int(df_func.shape[0])
 clientes_unicos = int(df_func["Cliente"].nunique())
@@ -168,7 +160,7 @@ if not dia_mais_cheio.empty:
     qtd_atend = int(dia_mais_cheio.iloc[0, 1])
     st.info(f"📅 Dia com mais atendimentos: **{data_cheia}** com **{qtd_atend} atendimentos**")
 
-# Gráfico: Distribuição por dia da semana
+# Gráfico: Atendimentos por dia da semana
 st.markdown("### 📆 Atendimentos por dia da semana")
 dias_semana = {0: "Seg", 1: "Ter", 2: "Qua", 3: "Qui", 4: "Sex", 5: "Sáb", 6: "Dom"}
 df_func["DiaSemana"] = df_func["Data"].dt.dayofweek.map(dias_semana)
@@ -188,21 +180,18 @@ media_por_dia = df_func.groupby("Dia").size().reset_index(name="Média por dia")
 fig_dia_mes = px.line(media_por_dia, x="Dia", y="Média por dia", markers=True, template="plotly_white")
 st.plotly_chart(fig_dia_mes, use_container_width=True, key="graf_media_dia")
 
-# Comparativo com outros funcionários (ticket médio)
+# Ticket médio comparativo entre funcionários (mesmo ano e filtro de pagamento)
 st.markdown("### ⚖️ Comparativo com a média dos outros funcionários")
-media_geral = (
-    df_base_ano.groupby("Funcionário")["Valor"].mean()
-    .reset_index(name="Ticket Médio")
-)
+media_geral = df_base_ano.groupby("Funcionário")["Valor"].mean().reset_index(name="Ticket Médio")
 media_geral["Ticket Médio Formatado"] = media_geral["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 media_ordenada = media_geral.sort_values("Ticket Médio", ascending=False)
 st.dataframe(media_ordenada[["Funcionário", "Ticket Médio Formatado"]], use_container_width=True)
 
-# === Histórico de atendimentos ===
+# === Histórico ===
 st.subheader("🗕️ Histórico de Atendimentos")
 st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True)
 
-# === Receita mensal ===
+# === Receita Mensal ===
 st.subheader("📊 Receita Mensal por Mês e Ano")
 meses_pt = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
@@ -213,38 +202,42 @@ df_func["MesNome"] = df_func["MesNum"].map(meses_pt) + df_func["Data"].dt.strfti
 receita_jp = df_func.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
 receita_jp = receita_jp.sort_values("MesNum")
 
-# === Comissão real do Vinicius (despesa) ===
+# === Comissão real do Vinicius (despesa, não depende do filtro de pagamento, mas filtra por ano) ===
 df_com_vinicius = df_despesas[
     (df_despesas["Prestador"] == "Vinicius") &
     (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
-    (df_despesas["Ano"] == 2025)
+    (df_despesas["Ano"] == ano_escolhido)
 ].copy()
+
+# 🔧 Normaliza sinal: garante valor positivo para a despesa de comissão
+df_com_vinicius["Valor"] = df_com_vinicius["Valor"].abs()
+
 df_com_vinicius["MesNum"] = df_com_vinicius["Data"].dt.month
-df_com_vinicius = df_com_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="Comissão (real) do Vinicius")
+df_com_vinicius = df_com_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="ComissaoRealVinicius")
 
-# === Bloco especial quando funcionário = JPaulo e ano = 2025
-if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
-    receita_merged = receita_jp.merge(df_com_vinicius, on="MesNum", how="left").fillna(0)
-
-    # Receita bruta do Vinicius (aplica mesmo filtro de pagamento)
+# === Quando o funcionário selecionado é JPaulo, mostramos o comparativo com a Receita Real do Salão ===
+if funcionario_escolhido.lower() == "jpaulo":
+    # Receita bruta do Vinicius (respeita o filtro de pagamento aplicado em df_base_ano)
     receita_mes_vinicius = df_base_ano[
-        (df_base_ano["Funcionário"] == "Vinicius") &
-        (df_base_ano["Ano"] == 2025)
+        (df_base_ano["Funcionário"] == "Vinicius") & (df_base_ano["Ano"] == ano_escolhido)
     ].copy()
     receita_mes_vinicius["MesNum"] = receita_mes_vinicius["Data"].dt.month
-    receita_mes_vinicius = receita_mes_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="Receita_Vinicius")
+    receita_mes_vinicius = receita_mes_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="ReceitaVinicius")
 
-    receita_merged = receita_merged.merge(receita_mes_vinicius, on="MesNum", how="left").fillna(0)
+    # Junta tudo
+    receita_merged = receita_jp.merge(df_com_vinicius, on="MesNum", how="left").merge(
+        receita_mes_vinicius, on="MesNum", how="left"
+    ).fillna(0)
 
-    # Receita real do salão = JPaulo + (Receita Vinicius - Comissão real Vinicius)
-    receita_merged["Com_Vinicius"] = receita_merged["JPaulo"] + (receita_merged["Receita_Vinicius"] - receita_merged["Comissão (real) do Vinicius"])
+    # Receita líquida do Vinicius e Receita Real do Salão
+    receita_merged["LiquidoVinicius"] = (receita_merged["ReceitaVinicius"] - receita_merged["ComissaoRealVinicius"]).clip(lower=0)
+    receita_merged["ReceitaRealSalao"] = receita_merged["JPaulo"] + receita_merged["LiquidoVinicius"]
 
-    # Gráfico (UMA vez, sem duplicar)
+    # Gráfico (JPaulo x Receita Real do Salão)
     receita_melt = receita_merged.melt(
         id_vars=["MesNum", "MesNome"],
-        value_vars=["JPaulo", "Com_Vinicius"],
-        var_name="Tipo",
-        value_name="Valor"
+        value_vars=["JPaulo", "ReceitaRealSalao"],
+        var_name="Tipo", value_name="Valor"
     ).sort_values("MesNum")
 
     fig_mensal_comp = px.bar(
@@ -255,17 +248,16 @@ if funcionario_escolhido.lower() == "jpaulo" and ano_escolhido == 2025:
     fig_mensal_comp.update_layout(height=450, template="plotly_white")
     st.plotly_chart(fig_mensal_comp, use_container_width=True, key="graf_mensal_comp")
 
-    # Tabela (UMA vez, sem duplicar)
-    receita_merged["Comissão (real) do Vinicius"] = receita_merged["Comissão (real) do Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    receita_merged["JPaulo Formatado"] = receita_merged["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-    receita_merged["Total (JPaulo + Comissão líquida)"] = receita_merged["Com_Vinicius"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-
-    tabela = receita_merged[["MesNome", "JPaulo Formatado", "Comissão (real) do Vinicius", "Total (JPaulo + Comissão líquida)"]]
-    tabela.columns = ["Mês", "Receita JPaulo", "Comissão paga ao Vinicius", "Receita Real do Salão"]
-    st.dataframe(tabela, use_container_width=True)
+    # Tabela
+    tabela = receita_merged[["MesNome", "JPaulo", "ComissaoRealVinicius", "ReceitaRealSalao"]].copy()
+    fmt = lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+    tabela["Receita JPaulo"] = tabela["JPaulo"].apply(fmt)
+    tabela["Comissão paga ao Vinicius"] = tabela["ComissaoRealVinicius"].apply(fmt)
+    tabela["Receita Real do Salão"] = tabela["ReceitaRealSalao"].apply(fmt)
+    st.dataframe(tabela[["MesNome", "Receita JPaulo", "Comissão paga ao Vinicius", "Receita Real do Salão"]], use_container_width=True)
 
 else:
-    # Gráfico simples por mês para o funcionário selecionado
+    # Gráfico simples do funcionário selecionado
     receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     fig_mensal = px.bar(
         receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
@@ -275,7 +267,7 @@ else:
     fig_mensal.update_traces(textposition="outside", cliponaxis=False)
     st.plotly_chart(fig_mensal, use_container_width=True, key="graf_mensal_simples")
 
-# === Receita Bruta vs Comissão ===
+# === Receita Bruta vs Comissão (resumos) ===
 if funcionario_escolhido.lower() == "vinicius":
     bruto = float(df_func["Valor"].sum())
     comissao_real = float(
@@ -283,9 +275,8 @@ if funcionario_escolhido.lower() == "vinicius":
             (df_despesas["Prestador"] == "Vinicius") &
             (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
             (df_despesas["Ano"] == ano_escolhido)
-        ]["Valor"].sum()
+        ]["Valor"].abs().sum()  # abs para não somar negativo
     )
-
     receita_liquida = comissao_real
     receita_salao = bruto - comissao_real
 
@@ -303,23 +294,17 @@ if funcionario_escolhido.lower() == "vinicius":
 
 elif funcionario_escolhido.lower() == "jpaulo":
     receita_jpaulo = float(df_func["Valor"].sum())
-
     receita_vinicius_total = float(
-        df_base_ano[
-            (df_base_ano["Funcionário"] == "Vinicius") &
-            (df_base_ano["Ano"] == ano_escolhido)
-        ]["Valor"].sum()
+        df_base_ano[(df_base_ano["Funcionário"] == "Vinicius") & (df_base_ano["Ano"] == ano_escolhido)]["Valor"].sum()
     )
-
     comissao_paga = float(
         df_despesas[
             (df_despesas["Prestador"] == "Vinicius") &
             (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
             (df_despesas["Ano"] == ano_escolhido)
-        ]["Valor"].sum()
+        ]["Valor"].abs().sum()
     )
-
-    receita_liquida_vinicius = receita_vinicius_total - comissao_paga
+    receita_liquida_vinicius = max(0.0, receita_vinicius_total - comissao_paga)
     receita_total_salao = receita_jpaulo + receita_liquida_vinicius
 
     receita_total = pd.DataFrame({
@@ -329,19 +314,13 @@ elif funcionario_escolhido.lower() == "jpaulo":
             "Comissão paga ao Vinicius (despesa)",
             "Total receita do salão"
         ],
-        "Valor": [
-            receita_jpaulo,
-            receita_liquida_vinicius,
-            comissao_paga,
-            receita_total_salao
-        ]
+        "Valor": [receita_jpaulo, receita_liquida_vinicius, comissao_paga, receita_total_salao]
     })
-
     receita_total["Valor Formatado"] = receita_total["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
     st.subheader("💰 Receita do Salão (JPaulo como dono)")
     st.dataframe(receita_total[["Origem", "Valor Formatado"]], use_container_width=True)
 
-# === Ticket Médio por Mês ===
+# === Ticket Médio por Mês (com a lógica 11/05) ===
 st.subheader("📉 Ticket Médio por Mês")
 data_referencia = pd.to_datetime("2025-05-11")
 df_func["Grupo"] = df_func["Data"].dt.strftime("%Y-%m-%d") + "_" + df_func["Cliente"]
@@ -359,7 +338,7 @@ ticket_mensal = pd.concat([antes_ticket, depois_ticket]).groupby("AnoMes")["Tick
 ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
 st.dataframe(ticket_mensal, use_container_width=True)
 
-# === Exportar dados ===
+# === Exportar ===
 st.subheader("📄 Exportar dados filtrados")
 buffer = BytesIO()
 df_func.to_excel(buffer, index=False, sheet_name="Filtrado", engine="openpyxl")
