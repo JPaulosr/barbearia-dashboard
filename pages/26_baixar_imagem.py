@@ -1,18 +1,30 @@
+# 2_Pagamentos.py — com painel de valores (KPIs + gráficos)
 import streamlit as st
 import pandas as pd
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-from datetime import date
+from datetime import date, datetime, timedelta
+import plotly.express as px
 
 st.set_page_config(page_title="Pagamentos", page_icon="💳", layout="wide")
 st.title("💳 Pagamentos")
 
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_FIN = "Financeiro casulo"  # nova aba financeira
+ABA_FIN = "Financeiro casulo"  # aba de financeiro
 
 COLS_FIN = ["Paciente","Valor","Data de pagamento","Vencimento"]
 
+# ====== helpers ======
+def brl(v):
+    try:
+        v = float(v)
+    except:
+        return "R$ 0,00"
+    s = f"{v:,.2f}"
+    return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+# ====== conexão e carga ======
 @st.cache_resource
 def conectar():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -26,7 +38,7 @@ def carregar_fin():
     wks = conectar().worksheet(ABA_FIN)
     df = get_as_dataframe(wks, evaluate_formulas=True, header=0, dtype=str).dropna(how="all")
 
-    # ajusta cabeçalho truncado "Data de pagame" -> "Data de pagamento"
+    # cabecalho truncado "Data de pagame..." -> "Data de pagamento"
     for c in df.columns:
         if c.lower().startswith("data de pag"):
             df = df.rename(columns={c: "Data de pagamento"})
@@ -76,9 +88,60 @@ def append_row(values_list):
 def delete_row(row_idx):
     conectar().worksheet(ABA_FIN).delete_rows(row_idx)
 
-# ======== DADOS / FILTROS ========
+# ================== DADOS ==================
 df = carregar_fin()
+hoje = date.today()
+ini_mes = date(hoje.year, hoje.month, 1)
+prox7 = hoje + timedelta(days=7)
 
+# ================== PAINEL (KPIs) ==================
+pago_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]["Valor"].sum() or 0.0
+aberto = df[df["Status"].isin(["Em dia","Em atraso"])]["Valor"].sum() or 0.0
+atraso = df[df["Status"]=="Em atraso"]["Valor"].sum() or 0.0
+vence_7 = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))]["Valor"].sum() or 0.0
+
+pagos_no_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]
+ticket_medio = (pagos_no_mes["Valor"].mean() or 0.0) if not pagos_no_mes.empty else 0.0
+
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("Pago no mês", brl(pago_mes))
+k2.metric("A receber (aberto)", brl(aberto))
+k3.metric("Em atraso", brl(atraso))
+k4.metric("Vence nos próximos 7 dias", brl(vence_7))
+k5.metric("Ticket médio (mês)", brl(ticket_medio))
+
+st.markdown("")
+
+# ================== GRÁFICOS ==================
+gc1, gc2 = st.columns([1,1])
+
+with gc1:
+    base_status = df.copy()
+    base_status["Valor"] = base_status["Valor"].fillna(0)
+    pie = px.pie(
+        base_status[base_status["Status"]!=""],
+        names="Status", values="Valor", hole=0.35,
+        title="Distribuição por Status"
+    )
+    st.plotly_chart(pie, use_container_width=True)
+
+with gc2:
+    base_linha = df[df["Status"]=="Pago"].copy()
+    if not base_linha.empty:
+        base_linha["Mês"] = base_linha["Data de pagamento"].apply(lambda d: date(d.year, d.month, 1) if pd.notna(d) else pd.NaT)
+        base_linha = base_linha.dropna(subset=["Mês"])
+        serie = (base_linha.groupby("Mês")["Valor"].sum()
+                 .reindex(pd.period_range((hoje - pd.DateOffset(months=11)).to_period("M").start_time.date(),
+                                          hoje.to_period("M").start_time.date(), freq="M").to_timestamp().date, fill_value=0))
+        linha = px.line(x=[d.strftime("%m/%Y") for d in serie.index], y=serie.values, markers=True,
+                        title="Pagos por mês (últimos 12)")
+        linha.update_layout(xaxis_title="", yaxis_title="Valor (R$)")
+        st.plotly_chart(linha, use_container_width=True)
+    else:
+        st.info("Sem pagamentos para exibir série mensal.")
+
+# ================== FILTROS DA LISTA ==================
+st.markdown("---")
 c1, c2, c3, c4 = st.columns([2,2,2,2])
 with c1:
     paciente_f = st.text_input("🔎 Paciente (contém)")
@@ -99,9 +162,7 @@ if ven_de:
 if ven_ate:
     visu = visu[visu["Vencimento"] <= ven_ate]
 
-# ===== TABELA FORMATADA + CORES =====
 st.subheader("Cobranças")
-
 def fmt_date(d): return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
 
 tbl = visu.copy()
@@ -124,6 +185,19 @@ styled = tbl[["Paciente","Valor","Vencimento","Data de pagamento","Status","__ro
 
 st.dataframe(styled, use_container_width=True)
 
+# ================== PRÓXIMOS VENCIMENTOS ==================
+st.markdown("### 🔔 Próximos vencimentos (7 dias)")
+proximos = df[(df["Status"]=="Em dia") & (df["Vencimento"].between(hoje, prox7))] \
+            .sort_values("Vencimento")
+if proximos.empty:
+    st.info("Sem vencimentos nos próximos 7 dias.")
+else:
+    prox = proximos.copy()
+    prox["Vencimento"] = prox["Vencimento"].apply(fmt_date)
+    prox["Valor"] = prox["Valor"].apply(lambda v: f"{v:.2f}".replace(".", ",") if v is not None else "")
+    st.dataframe(prox[["Paciente","Vencimento","Valor"]], use_container_width=True)
+
+# ================== CRUD ==================
 st.markdown("---")
 st.subheader("Criar cobrança")
 colA, colB, colC = st.columns([3,2,2])
@@ -137,7 +211,7 @@ if st.button("➕ Adicionar cobrança"):
     nova = [
         paciente.strip(),
         (str(valor).replace(".", ",")),
-        "",  # Data de pagamento vazia
+        "",  # Data de pagamento
         venc.strftime("%d/%m/%Y") if venc else ""
     ]
     append_row(nova)
@@ -151,7 +225,7 @@ with col1:
     if not df.empty:
         escolha = st.selectbox(
             "Selecione (linha – paciente – vencimento – valor)",
-            df.apply(lambda r: f"{r['__row__']} – {r['Paciente']} – {fmt_date(r['Vencimento'])} – R${r['Valor'] or 0:.2f}", axis=1)
+            df.apply(lambda r: f"{r['__row__']} – {r['Paciente']} – {fmt_date(r['Vencimento'])} – R${(r['Valor'] or 0):.2f}", axis=1)
         )
         row_sel = int(escolha.split("–")[0].strip())
     else:
