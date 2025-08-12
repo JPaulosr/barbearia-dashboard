@@ -43,32 +43,35 @@ def conectar():
 @st.cache_data(ttl=60)
 def carregar_fin():
     wks = conectar().worksheet(ABA_FIN)
-    df = get_as_dataframe(wks, evaluate_formulas=True, header=0, dtype=str).dropna(how="all")
+    df = get_as_dataframe(
+        wks, evaluate_formulas=True, header=0, dtype=str
+    ).dropna(how="all")
 
-    # Padroniza "Data de pag..." -> "Data de pagamento"
-    for c in df.columns:
+    # --- normaliza cabeçalho ---
+    # tira espaços duplicados e mantém os nomes originais quando possível
+    df = df.rename(columns={c: c.strip() for c in df.columns})
+
+    # corrige "Data de pag..." truncado
+    for c in list(df.columns):
         if c.lower().startswith("data de pag"):
             df = df.rename(columns={c: "Data de pagamento"})
-            break
 
+    # garante colunas
     for c in COLS_FIN:
         if c not in df.columns:
             df[c] = ""
+
     df = df[COLS_FIN].copy()
     df["__row__"] = (df.index + 2).astype(int)   # linha real
 
+    # ---- PARSERS ROBUSTOS ----
     def to_date(x):
-        s = str(x).strip()
-        if not s: return pd.NaT
-        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
-            try:
-                return pd.to_datetime(s, format=fmt).date()
-            except:
-                pass
-        try:
-            return pd.to_datetime(s, dayfirst=True).date()
-        except:
+        s = ("" if x is None else str(x)).replace("\u00A0", " ").strip()
+        if not s:
             return pd.NaT
+        # tenta parse genérico com dayfirst (pega 04/08/2025 e 2025-08-04)
+        d = pd.to_datetime(s, dayfirst=True, errors="coerce")
+        return d.date() if pd.notna(d) else pd.NaT
 
     def to_float(x):
         """
@@ -77,15 +80,17 @@ def carregar_fin():
         """
         if x is None:
             return None
-        s = str(x).strip()
+        s = str(x).replace("\u00A0", " ").strip()   # remove NBSP e espaços estranhos
         if s == "":
             return None
         # remove tudo que não é dígito, vírgula, ponto ou sinal
         s = re.sub(r"[^\d,.\-]", "", s)
-        # se vírgula é o separador decimal, remove pontos de milhar e troca vírgula por ponto
+        if not s:
+            return None
+        # se vírgula é decimal, remove pontos de milhar e troca vírgula por ponto
         if "," in s and (s.rfind(",") > s.rfind(".")):
             s = s.replace(".", "").replace(",", ".")
-        # se ainda sobrou mais de um ponto, mantém só o último como decimal
+        # se sobraram vários pontos, mantém só o último como decimal
         if s.count(".") > 1:
             partes = s.split(".")
             s = "".join(partes[:-1]) + "." + partes[-1]
@@ -98,14 +103,14 @@ def carregar_fin():
     df["Data de pagamento"] = df["Data de pagamento"].apply(to_date)
     df["Valor"] = df["Valor"].apply(to_float)
 
-    # Status
-    hoje = date.today()
+    # ---- STATUS ----
+    hoje_local = date.today()
     def status(row):
         if pd.notna(row["Data de pagamento"]): return "Pago"
         if pd.isna(row["Vencimento"]): return ""
-        return "Em atraso" if row["Vencimento"] < hoje else "Em dia"
-
+        return "Em atraso" if row["Vencimento"] < hoje_local else "Em dia"
     df["Status"] = df.apply(status, axis=1)
+
     return df
 
 def update_cell(row_idx, col_name, value):
@@ -127,6 +132,12 @@ df = carregar_fin()
 hoje = date.today()
 ini_mes = date(hoje.year, hoje.month, 1)
 prox7 = hoje + timedelta(days=7)
+
+# --------- Diagnóstico (remova quando tudo estiver ok) ----------
+with st.expander("🔎 Diagnóstico (temporário)"):
+    st.write("Colunas lidas:", list(df.columns))
+    st.write(df.head())
+    st.write("Soma por Status:", df.groupby("Status")["Valor"].sum())
 
 # ================== PAINEL (KPIs) ==================
 pago_mes = df[(df["Status"]=="Pago") & (df["Data de pagamento"]>=ini_mes)]["Valor"].sum() or 0.0
