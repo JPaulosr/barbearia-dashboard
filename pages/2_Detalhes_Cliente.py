@@ -37,8 +37,7 @@ def parse_valor_col(series: pd.Series) -> pd.Series:
             return 0.0
         s = s.replace("R$", "").replace(" ", "")
         if "," in s:
-            s = s.replace(".", "")
-            s = s.replace(",", ".")
+            s = s.replace(".", "").replace(",", ".")
             return pd.to_numeric(s, errors="coerce")
         if s.count(".") > 1:
             left, last = s.rsplit(".", 1)
@@ -84,7 +83,7 @@ def carregar_dados():
     }
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
-    # Duração (fallback por horários)
+    # Duração (fallback pelos horários, se necessário)
     if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
         if set(["Hora Chegada", "Hora Saída do Salão", "Hora Saída"]).intersection(df.columns):
             def calcular_duracao(row):
@@ -112,19 +111,43 @@ df = carregar_dados()
 
 # =========================
 # Filtro de pagamento (impacta SOMAS/GRÁFICOS)
+# Usa: Conta, StatusFiado, DataPagamento
 # =========================
-# Tenta identificar colunas que guardam status/forma de pagamento
-col_conta  = next((c for c in df.columns if c.strip().lower() in ["conta", "forma de pagamento", "pagamento"]), None)
-col_status = next((c for c in df.columns if c.strip().lower() in ["status", "situação", "situacao"]), None)
+def norm_pair(df, name):
+    if name not in df.columns:
+        return pd.Series("", index=df.index), pd.Series("", index=df.index)
+    s = df[name].astype(str).str.strip().fillna("")
+    s_low = (s.str.lower()
+               .str.replace("ã", "a")
+               .str.replace("á", "a")
+               .str.replace("â", "a")
+               .str.replace("ç", "c"))
+    return s, s_low
 
-def norm(x):
-    return str(x).strip().lower() if pd.notna(x) else ""
+col_conta = "Conta"
+col_status_fiado = "StatusFiado"
+col_data_pag = "DataPagamento"
 
-serie_conta  = df[col_conta].map(norm)  if col_conta  else pd.Series("", index=df.index)
-serie_status = df[col_status].map(norm) if col_status else pd.Series("", index=df.index)
+serie_conta_raw, serie_conta = norm_pair(df, col_conta)
+serie_status_raw, serie_status = norm_pair(df, col_status_fiado)
 
-# Considera "fiado" se estiver em Status ou na Conta
-mask_fiado = serie_status.eq("fiado") | serie_conta.eq("fiado")
+# DataPagamento preenchida?
+if col_data_pag in df.columns:
+    s_pag = df[col_data_pag]
+    if pd.api.types.is_datetime64_any_dtype(s_pag):
+        mask_datapag = s_pag.notna()
+    else:
+        mask_datapag = s_pag.astype(str).str.strip().ne("") & s_pag.notna()
+else:
+    mask_datapag = pd.Series(False, index=df.index)
+
+# Regras
+mask_conta_fiado = serie_conta.eq("fiado")  # exatamente como na planilha
+mask_status_pago = serie_status.str.contains("pag", na=False)  # "pago", "pagamento", etc.
+
+mask_fiado_quitado = mask_conta_fiado & (mask_status_pago | mask_datapag)
+mask_fiado_em_aberto = mask_conta_fiado & ~mask_fiado_quitado
+mask_nao_fiado = ~mask_conta_fiado
 
 st.sidebar.subheader("Filtro de pagamento")
 opcao_pagto = st.sidebar.radio(
@@ -134,12 +157,22 @@ opcao_pagto = st.sidebar.radio(
     help="Controla o que entra nos gráficos e somas de valor."
 )
 
+# Base para valores/gráficos
 if opcao_pagto == "Apenas pagos":
-    base_val = df[~mask_fiado].copy()  # tudo que não é fiado
+    base_val = df[mask_nao_fiado | mask_fiado_quitado].copy()
 elif opcao_pagto == "Apenas fiado":
-    base_val = df[mask_fiado].copy()
-else:  # Incluir tudo
+    base_val = df[mask_fiado_em_aberto].copy()
+else:
     base_val = df.copy()
+
+# (Opcional) aplicar o filtro também à TABELA de histórico
+aplicar_no_historico = st.sidebar.checkbox("Aplicar no histórico (tabela)", value=False)
+
+with st.sidebar.expander("Ver contagem (conferência)"):
+    st.write(f"Total linhas: **{len(df)}**")
+    st.write(f"Fiado em aberto: **{int(mask_fiado_em_aberto.sum())}**")
+    st.write(f"Fiado quitado: **{int(mask_fiado_quitado.sum())}**")
+    st.write(f"Não fiado: **{int(mask_nao_fiado.sum())}**")
 
 base_val["ValorNum"] = base_val["ValorNumBruto"].astype(float)
 
@@ -184,10 +217,14 @@ else:
     st.info("Cliente sem imagem cadastrada.")
 
 # =========================
-# Dados do cliente (histórico completo)
+# Dados do cliente (tabela e base para gráficos)
 # =========================
-df_cliente     = df[df["Cliente"] == cliente].copy()
-df_cliente_val = base_val[base_val["Cliente"] == cliente].copy()  # usa filtro para valores
+if aplicar_no_historico:
+    df_cliente = base_val[base_val["Cliente"] == cliente].copy()
+else:
+    df_cliente = df[df["Cliente"] == cliente].copy()
+
+df_cliente_val = base_val[base_val["Cliente"] == cliente].copy()  # gráficos/somas sempre filtrados
 
 if "Duração (min)" in df_cliente.columns:
     df_cliente["Tempo Formatado"] = df_cliente["Duração (min)"].apply(formatar_tempo)
@@ -201,7 +238,7 @@ st.dataframe(
 )
 
 # =========================
-# Receita mensal (usa base filtrada)
+# Receita mensal (base filtrada)
 # =========================
 st.subheader("📊 Receita mensal")
 if df_cliente_val.empty:
@@ -226,7 +263,7 @@ else:
     st.plotly_chart(fig_receita, use_container_width=True)
 
 # =========================
-# Receita por Serviço e Produto (usa base filtrada)
+# Receita por Serviço e Produto (base filtrada)
 # =========================
 st.subheader("📊 Receita por Serviço e Produto")
 if df_cliente_val.empty:
@@ -261,7 +298,7 @@ atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 # =========================
-# Resumo por data (conta combos/simples)
+# Resumo de Atendimentos (combos/simples)
 # =========================
 st.subheader("📋 Resumo de Atendimentos")
 df_cliente_dt = df[df["Cliente"] == cliente].copy()
@@ -316,7 +353,6 @@ mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcion
 tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
 tempo_total_str = formatar_tempo(tempo_total)
 ticket_medio = df_cliente_val["ValorNum"].mean() if not df_cliente_val.empty else 0
-
 intervalo_medio = (
     sum([(datas[i] - datas[i-1]).days for i in range(1, len(datas))]) / len(datas[1:])
 ) if len(datas) >= 2 else None
