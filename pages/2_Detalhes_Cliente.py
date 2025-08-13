@@ -70,6 +70,8 @@ def carregar_dados():
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
+
+    # Datas
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
@@ -81,6 +83,8 @@ def carregar_dados():
         9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
     }
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
+
+    # Duração (fallback por horários)
     if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
         if set(["Hora Chegada", "Hora Saída do Salão", "Hora Saída"]).intersection(df.columns):
             def calcular_duracao(row):
@@ -95,28 +99,32 @@ def carregar_dados():
                 except Exception:
                     return None
             df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+
+    # Valor numérico
     if "Valor" in df.columns:
         df["ValorNumBruto"] = parse_valor_col(df["Valor"])
     else:
         df["ValorNumBruto"] = 0.0
+
     return df
 
 df = carregar_dados()
 
 # =========================
-# Filtro de pagamento para somas/gráficos
+# Filtro de pagamento (impacta SOMAS/GRÁFICOS)
 # =========================
-col_conta  = next((c for c in df.columns if c.strip().lower() in ["conta","forma de pagamento","pagamento"]), None)
-col_status = next((c for c in df.columns if c.strip().lower() in ["status","situação","situacao"]), None)
+# Tenta identificar colunas que guardam status/forma de pagamento
+col_conta  = next((c for c in df.columns if c.strip().lower() in ["conta", "forma de pagamento", "pagamento"]), None)
+col_status = next((c for c in df.columns if c.strip().lower() in ["status", "situação", "situacao"]), None)
 
-def norm(x): 
+def norm(x):
     return str(x).strip().lower() if pd.notna(x) else ""
 
 serie_conta  = df[col_conta].map(norm)  if col_conta  else pd.Series("", index=df.index)
 serie_status = df[col_status].map(norm) if col_status else pd.Series("", index=df.index)
 
+# Considera "fiado" se estiver em Status ou na Conta
 mask_fiado = serie_status.eq("fiado") | serie_conta.eq("fiado")
-mask_pago  = serie_status.eq("pago")
 
 st.sidebar.subheader("Filtro de pagamento")
 opcao_pagto = st.sidebar.radio(
@@ -127,10 +135,10 @@ opcao_pagto = st.sidebar.radio(
 )
 
 if opcao_pagto == "Apenas pagos":
-    base_val = df[(mask_pago | ~mask_fiado)].copy() if col_status else df[~mask_fiado].copy()
+    base_val = df[~mask_fiado].copy()  # tudo que não é fiado
 elif opcao_pagto == "Apenas fiado":
     base_val = df[mask_fiado].copy()
-else:
+else:  # Incluir tudo
     base_val = df.copy()
 
 base_val["ValorNum"] = base_val["ValorNumBruto"].astype(float)
@@ -139,6 +147,10 @@ base_val["ValorNum"] = base_val["ValorNumBruto"].astype(float)
 # Seleção do Cliente
 # =========================
 clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+if not clientes_disponiveis:
+    st.warning("Não há clientes na base.")
+    st.stop()
+
 cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
 cliente = st.selectbox(
     "👤 Selecione o cliente para detalhamento",
@@ -172,10 +184,10 @@ else:
     st.info("Cliente sem imagem cadastrada.")
 
 # =========================
-# Dados do cliente
+# Dados do cliente (histórico completo)
 # =========================
 df_cliente     = df[df["Cliente"] == cliente].copy()
-df_cliente_val = base_val[base_val["Cliente"] == cliente].copy()
+df_cliente_val = base_val[base_val["Cliente"] == cliente].copy()  # usa filtro para valores
 
 if "Duração (min)" in df_cliente.columns:
     df_cliente["Tempo Formatado"] = df_cliente["Duração (min)"].apply(formatar_tempo)
@@ -189,7 +201,7 @@ st.dataframe(
 )
 
 # =========================
-# Receita mensal
+# Receita mensal (usa base filtrada)
 # =========================
 st.subheader("📊 Receita mensal")
 if df_cliente_val.empty:
@@ -214,7 +226,7 @@ else:
     st.plotly_chart(fig_receita, use_container_width=True)
 
 # =========================
-# Receita por Serviço e Produto
+# Receita por Serviço e Produto (usa base filtrada)
 # =========================
 st.subheader("📊 Receita por Serviço e Produto")
 if df_cliente_val.empty:
@@ -240,7 +252,7 @@ else:
     st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
 # =========================
-# Atendimentos por Funcionário
+# Atendimentos por Funcionário (contagem de atendimentos)
 # =========================
 st.subheader("📊 Atendimentos por Funcionário")
 atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
@@ -249,7 +261,7 @@ atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 # =========================
-# Resumo por data
+# Resumo por data (conta combos/simples)
 # =========================
 st.subheader("📋 Resumo de Atendimentos")
 df_cliente_dt = df[df["Cliente"] == cliente].copy()
@@ -283,7 +295,10 @@ else:
     media_freq = sum(diffs) / len(diffs)
     ultimo_atendimento = datas[-1]
     dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
-    status = "🟢 Em dia" if dias_desde_ultimo <= media_freq else ("🟠 Pouco atrasado" if dias_desde_ultimo <= media_freq * 1.5 else "🔴 Muito atrasado")
+    status = (
+        "🟢 Em dia" if dias_desde_ultimo <= media_freq
+        else ("🟠 Pouco atrasado" if dias_desde_ultimo <= media_freq * 1.5 else "🔴 Muito atrasado")
+    )
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
     col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
@@ -301,7 +316,11 @@ mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcion
 tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
 tempo_total_str = formatar_tempo(tempo_total)
 ticket_medio = df_cliente_val["ValorNum"].mean() if not df_cliente_val.empty else 0
-intervalo_medio = (sum([(datas[i] - datas[i-1]).days for i in range(1, len(datas))]) / len(datas[1:])) if len(datas) >= 2 else None
+
+intervalo_medio = (
+    sum([(datas[i] - datas[i-1]).days for i in range(1, len(datas))]) / len(datas[1:])
+) if len(datas) >= 2 else None
+
 col5, col6, col7 = st.columns(3)
 col5.metric("🏅 Cliente VIP", status_vip)
 col6.metric("💇 Mais atendido por", mais_frequente)
