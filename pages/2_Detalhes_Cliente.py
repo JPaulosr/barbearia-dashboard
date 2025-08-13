@@ -49,27 +49,6 @@ def parse_valor_col(series: pd.Series) -> pd.Series:
 def brl(x: float) -> str:
     return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 
-def normalizar_texto(s: pd.Series) -> pd.Series:
-    """lower + remove acentos comuns + strip; mantém vazio para NaN"""
-    if s is None:
-        return pd.Series("", index=df.index)
-    s2 = s.astype(str)
-    # preserva vazio para NaN
-    s2 = s2.where(~s2.isna(), "")
-    s2 = s2.str.strip().str.lower()
-    # remoção básica de acentos sem dependência
-    rep = {
-        "ã":"a","á":"a","â":"a","à":"a",
-        "é":"e","ê":"e","è":"e",
-        "í":"i","ì":"i",
-        "ó":"o","ô":"o","õ":"o","ò":"o",
-        "ú":"u","ù":"u",
-        "ç":"c"
-    }
-    for k,v in rep.items():
-        s2 = s2.str.replace(k, v)
-    return s2.fillna("")
-
 # =========================
 # CONFIGURAÇÃO GOOGLE SHEETS
 # =========================
@@ -98,12 +77,13 @@ def carregar_dados():
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
     meses_pt = {
-        1:"Janeiro",2:"Fevereiro",3:"Março",4:"Abril",5:"Maio",6:"Junho",
-        7:"Julho",8:"Agosto",9:"Setembro",10:"Outubro",11:"Novembro",12:"Dezembro"
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
     }
     df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
-    # Duração (fallback por horários)
+    # Duração (fallback pelos horários, se necessário)
     if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
         if set(["Hora Chegada", "Hora Saída do Salão", "Hora Saída"]).intersection(df.columns):
             def calcular_duracao(row):
@@ -120,46 +100,54 @@ def carregar_dados():
             df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
 
     # Valor numérico
-    df["ValorNumBruto"] = parse_valor_col(df["Valor"]) if "Valor" in df.columns else 0.0
+    if "Valor" in df.columns:
+        df["ValorNumBruto"] = parse_valor_col(df["Valor"])
+    else:
+        df["ValorNumBruto"] = 0.0
+
     return df
 
 df = carregar_dados()
 
 # =========================
 # Filtro de pagamento (impacta SOMAS/GRÁFICOS)
-# Regras baseadas em: Conta, StatusFiado, DataPagamento
+# Usa: Conta, StatusFiado, DataPagamento
 # =========================
-# Colunas conforme a tua planilha
-COL_CONTA = "Conta"
-COL_STATUS = "StatusFiado"
-COL_DATAPAG = "DataPagamento"
+def norm_pair(df, name):
+    if name not in df.columns:
+        return pd.Series("", index=df.index), pd.Series("", index=df.index)
+    s = df[name].astype(str).str.strip().fillna("")
+    s_low = (s.str.lower()
+               .str.replace("ã", "a")
+               .str.replace("á", "a")
+               .str.replace("â", "a")
+               .str.replace("ç", "c"))
+    return s, s_low
 
-serie_conta_norm  = normalizar_texto(df[COL_CONTA]) if COL_CONTA in df.columns else pd.Series("", index=df.index)
-serie_status_norm = normalizar_texto(df[COL_STATUS]) if COL_STATUS in df.columns else pd.Series("", index=df.index)
+col_conta = "Conta"
+col_status_fiado = "StatusFiado"
+col_data_pag = "DataPagamento"
+
+serie_conta_raw, serie_conta = norm_pair(df, col_conta)
+serie_status_raw, serie_status = norm_pair(df, col_status_fiado)
 
 # DataPagamento preenchida?
-if COL_DATAPAG in df.columns:
-    s_pag = df[COL_DATAPAG]
+if col_data_pag in df.columns:
+    s_pag = df[col_data_pag]
     if pd.api.types.is_datetime64_any_dtype(s_pag):
         mask_datapag = s_pag.notna()
     else:
-        # trata strings e NaN corretamente
-        mask_datapag = s_pag.astype(str).where(~s_pag.isna(), "").str.strip().ne("")
+        mask_datapag = s_pag.astype(str).str.strip().ne("") & s_pag.notna()
 else:
     mask_datapag = pd.Series(False, index=df.index)
 
-# Identificação de FIADO
-mask_conta_fiado = serie_conta_norm.str.contains("fiado", na=False)  # pega "fiado" exato e variações
+# Regras
+mask_conta_fiado = serie_conta.eq("fiado")  # exatamente como na planilha
+mask_status_pago = serie_status.str.contains("pag", na=False)  # "pago", "pagamento", etc.
 
-# Status que indicam quitação/recebimento
-mask_status_indica_pago = serie_status_norm.str.contains(
-    r"\b(pago|pagamento|quitado|liquidado|recebido)\b", regex=True, na=False
-)
-
-# Classificações
-mask_fiado_quitado   = mask_conta_fiado & (mask_status_indica_pago | mask_datapag)
+mask_fiado_quitado = mask_conta_fiado & (mask_status_pago | mask_datapag)
 mask_fiado_em_aberto = mask_conta_fiado & ~mask_fiado_quitado
-mask_nao_fiado       = ~mask_conta_fiado
+mask_nao_fiado = ~mask_conta_fiado
 
 st.sidebar.subheader("Filtro de pagamento")
 opcao_pagto = st.sidebar.radio(
@@ -171,23 +159,20 @@ opcao_pagto = st.sidebar.radio(
 
 # Base para valores/gráficos
 if opcao_pagto == "Apenas pagos":
-    # receita realizada = não-fiado + fiado quitado
     base_val = df[mask_nao_fiado | mask_fiado_quitado].copy()
 elif opcao_pagto == "Apenas fiado":
-    # apenas fiados ainda em aberto
     base_val = df[mask_fiado_em_aberto].copy()
 else:
     base_val = df.copy()
 
-# Aplicar o filtro também na TABELA?
+# (Opcional) aplicar o filtro também à TABELA de histórico
 aplicar_no_historico = st.sidebar.checkbox("Aplicar no histórico (tabela)", value=False)
 
-# Indicadores de conferência
-with st.sidebar.expander("Ver contagem"):
+with st.sidebar.expander("Ver contagem (conferência)"):
     st.write(f"Total linhas: **{len(df)}**")
-    st.write(f"Não fiado: **{int(mask_nao_fiado.sum())}**")
     st.write(f"Fiado em aberto: **{int(mask_fiado_em_aberto.sum())}**")
     st.write(f"Fiado quitado: **{int(mask_fiado_quitado.sum())}**")
+    st.write(f"Não fiado: **{int(mask_nao_fiado.sum())}**")
 
 base_val["ValorNum"] = base_val["ValorNumBruto"].astype(float)
 
@@ -245,8 +230,8 @@ if "Duração (min)" in df_cliente.columns:
     df_cliente["Tempo Formatado"] = df_cliente["Duração (min)"].apply(formatar_tempo)
 
 st.subheader(f"📅 Histórico de atendimentos - {cliente}")
-colunas_exibir = ["Data_str", "Serviço", "Tipo", "Valor", "Funcionário", "Tempo Formatado", "Conta", "StatusFiado", "DataPagamento"]
-colunas_exibir = [c for c in colunas_exibir if c in df_cliente.columns]
+colunas_exibir = ["Data_str", "Serviço", "Tipo", "Valor", "Funcionário", "Tempo Formatado"]
+colunas_exibir = [col for col in colunas_exibir if col in df_cliente.columns]
 st.dataframe(
     df_cliente.sort_values("Data", ascending=False)[colunas_exibir].rename(columns={"Data_str": "Data"}),
     use_container_width=True
@@ -266,8 +251,11 @@ else:
     )
     receita_mensal["Valor_str"] = receita_mensal["ValorNum"].apply(brl)
     fig_receita = px.bar(
-        receita_mensal, x="Mês_Ano", y="ValorNum", text="Valor_str",
-        labels={"ValorNum":"Receita (R$)", "Mês_Ano":"Mês"},
+        receita_mensal,
+        x="Mês_Ano",
+        y="ValorNum",
+        text="Valor_str",
+        labels={"ValorNum": "Receita (R$)", "Mês_Ano": "Mês"},
         category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
     )
     fig_receita.update_traces(textposition="inside")
@@ -289,16 +277,19 @@ else:
         .sort_values("ValorNum", ascending=False)
     )
     fig_receita_tipos = px.bar(
-        receita_geral, x="Serviço", y="ValorNum", color="Tipo",
+        receita_geral,
+        x="Serviço",
+        y="ValorNum",
+        color="Tipo",
         text=receita_geral["ValorNum"].apply(brl),
-        labels={"ValorNum":"Receita (R$)", "Serviço":"Item"},
+        labels={"ValorNum": "Receita (R$)", "Serviço": "Item"},
         barmode="group"
     )
     fig_receita_tipos.update_traces(textposition="outside")
     st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
 # =========================
-# Atendimentos por Funcionário
+# Atendimentos por Funcionário (contagem de atendimentos)
 # =========================
 st.subheader("📊 Atendimentos por Funcionário")
 atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
@@ -307,7 +298,7 @@ atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
 st.dataframe(atendimentos_por_funcionario, use_container_width=True)
 
 # =========================
-# Resumo de Atendimentos
+# Resumo de Atendimentos (combos/simples)
 # =========================
 st.subheader("📋 Resumo de Atendimentos")
 df_cliente_dt = df[df["Cliente"] == cliente].copy()
