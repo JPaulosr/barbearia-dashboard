@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # 12_Fiado.py — Fiado integrado à Base
 # - Combo por linhas com valores editáveis
 # - Registrar pagamento por cliente (seleciona 1+ IDs; "selecionar todos")
@@ -72,7 +73,7 @@ def garantir_aba_despesas(ss):
     """
     Garante a aba 'Despesas' com colunas mínimas. Retorna o worksheet e a lista de colunas detectadas.
     """
-    cols_min = ["Data","Prestador","Descrição","Valor","Meio de Pagamento"]
+    cols_min = ["Data","Prestador","Descrição","Valor","Forma de Pagamento"]
     ws = garantir_aba(ss, ABA_DESP, cols_min)
     headers = ws.row_values(1)
     if not headers:
@@ -145,7 +146,7 @@ def ultima_forma_pagto_cliente(df_base, cliente):
 def inserir_despesas_lote(linhas_despesas):
     """
     linhas_despesas: lista de dicts com chaves possíveis:
-      Data, Prestador, Descrição, Valor, Meio de Pagamento
+      Data, Prestador, Descrição, Valor, Forma de Pagamento
     Mapeia para as colunas reais da aba Despesas e faz append linha a linha.
     """
     ss = conectar_sheets()
@@ -162,36 +163,32 @@ def inserir_despesas_lote(linhas_despesas):
     col_prestador   = pega_col("Prestador") or "Prestador"
     col_desc        = pega_col("Descrição") or "Descrição"
     col_valor       = pega_col("Valor") or "Valor"
-    col_meio_pag    = None
-    for cand in ["Meio de Pagamento","Forma de Pagamento","F. de Pag","Me Pag","Meio Pag","Forma Pag"]:
-        col_meio_pag = pega_col(cand)
-        if col_meio_pag:
-            break
-    if not col_meio_pag:
-        col_meio_pag = "Meio de Pagamento"
+    # Preferência absoluta: "Forma de Pagamento"
+    col_forma_pag   = pega_col("Forma de Pagamento")
+    if not col_forma_pag:
+        # tenta variações antigas e, se não achar, usa "Forma de Pagamento"
+        for cand in ["Meio de Pagamento","FormaPagamento","Pagamento","Meio Pagamento","F. de Pagamento"]:
+            col_forma_pag = pega_col(cand)
+            if col_forma_pag:
+                break
+    if not col_forma_pag:
+        col_forma_pag = "Forma de Pagamento"
 
-    # Garante que todos existam na 1ª linha
-    colunas_garantidas = [col_data, col_prestador, col_desc, col_valor, col_meio_pag]
+    # Se a planilha estiver sem cabeçalho, garante o conjunto mínimo
+    colunas_min = [col_data, col_prestador, col_desc, col_valor, col_forma_pag]
     if not headers:
-        ws.append_row(colunas_garantidas)
-        headers = colunas_garantidas
-    else:
-        # cria faltantes mantendo ordem no final
-        faltantes = [c for c in colunas_garantidas if c not in headers]
-        if faltantes:
-            # não há API simples para "inserir colunas com nome"; segue appending em ordem conhecida:
-            pass
+        ws.append_row(colunas_min)
+        headers = colunas_min
 
-    # Append
+    # Append respeitando a ordem atual dos headers
     for d in linhas_despesas:
         linha = {
             col_data: d.get("Data",""),
             col_prestador: d.get("Prestador",""),
             col_desc: d.get("Descrição",""),
             col_valor: d.get("Valor",""),
-            col_meio_pag: d.get("Meio de Pagamento",""),
+            col_forma_pag: d.get("Forma de Pagamento",""),
         }
-        # Ordena conforme headers atuais; se alguma chave não existir, ignora
         ordered = [linha.get(h, "") for h in headers]
         ws.append_row(ordered, value_input_option="USER_ENTERED")
 
@@ -285,7 +282,6 @@ elif acao == "💰 Registrar pagamento":
 
     # IDs do cliente com rótulo amigável
     ids_opcoes = []
-    subset = pd.DataFrame()
     if cliente_sel:
         grupo_cli = df_abertos[df_abertos["Cliente"] == cliente_sel].copy()
         grupo_cli["Data"] = pd.to_datetime(grupo_cli["Data"], errors="coerce").dt.strftime(DATA_FMT)
@@ -359,39 +355,38 @@ elif acao == "💰 Registrar pagamento":
         # ===== [NOVO] BLOCO DE COMISSÃO =====
         st.markdown("---")
         funcs = subset["Funcionário"].dropna().astype(str).unique().tolist()
-        # sugestão de ativação: se houver "Vinicius" nos itens
-        sugere_on = any(f.lower() == "vinicius" for f in funcs)
+        sugere_on = any(f.lower() == "vinicius" for f in funcs)  # ativa por padrão se houver Vinicius
         registrar_comissao = st.checkbox("Registrar comissão na aba Despesas agora", value=sugere_on)
 
         if registrar_comissao:
-            st.caption("Edite os valores sugeridos. A sugestão é 50% do subtotal por funcionário apenas como referência.")
+            st.caption("Edite os valores sugeridos. A sugestão é 50% do subtotal por funcionário (apenas referência).")
             for f in funcs:
                 subf = subset[subset["Funcionário"] == f]
                 subtotal_f = float(subf["Valor"].sum())
-                with st.container(border=True):
-                    st.markdown(f"**Funcionário:** {f}")
-                    c1, c2, c3, c4 = st.columns([1,1,1,2])
-                    with c1:
-                        data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_pag, key=f"dt_{f}")
-                    with c2:
-                        forma_desp_f = st.selectbox(f"Meio de pagamento ({f})",
-                                                    options=["Dinheiro","Pix","Cartão","Transferência","Outro"],
-                                                    index=0, key=f"fp_{f}")
-                    with c3:
-                        valor_sug = round(subtotal_f * 0.50, 2)
-                        valor_com_f = st.number_input(f"Valor comissão ({f}) — sugestão 50%",
-                                                      value=float(valor_sug), min_value=0.0, step=1.0, format="%.2f",
-                                                      key=f"vl_{f}")
-                    with c4:
-                        desc_f = st.text_input(f"Descrição ({f})", value=f"Comissão {f}", key=f"ds_{f}")
 
-                    bloco_comissao[f] = {
-                        "Data": data_desp_f.strftime(DATA_FMT),
-                        "Prestador": f,
-                        "Descrição": desc_f,
-                        "Valor": valor_com_f,
-                        "Meio de Pagamento": forma_desp_f,
-                    }
+                st.markdown(f"**Funcionário:** {f}")
+                c1, c2, c3, c4 = st.columns([1,1,1,2])
+                with c1:
+                    data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_pag, key=f"dt_{f}")
+                with c2:
+                    forma_desp_f = st.selectbox(f"Forma de Pagamento ({f})",
+                                                options=["Dinheiro","Pix","Cartão","Transferência","Outro"],
+                                                index=0, key=f"fp_{f}")
+                with c3:
+                    valor_sug = round(subtotal_f * 0.50, 2)
+                    valor_com_f = st.number_input(f"Valor comissão ({f}) — sugestão 50%",
+                                                  value=float(valor_sug), min_value=0.0, step=1.0, format="%.2f",
+                                                  key=f"vl_{f}")
+                with c4:
+                    desc_f = st.text_input(f"Descrição ({f})", value=f"Comissão {f}", key=f"ds_{f}")
+
+                bloco_comissao[f] = {
+                    "Data": data_desp_f.strftime(DATA_FMT),
+                    "Prestador": f,
+                    "Descrição": desc_f,
+                    "Valor": valor_com_f,
+                    "Forma de Pagamento": forma_desp_f,
+                }
 
     disabled_btn = not (cliente_sel and id_selecionados and forma_pag)
     if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
@@ -434,10 +429,8 @@ elif acao == "💰 Registrar pagamento":
             # Lança despesas de comissão (se habilitado)
             if registrar_comissao and bloco_comissao:
                 linhas = []
-                # se quiser ignorar JPaulo por padrão, deixe assim:
                 for func, dados in bloco_comissao.items():
                     if func.strip().lower() == "jpaulo":
-                        # pule, a não ser que o usuário tenha explicitamente deixado valor > 0
                         if float(dados.get("Valor", 0) or 0) <= 0:
                             continue
                     linhas.append(dados)
@@ -503,4 +496,28 @@ else:
                 .agg(ValorTotal=("Valor","sum"), QtdeServicos=("Serviço","count"),
                      Combo=("Combo","first"), MaxAtraso=("DiasAtraso","max"))
             )
-            resumo["Situação"] = resumo["MaxAtraso"].apply(lambda n: "Em dia"
+            resumo["Situação"] = resumo["MaxAtraso"].apply(lambda n: "Em dia" if n<=0 else f"{int(n)}d atraso")
+
+            st.dataframe(
+                resumo.sort_values(["MaxAtraso","ValorTotal"], ascending=[False, False])[[
+                    "IDLancFiado","Cliente","ValorTotal","QtdeServicos","Combo","Situação"
+                ]],
+                use_container_width=True, hide_index=True
+            )
+
+            total = float(resumo["ValorTotal"].sum())
+            st.metric("Total em aberto", f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
+            # Exportação
+            try:
+                from openpyxl import Workbook  # noqa
+                buf = BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                    em_aberto.sort_values(["Cliente","IDLancFiado","Data"]).to_excel(
+                        w, index=False, sheet_name="Fiado_Em_Aberto"
+                    )
+                st.download_button("⬇️ Exportar (Excel)", data=buf.getvalue(), file_name="fiado_em_aberto.xlsx")
+            except Exception:
+                csv_bytes = em_aberto.sort_values(["Cliente","IDLancFiado","Data"]).to_csv(
+                    index=False
+                ).encode("utf-8-sig")
+                st.download_button("⬇️ Exportar (CSV)", data=csv_bytes, file_name="fiado_em_aberto.csv")
