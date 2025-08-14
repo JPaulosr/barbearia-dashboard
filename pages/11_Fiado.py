@@ -1,8 +1,11 @@
+# -*- coding: utf-8 -*-
 # 12_Fiado.py — Fiado integrado à Base
 # - Combo por linhas com valores editáveis
 # - Registrar pagamento por cliente (seleciona 1+ IDs; "selecionar todos")
 # - Sugere última forma de pagamento do cliente (vinda da Base)
 # - Quitar por COMPETÊNCIA (atualiza as linhas; não cria novas)
+# - [NOVO] Lançar comissão em "Despesas" no mesmo fluxo de quitação
+# - [NOVO] Comissão usa a mesma data do fiado (se única); senão, cai na data do pagamento
 # - Exportação Excel (openpyxl) ou CSV (fallback)
 # - Sidebar expandida por padrão
 
@@ -24,6 +27,7 @@ SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_BASE = "Base de Dados"
 ABA_LANC = "Fiado_Lancamentos"
 ABA_PAGT = "Fiado_Pagamentos"
+ABA_DESP = "Despesas"  # <- aba de despesas para lançar comissão
 TZ = pytz.timezone("America/Sao_Paulo")
 DATA_FMT = "%d/%m/%Y"
 
@@ -66,6 +70,13 @@ def garantir_base_cols(ss):
     set_with_dataframe(ws, df)
     return ws
 
+def garantir_aba_despesas(ss):
+    """Garante a aba 'Despesas' com colunas mínimas. Retorna (worksheet, headers)."""
+    cols_min = ["Data","Prestador","Descrição","Valor","Forma de Pagamento"]
+    ws = garantir_aba(ss, ABA_DESP, cols_min)
+    headers = ws.row_values(1) or cols_min
+    return ws, headers
+
 @st.cache_data
 def carregar_tudo():
     ss = conectar_sheets()
@@ -74,6 +85,7 @@ def carregar_tudo():
         ["IDLanc","DataAtendimento","Cliente","Combo","Servicos","ValorTotal","Vencimento","Funcionario","Fase","Tipo","Periodo"])
     ws_pagt = garantir_aba(ss, ABA_PAGT,
         ["IDPagamento","IDLanc","DataPagamento","Cliente","FormaPagamento","ValorPago","Obs"])
+    garantir_aba_despesas(ss)  # só para existir
 
     df_base = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
     df_lanc = get_as_dataframe(ws_lanc, evaluate_formulas=True, header=0).dropna(how="all")
@@ -127,6 +139,42 @@ def ultima_forma_pagto_cliente(df_base, cliente):
     except Exception:
         pass
     return str(df.iloc[0]["Conta"]) if not df.empty else None
+
+def inserir_despesas_lote(linhas_despesas):
+    """
+    linhas_despesas: lista de dicts com chaves:
+      Data, Prestador, Descrição, Valor, Forma de Pagamento
+    """
+    ss = conectar_sheets()
+    ws, headers = garantir_aba_despesas(ss)
+
+    # Normaliza nomes de colunas (case-insensitive)
+    def pega_col(nome_alvo):
+        for h in headers:
+            if h.strip().lower() == nome_alvo.strip().lower():
+                return h
+        return None
+
+    col_data      = pega_col("Data") or "Data"
+    col_prest     = pega_col("Prestador") or "Prestador"
+    col_desc      = pega_col("Descrição") or "Descrição"
+    col_valor     = pega_col("Valor") or "Valor"
+    col_forma_pag = pega_col("Forma de Pagamento") or "Forma de Pagamento"
+
+    if not headers:
+        headers = [col_data, col_prest, col_desc, col_valor, col_forma_pag]
+        ws.append_row(headers)
+
+    for d in linhas_despesas:
+        linha = {
+            col_data: d.get("Data",""),
+            col_prest: d.get("Prestador",""),
+            col_desc: d.get("Descrição",""),
+            col_valor: d.get("Valor",""),
+            col_forma_pag: d.get("Forma de Pagamento",""),
+        }
+        ordered = [linha.get(h, "") for h in headers]
+        ws.append_row(ordered, value_input_option="USER_ENTERED")
 
 # ===== Página =====
 df_base, df_lanc, df_pagt, clientes, combos_exist, servs_exist, contas_exist = carregar_tudo()
@@ -214,7 +262,7 @@ elif acao == "💰 Registrar pagamento":
     lista_contas = contas_exist or ["Pix", "Dinheiro", "Cartão", "Transferência", "Outro"]
     default_idx = lista_contas.index(ultima) if (ultima in lista_contas) else 0
     with colc2:
-        forma_pag = st.selectbox("Forma de pagamento", options=lista_contas, index=default_idx)
+        forma_pag = st.selectbox("Forma de pagamento (quitação)", options=lista_contas, index=default_idx)
 
     # IDs do cliente com rótulo amigável
     ids_opcoes = []
@@ -264,14 +312,19 @@ elif acao == "💰 Registrar pagamento":
         obs = st.text_input("Observação (opcional)", "")
 
     total_sel = 0.0
+    bloco_comissao = {}
+    registrar_comissao = False
+
     if id_selecionados:
         subset = df_abertos[df_abertos["IDLancFiado"].isin(id_selecionados)].copy()
         subset["Valor"] = pd.to_numeric(subset["Valor"], errors="coerce").fillna(0)
         total_sel = float(subset["Valor"].sum())
+
         st.info(
             f"Cliente: **{cliente_sel}** • IDs: {', '.join(id_selecionados)} • "
             f"Total: **R$ {total_sel:,.2f}**".replace(",", "X").replace(".", ",").replace("X", ".")
         )
+
         resumo_srv = (
             subset.groupby("Serviço", as_index=False)
             .agg(Qtd=("Serviço", "count"), Total=("Valor", "sum"))
@@ -282,6 +335,54 @@ elif acao == "💰 Registrar pagamento":
         )
         st.caption("Resumo por serviço selecionado:")
         st.dataframe(resumo_srv, use_container_width=True, hide_index=True)
+
+        # ===== [NOVO] BLOCO DE COMISSÃO =====
+        st.markdown("---")
+        funcs = subset["Funcionário"].dropna().astype(str).unique().tolist()
+        sugere_on = any(f.lower() == "vinicius" for f in funcs)  # ativa por padrão se houver Vinicius
+        registrar_comissao = st.checkbox("Registrar comissão na aba Despesas agora", value=sugere_on)
+
+        # >>> NOVO: data de referência do fiado por funcionário (se única)
+        subset["__DataAtend"] = pd.to_datetime(subset["Data"], format=DATA_FMT, errors="coerce").dt.date
+        ref_date_por_func = {}
+        for f in funcs:
+            datas_f = set(subset.loc[subset["Funcionário"] == f, "__DataAtend"].dropna().tolist())
+            ref_date_por_func[f] = list(datas_f)[0] if len(datas_f) == 1 else None
+        # <<< NOVO
+
+        if registrar_comissao:
+            st.caption("Edite os valores sugeridos. A sugestão é 50% do subtotal por funcionário (apenas referência).")
+            for f in funcs:
+                subf = subset[subset["Funcionário"] == f]
+                subtotal_f = float(subf["Valor"].sum())
+
+                st.markdown(f"**Funcionário:** {f}")
+                c1, c2, c3, c4 = st.columns([1,1,1,2])
+                with c1:
+                    # >>> NOVO: usa data do fiado se única; senão, data do pagamento
+                    ref_dt = ref_date_por_func.get(f)
+                    data_base = ref_dt if ref_dt is not None else data_pag
+                    data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_base, key=f"dt_{f}")
+                    # <<< NOVO
+                with c2:
+                    forma_desp_f = st.selectbox(f"Forma de Pagamento ({f})",
+                                                options=["Dinheiro","Pix","Cartão","Transferência","Outro"],
+                                                index=0, key=f"fp_{f}")
+                with c3:
+                    valor_sug = round(subtotal_f * 0.50, 2)
+                    valor_com_f = st.number_input(f"Valor comissão ({f}) — sugestão 50%",
+                                                  value=float(valor_sug), min_value=0.0, step=1.0, format="%.2f",
+                                                  key=f"vl_{f}")
+                with c4:
+                    desc_f = st.text_input(f"Descrição ({f})", value=f"Comissão {f}", key=f"ds_{f}")
+
+                bloco_comissao[f] = {
+                    "Data": data_desp_f.strftime(DATA_FMT),
+                    "Prestador": f,
+                    "Descrição": desc_f,
+                    "Valor": valor_com_f,
+                    "Forma de Pagamento": forma_desp_f,
+                }
 
     disabled_btn = not (cliente_sel and id_selecionados and forma_pag)
     if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
@@ -321,6 +422,20 @@ elif acao == "💰 Registrar pagamento":
                 ],
             )
 
+            # Lança despesas de comissão (se habilitado)
+            if registrar_comissao and bloco_comissao:
+                linhas = []
+                for func, dados in bloco_comissao.items():
+                    if func.strip().lower() == "jpaulo" and float(dados.get("Valor", 0) or 0) <= 0:
+                        continue
+                    linhas.append(dados)
+                if linhas:
+                    try:
+                        inserir_despesas_lote(linhas)
+                        st.success("Comissão lançada na aba **Despesas**.")
+                    except Exception as e:
+                        st.warning(f"Pagamento quitado, mas houve problema ao lançar comissão em Despesas: {e}")
+
             st.success(
                 f"Pagamento registrado para **{cliente_sel}** (competência). "
                 f"IDs quitados: {', '.join(id_selecionados)}. "
@@ -338,16 +453,13 @@ else:
         if em_aberto.empty:
             st.success("Nenhum fiado em aberto 🎉")
         else:
-            # 🔎 Filtros
             colf1, colf2 = st.columns([2,1])
-
             with colf1:
                 filtro_cliente = st.text_input("Filtrar por cliente (opcional)", "")
                 if filtro_cliente.strip():
                     em_aberto = em_aberto[
                         em_aberto["Cliente"].str.contains(filtro_cliente.strip(), case=False, na=False)
                     ]
-
             with colf2:
                 funcionarios_abertos = sorted(
                     em_aberto["Funcionário"].dropna().astype(str).unique().tolist()
@@ -356,7 +468,6 @@ else:
                 if filtro_func:
                     em_aberto = em_aberto[em_aberto["Funcionário"] == filtro_func]
 
-            # Datas / atraso
             hoje = date.today()
             def parse_dt(x):
                 try:
@@ -369,7 +480,6 @@ else:
             )
             em_aberto["Situação"] = em_aberto["DiasAtraso"].apply(lambda n: "Em dia" if n<=0 else f"{int(n)}d atraso")
 
-            # Resumo por ID
             em_aberto["Valor"] = pd.to_numeric(em_aberto["Valor"], errors="coerce").fillna(0)
             resumo = (
                 em_aberto.groupby(["IDLancFiado","Cliente"], as_index=False)
@@ -388,7 +498,6 @@ else:
             total = float(resumo["ValorTotal"].sum())
             st.metric("Total em aberto", f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
 
-            # Exportação
             try:
                 from openpyxl import Workbook  # noqa
                 buf = BytesIO()
