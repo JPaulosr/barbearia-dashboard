@@ -5,6 +5,7 @@
 # - Sugere última forma de pagamento do cliente (vinda da Base)
 # - Quitar por COMPETÊNCIA (atualiza as linhas; não cria novas)
 # - [NOVO] Lançar comissão em "Despesas" no mesmo fluxo de quitação
+# - [NOVO] Comissão usa a mesma data do fiado (se única); senão, cai na data do pagamento
 # - Exportação Excel (openpyxl) ou CSV (fallback)
 # - Sidebar expandida por padrão
 
@@ -70,14 +71,10 @@ def garantir_base_cols(ss):
     return ws
 
 def garantir_aba_despesas(ss):
-    """
-    Garante a aba 'Despesas' com colunas mínimas. Retorna o worksheet e a lista de colunas detectadas.
-    """
+    """Garante a aba 'Despesas' com colunas mínimas. Retorna (worksheet, headers)."""
     cols_min = ["Data","Prestador","Descrição","Valor","Forma de Pagamento"]
     ws = garantir_aba(ss, ABA_DESP, cols_min)
-    headers = ws.row_values(1)
-    if not headers:
-        headers = cols_min
+    headers = ws.row_values(1) or cols_min
     return ws, headers
 
 @st.cache_data
@@ -145,9 +142,8 @@ def ultima_forma_pagto_cliente(df_base, cliente):
 
 def inserir_despesas_lote(linhas_despesas):
     """
-    linhas_despesas: lista de dicts com chaves possíveis:
+    linhas_despesas: lista de dicts com chaves:
       Data, Prestador, Descrição, Valor, Forma de Pagamento
-    Mapeia para as colunas reais da aba Despesas e faz append linha a linha.
     """
     ss = conectar_sheets()
     ws, headers = garantir_aba_despesas(ss)
@@ -159,32 +155,20 @@ def inserir_despesas_lote(linhas_despesas):
                 return h
         return None
 
-    col_data        = pega_col("Data") or "Data"
-    col_prestador   = pega_col("Prestador") or "Prestador"
-    col_desc        = pega_col("Descrição") or "Descrição"
-    col_valor       = pega_col("Valor") or "Valor"
-    # Preferência absoluta: "Forma de Pagamento"
-    col_forma_pag   = pega_col("Forma de Pagamento")
-    if not col_forma_pag:
-        # tenta variações antigas e, se não achar, usa "Forma de Pagamento"
-        for cand in ["Meio de Pagamento","FormaPagamento","Pagamento","Meio Pagamento","F. de Pagamento"]:
-            col_forma_pag = pega_col(cand)
-            if col_forma_pag:
-                break
-    if not col_forma_pag:
-        col_forma_pag = "Forma de Pagamento"
+    col_data      = pega_col("Data") or "Data"
+    col_prest     = pega_col("Prestador") or "Prestador"
+    col_desc      = pega_col("Descrição") or "Descrição"
+    col_valor     = pega_col("Valor") or "Valor"
+    col_forma_pag = pega_col("Forma de Pagamento") or "Forma de Pagamento"
 
-    # Se a planilha estiver sem cabeçalho, garante o conjunto mínimo
-    colunas_min = [col_data, col_prestador, col_desc, col_valor, col_forma_pag]
     if not headers:
-        ws.append_row(colunas_min)
-        headers = colunas_min
+        headers = [col_data, col_prest, col_desc, col_valor, col_forma_pag]
+        ws.append_row(headers)
 
-    # Append respeitando a ordem atual dos headers
     for d in linhas_despesas:
         linha = {
             col_data: d.get("Data",""),
-            col_prestador: d.get("Prestador",""),
+            col_prest: d.get("Prestador",""),
             col_desc: d.get("Descrição",""),
             col_valor: d.get("Valor",""),
             col_forma_pag: d.get("Forma de Pagamento",""),
@@ -358,6 +342,14 @@ elif acao == "💰 Registrar pagamento":
         sugere_on = any(f.lower() == "vinicius" for f in funcs)  # ativa por padrão se houver Vinicius
         registrar_comissao = st.checkbox("Registrar comissão na aba Despesas agora", value=sugere_on)
 
+        # >>> NOVO: data de referência do fiado por funcionário (se única)
+        subset["__DataAtend"] = pd.to_datetime(subset["Data"], format=DATA_FMT, errors="coerce").dt.date
+        ref_date_por_func = {}
+        for f in funcs:
+            datas_f = set(subset.loc[subset["Funcionário"] == f, "__DataAtend"].dropna().tolist())
+            ref_date_por_func[f] = list(datas_f)[0] if len(datas_f) == 1 else None
+        # <<< NOVO
+
         if registrar_comissao:
             st.caption("Edite os valores sugeridos. A sugestão é 50% do subtotal por funcionário (apenas referência).")
             for f in funcs:
@@ -367,7 +359,11 @@ elif acao == "💰 Registrar pagamento":
                 st.markdown(f"**Funcionário:** {f}")
                 c1, c2, c3, c4 = st.columns([1,1,1,2])
                 with c1:
-                    data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_pag, key=f"dt_{f}")
+                    # >>> NOVO: usa data do fiado se única; senão, data do pagamento
+                    ref_dt = ref_date_por_func.get(f)
+                    data_base = ref_dt if ref_dt is not None else data_pag
+                    data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_base, key=f"dt_{f}")
+                    # <<< NOVO
                 with c2:
                     forma_desp_f = st.selectbox(f"Forma de Pagamento ({f})",
                                                 options=["Dinheiro","Pix","Cartão","Transferência","Outro"],
@@ -430,9 +426,8 @@ elif acao == "💰 Registrar pagamento":
             if registrar_comissao and bloco_comissao:
                 linhas = []
                 for func, dados in bloco_comissao.items():
-                    if func.strip().lower() == "jpaulo":
-                        if float(dados.get("Valor", 0) or 0) <= 0:
-                            continue
+                    if func.strip().lower() == "jpaulo" and float(dados.get("Valor", 0) or 0) <= 0:
+                        continue
                     linhas.append(dados)
                 if linhas:
                     try:
@@ -458,16 +453,13 @@ else:
         if em_aberto.empty:
             st.success("Nenhum fiado em aberto 🎉")
         else:
-            # 🔎 Filtros
             colf1, colf2 = st.columns([2,1])
-
             with colf1:
                 filtro_cliente = st.text_input("Filtrar por cliente (opcional)", "")
                 if filtro_cliente.strip():
                     em_aberto = em_aberto[
                         em_aberto["Cliente"].str.contains(filtro_cliente.strip(), case=False, na=False)
                     ]
-
             with colf2:
                 funcionarios_abertos = sorted(
                     em_aberto["Funcionário"].dropna().astype(str).unique().tolist()
@@ -476,7 +468,6 @@ else:
                 if filtro_func:
                     em_aberto = em_aberto[em_aberto["Funcionário"] == filtro_func]
 
-            # Datas / atraso
             hoje = date.today()
             def parse_dt(x):
                 try:
@@ -489,7 +480,6 @@ else:
             )
             em_aberto["Situação"] = em_aberto["DiasAtraso"].apply(lambda n: "Em dia" if n<=0 else f"{int(n)}d atraso")
 
-            # Resumo por ID
             em_aberto["Valor"] = pd.to_numeric(em_aberto["Valor"], errors="coerce").fillna(0)
             resumo = (
                 em_aberto.groupby(["IDLancFiado","Cliente"], as_index=False)
@@ -507,7 +497,7 @@ else:
 
             total = float(resumo["ValorTotal"].sum())
             st.metric("Total em aberto", f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-            # Exportação
+
             try:
                 from openpyxl import Workbook  # noqa
                 buf = BytesIO()
