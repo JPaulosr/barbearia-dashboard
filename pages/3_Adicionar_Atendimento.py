@@ -4,11 +4,17 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
-import re
 
 # === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
+
+# Colunas “oficiais” e colunas de FIADO que devemos preservar
+COLS_OFICIAIS = [
+    "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
+    "Funcionário", "Fase", "Tipo", "Período"
+]
+COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]  # incluo DataPagamento p/ competência
 
 @st.cache_resource
 def conectar_sheets():
@@ -18,18 +24,22 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
+def ler_cabecalho(aba):
+    """Retorna a primeira linha (cabeçalho) já existente na planilha, se houver."""
+    try:
+        headers = aba.row_values(1)
+        headers = [h.strip() for h in headers] if headers else []
+        return headers
+    except Exception:
+        return []
+
 def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
 
-    # >>> Agora a base oficial NÃO tem mais colunas de horário
-    colunas_esperadas = [
-        "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
-        "Funcionário", "Fase", "Tipo",
-        "Período"   # nova coluna oficial
-    ]
-    for coluna in colunas_esperadas:
+    # >>> Garante colunas oficiais e de fiado (sem remover as que já existem)
+    for coluna in [*COLS_OFICIAIS, *COLS_FIADO]:
         if coluna not in df.columns:
             df[coluna] = ""
 
@@ -39,21 +49,34 @@ def carregar_base():
     df.loc[~df["Período"].isin(["Manhã", "Tarde", "Noite"]), "Período"] = ""
 
     df["Combo"] = df["Combo"].fillna("")
+
     return df, aba
 
 def salvar_base(df_final):
-    # >>> Ordem/colunas oficiais (sem horários)
-    colunas_padrao = [
-        "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
-        "Funcionário", "Fase", "Tipo",
-        "Período"
-    ]
-    for col in colunas_padrao:
+    """
+    Salva preservando TODAS as colunas existentes na planilha.
+    1) Lê o cabeçalho atual;
+    2) Garante oficiais + fiado;
+    3) Reordena por cabeçalho atual (para não ‘sumir’ colunas);
+    4) Preenche vazios onde necessário.
+    """
+    aba = conectar_sheets().worksheet(ABA_DADOS)
+    headers_existentes = ler_cabecalho(aba)
+
+    # Se a planilha estiver vazia (sem cabeçalho), cria um com oficiais + fiado
+    if not headers_existentes:
+        headers_existentes = [*COLS_OFICIAIS, *COLS_FIADO]
+
+    # Garante todas as colunas do cabeçalho + oficiais + fiado
+    colunas_alvo = list(dict.fromkeys([*headers_existentes, *COLS_OFICIAIS, *COLS_FIADO]))
+    for col in colunas_alvo:
         if col not in df_final.columns:
             df_final[col] = ""
-    df_final = df_final[colunas_padrao]
 
-    aba = conectar_sheets().worksheet(ABA_DADOS)
+    # Reordena pelas colunas alvo (preserva as extras que já existiam)
+    df_final = df_final[colunas_alvo]
+
+    # Escreve
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
 
@@ -142,6 +165,12 @@ if st.button("🧹 Limpar formulário"):
     st.rerun()
 
 # === SALVAMENTO ===
+def _preencher_fiado_vazio(linha: dict):
+    """Garante chaves de fiado vazias para não quebrar a estrutura."""
+    for c in COLS_FIADO:
+        linha.setdefault(c, "")
+    return linha
+
 def salvar_combo(combo, valores_customizados):
     df, _ = carregar_base()
     servicos = combo.split("+")
@@ -159,9 +188,9 @@ def salvar_combo(combo, valores_customizados):
             "Funcionário": funcionario,
             "Fase": fase,
             "Tipo": tipo,
-            "Período": periodo_opcao,  # grava o período
+            "Período": periodo_opcao,
         }
-        novas_linhas.append(linha)
+        novas_linhas.append(_preencher_fiado_vazio(linha))
     df_final = pd.concat([df, pd.DataFrame(novas_linhas)], ignore_index=True)
     salvar_base(df_final)
 
@@ -177,8 +206,9 @@ def salvar_simples(servico, valor):
         "Funcionário": funcionario,
         "Fase": fase,
         "Tipo": tipo,
-        "Período": periodo_opcao,  # grava o período
+        "Período": periodo_opcao,
     }
+    nova_linha = _preencher_fiado_vazio(nova_linha)
     df_final = pd.concat([df, pd.DataFrame([nova_linha])], ignore_index=True)
     salvar_base(df_final)
 
