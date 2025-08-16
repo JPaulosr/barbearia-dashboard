@@ -1,9 +1,13 @@
-# 15_Editar_Periodo.py — Edição em lote do "Período" por data e clientes
-# - Filtra por DIA (date_input)
-# - Seleciona múltiplos clientes daquele dia (multiselect + "Selecionar todos")
-# - Aplica o "Período" (Manhã/Tarde/Noite/Outro) em lote
-# - Atualiza SOMENTE as linhas afetadas na planilha (batch), sem sobrescrever o resto
-# - Mostra prévia antes de aplicar
+# 15_Editar_Periodo.py — Edição em LOTE do "Período" por DIA com checklist
+# - Filtra por DIA
+# - Exibe TODOS os clientes daquele dia com:
+#     • checkbox (Selecionar)
+#     • Período atual (ou "—" se vazio)
+#     • Quantas linhas (para saber se o cliente tem mais de um registro no dia)
+#     • Status (Sem período / Definido / Misto)
+# - Ferramentas: Buscar por nome, Selecionar todos, Só sem período, Inverter, Limpar
+# - Aplica o Período somente aos clientes selecionados (todas as linhas do cliente no dia)
+# - Atualiza por batch no Google Sheets (rápido e seguro)
 # --------------------------------------------------------------
 
 import streamlit as st
@@ -14,48 +18,41 @@ from google.oauth2.service_account import Credentials
 from datetime import date
 
 st.set_page_config(page_title="Editar Período (Lote)", page_icon="🕒", layout="wide")
-st.title("🕒 Editar Período por Data (Lote)")
+st.title("🕒 Editar Período por Data — Seleção por Cliente")
 
 # =========================
-# CONFIG
+# CONFIG — ajuste se necessário
 # =========================
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"  # sua planilha principal
-# Nomes possíveis da aba base (ajusta aqui se precisar)
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"  # sua planilha
 BASE_ALVOS = [
     "Base de Dados", "base de dados", "BASE DE DADOS",
-    "Base de Dados Masculino", "Base de Dados - Masculino"
+    "Base de Dados Masculino", "Base de Dados - Masculino",
+    "Base de Dados Feminino", "Base de Dados - Feminino"
 ]
-# Nome exato da coluna de período (ajuste se sua planilha usar outro título)
-PERIODO_COL = "Período"   # ou "Periodo" se não tiver acento
-# Nome exato da coluna de data e cliente (ajuste se estiver diferente)
 DATA_COL = "Data"
 CLIENTE_COL = "Cliente"
+PERIODO_COL = "Período"  # troque para "Periodo" se na planilha não houver acento
 
 # =========================
 # CONEXÃO GOOGLE SHEETS
 # =========================
 @st.cache_resource
 def conectar_sheets():
-    # aceita tanto "gcp_service_account" quanto "GCP_SERVICE_ACCOUNT"
     info = st.secrets.get("gcp_service_account") or st.secrets.get("GCP_SERVICE_ACCOUNT")
     if not info:
-        st.error("❌ Secrets ausentes. Adicione 'gcp_service_account' nas Secrets do Streamlit.")
+        st.error("❌ Secrets ausentes. Adicione 'gcp_service_account' nos Secrets do Streamlit.")
         st.stop()
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
-    gc = gspread.authorize(creds)
-    return gc
+    return gspread.authorize(creds)
 
 def abrir_aba_base(gc):
     sh = gc.open_by_key(SHEET_ID)
-    # tenta encontrar a aba de base por nomes candidatos
     for nome in BASE_ALVOS:
         try:
-            ws = sh.worksheet(nome)
-            return ws
+            return sh.worksheet(nome)
         except Exception:
-            continue
-    # se não achou, lista abas disponíveis para debug
+            pass
     nomes = [w.title for w in sh.worksheets()]
     st.error(f"❌ Aba da Base não encontrada. Ajuste BASE_ALVOS. Abas disponíveis: {nomes}")
     st.stop()
@@ -64,81 +61,136 @@ def abrir_aba_base(gc):
 def carregar_base():
     gc = conectar_sheets()
     ws = abrir_aba_base(gc)
-    df = get_as_dataframe(ws, evaluate_formulas=True, dtype=str)  # lê como string (mais seguro para normalizar)
-    # Remove colunas totalmente vazias e linhas em branco
+    df = get_as_dataframe(ws, evaluate_formulas=True, dtype=str)
     df = df.dropna(how="all").reset_index(drop=True)
     df = df.loc[:, ~df.columns.isnull()]
-    # Normaliza nomes de colunas (trim)
     df.columns = [str(c).strip() for c in df.columns]
-    # Garante colunas necessárias
+
     faltando = [c for c in [DATA_COL, CLIENTE_COL] if c not in df.columns]
     if faltando:
         st.error(f"❌ Colunas ausentes na base: {faltando}. Ajuste DATA_COL/CLIENTE_COL.")
         st.stop()
-    # Cria coluna de Período se não existir
+
     if PERIODO_COL not in df.columns:
         df[PERIODO_COL] = ""
-    # Converte Data
+
+    # Parser de data robusto
     def to_date(x):
         if pd.isna(x) or str(x).strip() == "":
             return pd.NaT
-        # tenta vários formatos comuns
         for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
             try:
                 return pd.to_datetime(x, format=fmt, dayfirst=True)
             except Exception:
                 pass
-        # fallback genérico
-        try:
-            return pd.to_datetime(x, dayfirst=True, errors="coerce")
-        except Exception:
-            return pd.NaT
+        return pd.to_datetime(x, dayfirst=True, errors="coerce")
 
     df["_DataDT"] = df[DATA_COL].apply(to_date)
-    # guarda índice da planilha (linha real) para atualizações (gspread é 1-based + cabeçalho na linha 1)
-    df["_row_number"] = df.index + 2  # +2: 1 p/ cabeçalho, 1 p/ 1ª linha de dados
+    df["_row_number"] = df.index + 2  # 1 cabeçalho + 1 offset de índice
     return df
 
-def get_ws_and_sheet():
+def get_ws():
     gc = conectar_sheets()
-    ws = abrir_aba_base(gc)
-    return ws, ws.spreadsheet
+    return abrir_aba_base(gc)
 
 # =========================
-# UI — FILTROS
+# UI — filtros
 # =========================
 df = carregar_base()
-
-col_a, col_b = st.columns([1, 2], vertical_alignment="center")
-
-with col_a:
-    dia = st.date_input("📅 Selecione o DIA", value=date.today(), format="DD/MM/YYYY")
-with col_b:
-    st.caption("Dica: primeiro escolha a data, depois selecione os clientes e o período para aplicar em lote.")
-
-# Filtra apenas o dia escolhido (compara por .date())
+dia = st.date_input("📅 Selecione o DIA", value=date.today(), format="DD/MM/YYYY")
 df_dia = df[df["_DataDT"].dt.date == pd.to_datetime(dia).date()].copy()
 
-st.subheader("Registros encontrados no dia selecionado")
 if df_dia.empty:
-    st.info("Nenhum registro nesse dia. Escolha outro dia.")
+    st.info("Nenhum registro para este dia.")
     st.stop()
 
-# Lista de clientes do dia
-clientes_dia = sorted([c for c in df_dia[CLIENTE_COL].dropna().astype(str).str.strip().unique() if c != ""])
+# =========================
+# Resumo por Cliente no dia
+# =========================
+# agregamos período por cliente para exibir status atual
+def resumo_cliente(grp: pd.DataFrame) -> pd.Series:
+    # valores distintos de período (limpos)
+    ps = grp[PERIODO_COL].fillna("").astype(str).str.strip()
+    distintos = sorted(set(ps))
+    # remove vazio apenas para testar "definido"
+    definidos = [p for p in distintos if p != ""]
+    if len(definidos) == 0:
+        status = "Sem período"
+        periodo_view = "—"
+    elif len(definidos) == 1 and (("" not in distintos) or (len(distintos) == 1)):
+        status = "Definido"
+        periodo_view = definidos[0]
+    else:
+        status = "Misto"
+        # mostra todos para transparência
+        periodo_view = ", ".join([p if p != "" else "—" for p in distintos])
+    return pd.Series({
+        "Linhas": len(grp),
+        "PeriodoAtual": periodo_view,
+        "Status": status
+    })
 
-# Caixa Selecionar Todos
-col1, col2 = st.columns([3, 1])
-with col1:
-    selecionados = st.multiselect("👥 Selecione clientes para aplicar o PERÍODO (múltiplos):",
-                                  options=clientes_dia,
-                                  default=[])
-with col2:
-    if st.button("Selecionar todos", use_container_width=True):
-        selecionados = clientes_dia
+sum_por_cliente = df_dia.groupby(CLIENTE_COL, dropna=True).apply(resumo_cliente).reset_index(names=[CLIENTE_COL])
+sum_por_cliente.insert(0, "Selecionar", False)  # checkbox padrão
+sum_por_cliente = sum_por_cliente.sort_values([ "Status", CLIENTE_COL ]).reset_index(drop=True)
 
-# Escolha do Período
-colp1, colp2 = st.columns([2, 2])
+# =========================
+# Ferramentas de seleção
+# =========================
+st.markdown("### ✅ Selecione os clientes que deseja atualizar")
+
+busca = st.text_input("🔎 Buscar cliente (contém):", value="", placeholder="digite parte do nome...")
+view = sum_por_cliente.copy()
+if busca.strip():
+    s = busca.strip().lower()
+    view = view[view[CLIENTE_COL].str.lower().str.contains(s)].reset_index(drop=True)
+
+col_bts = st.columns(4)
+with col_bts[0]:
+    if st.button("Selecionar TODOS", use_container_width=True):
+        view["Selecionar"] = True
+with col_bts[1]:
+    if st.button("Somente SEM PERÍODO", use_container_width=True):
+        view["Selecionar"] = view["Status"].eq("Sem período")
+with col_bts[2]:
+    if st.button("Inverter seleção (visíveis)", use_container_width=True):
+        view["Selecionar"] = ~view["Selecionar"]
+with col_bts[3]:
+    if st.button("Limpar seleção", use_container_width=True):
+        view["Selecionar"] = False
+
+# Editor com checkbox
+edit = st.data_editor(
+    view,
+    hide_index=True,
+    use_container_width=True,
+    column_config={
+        "Selecionar": st.column_config.CheckboxColumn(help="Marque para incluir na atualização em lote."),
+        "PeriodoAtual": st.column_config.TextColumn("Período atual"),
+        "Status": st.column_config.TextColumn(help="Sem período / Definido / Misto"),
+        "Linhas": st.column_config.NumberColumn(format="%d")
+    },
+    disabled=["PeriodoAtual", "Status", "Linhas", CLIENTE_COL],  # só edita o checkbox
+    num_rows="fixed",
+    key="editor_periodo_dia"
+)
+
+# Lista final de selecionados (apenas do que está visível e marcado)
+clientes_selecionados = edit.loc[edit["Selecionar"], CLIENTE_COL].tolist()
+
+# Mostra um preview das linhas que serão afetadas
+if clientes_selecionados:
+    st.markdown("#### 🔎 Prévia das linhas que serão atualizadas")
+    prev = df_dia[df_dia[CLIENTE_COL].isin(clientes_selecionados)][[DATA_COL, CLIENTE_COL, PERIODO_COL]]
+    st.dataframe(prev.sort_values([CLIENTE_COL, DATA_COL]), use_container_width=True, hide_index=True)
+else:
+    st.info("Selecione um ou mais clientes acima para ver a prévia.")
+
+# =========================
+# Escolha de Período e Aplicar
+# =========================
+st.markdown("### 🛠️ Aplicar Período (lote nos selecionados)")
+colp1, colp2 = st.columns([2, 3])
 with colp1:
     periodo_opcao = st.radio(
         "Período a aplicar",
@@ -146,106 +198,72 @@ with colp1:
         horizontal=True
     )
 with colp2:
-    periodo_outro = st.text_input("Se 'Outro', especifique:", value="", placeholder="ex.: Almoço, Pós-Serviço...")
-    periodo_final = periodo_outro.strip() if periodo_opcao == "Outro" else periodo_opcao
+    periodo_outro = st.text_input("Se 'Outro', especifique:", value="", placeholder="ex.: Almoço, Pós-Serviço…")
 
-# Prévia
-st.markdown("### 🔎 Pré-visualização da alteração")
-if len(selecionados) == 0:
-    st.warning("Selecione ao menos **1 cliente** para aplicar.")
-else:
-    prev = df_dia[df_dia[CLIENTE_COL].isin(selecionados)][[DATA_COL, CLIENTE_COL, PERIODO_COL]].copy()
-    prev["Novo Período"] = periodo_final
-    st.dataframe(prev, use_container_width=True, hide_index=True)
+periodo_final = periodo_outro.strip() if periodo_opcao == "Outro" else periodo_opcao
 
-# Botão de aplicar
-aplicar = st.button("✅ Aplicar PERÍODO aos clientes selecionados", type="primary")
-
-# =========================
-# APLICAÇÃO (UPDATE EM LOTE)
-# =========================
-def aplicar_periodo_em_lote(df_base, df_filtrado, clientes_sel, novo_periodo):
-    """
-    Marca o PERÍODO para todas as linhas do df_base cujo:
-      - Data == dia escolhido
-      - Cliente ∈ clientes_sel
-    Atualiza apenas as células da coluna PERÍODO via batch.
-    """
+def aplicar_periodo_em_lote(clientes_sel, novo_periodo):
     if not clientes_sel:
-        st.warning("Nenhum cliente selecionado.")
         return 0
+    ws = get_ws()
 
-    # Linhas que serão alteradas (globais no df_base)
-    alvo = df_filtrado[df_filtrado[CLIENTE_COL].isin(clientes_sel)]
-    if alvo.empty:
-        return 0
-
-    # Pega as linhas reais da planilha (números)
-    linhas_planilha = alvo["_row_number"].tolist()
-
-    # Conecta e monta batch de células na coluna PERÍODO
-    ws, _ = get_ws_and_sheet()
-
-    # Descobre o índice (número da coluna) do PERÍODO (1-based)
+    # pega índice da coluna PERÍODO (ou cria)
     header = ws.row_values(1)
     try:
         col_idx = header.index(PERIODO_COL) + 1
     except ValueError:
-        # se a coluna não existir no header (criada localmente), criamos no fim
         ws.update_cell(1, len(header) + 1, PERIODO_COL)
         col_idx = len(header) + 1
 
-    # Monta lista de atualizações como ranges de uma coluna
-    # Para perfomar melhor, agrupamos linhas em um único batch_update com várias ranges
+    # linhas alvo (todas as linhas dos clientes selecionados neste dia)
+    alvo = df_dia[df_dia[CLIENTE_COL].isin(clientes_sel)]
+    if alvo.empty:
+        return 0
+
     data = []
-    for r in linhas_planilha:
-        rng = gspread.utils.rowcol_to_a1(r, col_idx)
-        data.append({
-            "range": rng,
-            "values": [[novo_periodo]]
-        })
+    for r in alvo["_row_number"].tolist():
+        a1 = gspread.utils.rowcol_to_a1(r, col_idx)
+        data.append({"range": a1, "values": [[novo_periodo]]})
 
-    # Executa batch_update em pedaços (Google tem limites; aqui um chunk simples de 500)
+    # batch em chunks
     total = 0
-    chunk = 500
-    for i in range(0, len(data), chunk):
-        ws.batch_update(data[i:i+chunk], value_input_option="USER_ENTERED")
-        total += len(data[i:i+chunk])
-
+    for i in range(0, len(data), 500):
+        ws.batch_update(data[i:i+500], value_input_option="USER_ENTERED")
+        total += len(data[i:i+500])
     return total
 
-if aplicar:
-    if len(selecionados) == 0:
-        st.error("Selecione clientes antes de aplicar.")
-        st.stop()
-    if periodo_final == "":
-        st.error("Informe um valor para o Período.")
-        st.stop()
+col_apply1, col_apply2 = st.columns([1, 3])
+with col_apply1:
+    aplicar = st.button("✅ Aplicar aos selecionados", type="primary", use_container_width=True)
+with col_apply2:
+    st.caption("Atualiza todas as linhas dos clientes **marcados** neste dia.")
 
-    alteradas = aplicar_periodo_em_lote(df, df_dia, selecionados, periodo_final)
-    if alteradas > 0:
-        st.success(f"✅ {alteradas} linha(s) atualizada(s) com Período = **{periodo_final}**.")
-        st.cache_data.clear()  # limpa cache para recarregar
-        with st.expander("Ver registros atualizados (refrescar)"):
-            st.write("Clique no botão abaixo para recarregar a base e conferir.")
-            if st.button("🔄 Recarregar base"):
-                st.experimental_rerun()
+if aplicar:
+    if not clientes_selecionados:
+        st.error("Selecione ao menos 1 cliente.")
+    elif periodo_final.strip() == "":
+        st.error("Informe um valor para o Período.")
     else:
-        st.info("Nenhuma linha foi alterada (verifique clientes e data).")
+        qtd = aplicar_periodo_em_lote(clientes_selecionados, periodo_final.strip())
+        if qtd > 0:
+            st.success(f"✅ {qtd} célula(s) atualizada(s) com Período = **{periodo_final}**.")
+            st.cache_data.clear()
+            st.toast("Base recarregada. Atualize a página para ver as mudanças.", icon="✅")
+        else:
+            st.info("Nenhuma linha alterada (verifique seleção e dia).")
 
 # =========================
-# AÇÃO RÁPIDA (opcional): marcar TODOS do dia
+# Ação rápida (opcional): marcar TODOS os visíveis
 # =========================
 st.divider()
 st.subheader("⚡ Ação rápida (opcional)")
 colq1, colq2, colq3 = st.columns([2,2,2])
 with colq1:
-    periodo_rapido = st.selectbox("Marcar TODOS os clientes deste dia como:", 
-                                  ["", "Manhã", "Tarde", "Noite", "Integral", "Outro"])
+    periodo_rapido = st.selectbox("Marcar TODOS os **visíveis** como:", ["", "Manhã", "Tarde", "Noite", "Integral", "Outro"])
 with colq2:
     periodo_rapido_outro = st.text_input("Se 'Outro', especifique (ação rápida):", value="")
 with colq3:
-    if st.button("Aplicar para TODOS do dia", use_container_width=True):
+    if st.button("Aplicar (visíveis)", use_container_width=True):
         if periodo_rapido == "":
             st.error("Escolha um período para a ação rápida.")
         else:
@@ -253,10 +271,11 @@ with colq3:
             if valor == "":
                 st.error("Informe o texto do período (Outro).")
             else:
-                # usa os clientes do dia inteiro
-                alteradas = aplicar_periodo_em_lote(df, df_dia, clientes_dia, valor)
-                if alteradas > 0:
-                    st.success(f"✅ {alteradas} linha(s) do dia marcadas como **{valor}**.")
+                # aplica somente aos clientes atualmente visíveis na tabela (filtro de busca)
+                visiveis = edit[CLIENTE_COL].tolist()
+                qtd = aplicar_periodo_em_lote(visiveis, valor)
+                if qtd > 0:
+                    st.success(f"✅ {qtd} célula(s) atualizada(s) para **{valor}** (clientes visíveis).")
                     st.cache_data.clear()
                 else:
                     st.info("Nenhuma linha alterada.")
