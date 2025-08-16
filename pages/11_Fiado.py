@@ -1,22 +1,52 @@
 # -*- coding: utf-8 -*-
-# 12_Fiado.py — Fiado integrado à Base
+# 12_Fiado.py — Fiado integrado à Base + Notificações Telegram
 # - Combo por linhas com valores editáveis
 # - Registrar pagamento por cliente (seleciona 1+ IDs; "selecionar todos")
 # - Sugere última forma de pagamento do cliente (vinda da Base)
 # - Quitar por COMPETÊNCIA (atualiza as linhas; não cria novas)
-# - [NOVO] Lançar comissão em "Despesas" no mesmo fluxo de quitação
-# - [NOVO] Comissão usa a mesma data do fiado (se única); senão, cai na data do pagamento
+# - Lançar comissão em "Despesas" no mesmo fluxo de quitação
+# - Comissão usa a mesma data do fiado (se única); senão, cai na data do pagamento
 # - Exportação Excel (openpyxl) ou CSV (fallback)
 # - Sidebar expandida por padrão
+# - [NOVO] Notificações Telegram: novo fiado, pagamento e comissões
 
 import streamlit as st
 import pandas as pd
 import gspread
+import requests  # <— usado no fallback do Telegram
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import date, datetime
 from io import BytesIO
 import pytz
+
+# =========================
+# NOTIFICAÇÃO TELEGRAM
+# =========================
+# Tenta importar de utils_notificacao; se não houver, usa um fallback local.
+try:
+    from utils_notificacao import notificar  # type: ignore
+except Exception:
+    def notificar(mensagem: str) -> bool:
+        """Fallback simples para enviar mensagem ao Telegram usando [TELEGRAM] em secrets."""
+        tg = st.secrets.get("TELEGRAM", {})
+        token = tg.get("bot_token")
+        chat_id = tg.get("chat_id")
+        if not token or not chat_id:
+            # silencioso: não trava a página se faltar config
+            return False
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
+            "text": mensagem,
+            "parse_mode": "Markdown",  # permite *negrito* e `code`
+            "disable_web_page_preview": True,
+        }
+        try:
+            r = requests.post(url, json=payload, timeout=15)
+            return r.ok
+        except Exception:
+            return False
 
 st.set_page_config(page_title="Fiado | Salão JP", page_icon="💳", layout="wide",
                    initial_sidebar_state="expanded")
@@ -247,6 +277,23 @@ if acao == "➕ Lançar fiado":
             st.success(f"Fiado criado para **{cliente}** — ID: {idl}. Geradas {len(novas)} linhas na Base.")
             st.cache_data.clear()
 
+            # ---- NOTIFICAÇÃO: novo fiado
+            try:
+                total_fmt = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                servicos_txt = "+".join(servicos) if servicos else (combo_str or "-")
+                msg = (
+                    "🧾 *Novo fiado criado*\n"
+                    f"👤 Cliente: *{cliente}*\n"
+                    f"🧰 Serviços: {servicos_txt}\n"
+                    f"💵 Total: *{total_fmt}*\n"
+                    f"📅 Atendimento: {data_str}\n"
+                    f"⏳ Vencimento: {venc_str or '-'}\n"
+                    f"🆔 ID: `{idl}`"
+                )
+                notificar(msg)
+            except Exception:
+                pass
+
 # ---------- 2) Registrar pagamento (COMPETÊNCIA) ----------
 elif acao == "💰 Registrar pagamento":
     st.subheader("💰 Registrar pagamento — escolha o cliente e depois o(s) fiado(s) em aberto")
@@ -336,19 +383,18 @@ elif acao == "💰 Registrar pagamento":
         st.caption("Resumo por serviço selecionado:")
         st.dataframe(resumo_srv, use_container_width=True, hide_index=True)
 
-        # ===== [NOVO] BLOCO DE COMISSÃO =====
+        # ===== BLOCO DE COMISSÃO =====
         st.markdown("---")
         funcs = subset["Funcionário"].dropna().astype(str).unique().tolist()
         sugere_on = any(f.lower() == "vinicius" for f in funcs)  # ativa por padrão se houver Vinicius
         registrar_comissao = st.checkbox("Registrar comissão na aba Despesas agora", value=sugere_on)
 
-        # >>> NOVO: data de referência do fiado por funcionário (se única)
+        # data de referência do fiado por funcionário (se única)
         subset["__DataAtend"] = pd.to_datetime(subset["Data"], format=DATA_FMT, errors="coerce").dt.date
         ref_date_por_func = {}
         for f in funcs:
             datas_f = set(subset.loc[subset["Funcionário"] == f, "__DataAtend"].dropna().tolist())
             ref_date_por_func[f] = list(datas_f)[0] if len(datas_f) == 1 else None
-        # <<< NOVO
 
         if registrar_comissao:
             st.caption("Edite os valores sugeridos. A sugestão é 50% do subtotal por funcionário (apenas referência).")
@@ -359,11 +405,9 @@ elif acao == "💰 Registrar pagamento":
                 st.markdown(f"**Funcionário:** {f}")
                 c1, c2, c3, c4 = st.columns([1,1,1,2])
                 with c1:
-                    # >>> NOVO: usa data do fiado se única; senão, data do pagamento
                     ref_dt = ref_date_por_func.get(f)
                     data_base = ref_dt if ref_dt is not None else data_pag
                     data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_base, key=f"dt_{f}")
-                    # <<< NOVO
                 with c2:
                     forma_desp_f = st.selectbox(f"Forma de Pagamento ({f})",
                                                 options=["Dinheiro","Pix","Cartão","Transferência","Outro"],
@@ -433,6 +477,15 @@ elif acao == "💰 Registrar pagamento":
                     try:
                         inserir_despesas_lote(linhas)
                         st.success("Comissão lançada na aba **Despesas**.")
+                        # ---- NOTIFICAÇÃO: comissões
+                        try:
+                            linhas_txt = "\n".join(
+                                [f"- {l['Prestador']}: R$ {float(l['Valor']):.2f} em {l['Data']} ({l['Forma de Pagamento']})"
+                                 for l in linhas]
+                            )
+                            notificar("📣 *Comissões registradas em Despesas:*\n" + linhas_txt)
+                        except Exception:
+                            pass
                     except Exception as e:
                         st.warning(f"Pagamento quitado, mas houve problema ao lançar comissão em Despesas: {e}")
 
@@ -442,6 +495,23 @@ elif acao == "💰 Registrar pagamento":
                 f"Total: R$ {total_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             )
             st.cache_data.clear()
+
+            # ---- NOTIFICAÇÃO: pagamento registrado
+            try:
+                tot_fmt = f"R$ {total_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                ids_txt = ", ".join(id_selecionados)
+                msg = (
+                    "✅ *Fiado quitado (competência)*\n"
+                    f"👤 Cliente: *{cliente_sel}*\n"
+                    f"💳 Forma: *{forma_pag}*\n"
+                    f"💵 Total pago: *{tot_fmt}*\n"
+                    f"📅 Data pagto: {data_pag.strftime(DATA_FMT)}\n"
+                    f"🆔 IDs: `{ids_txt}`\n"
+                    f"📝 Obs: {obs or '-'}"
+                )
+                notificar(msg)
+            except Exception:
+                pass
 
 # ---------- 3) Em aberto & exportação ----------
 else:
