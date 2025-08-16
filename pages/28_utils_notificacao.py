@@ -38,6 +38,11 @@ SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 BASE_ABA = "Base de Dados"
 STATUS_ABA = "clientes_status"
 
+# === AUTO NOTIFY (padrões podem ser trocados no secrets) ===
+AUTO_CFG = st.secrets.get("AUTO_NOTIFY", {})
+AUTO_DEFAULT = bool(AUTO_CFG.get("enabled", True))
+DAILY_ONCE = bool(AUTO_CFG.get("daily_once", True))
+
 # === LOGO PADRÃO ===
 LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752708088/Imagem_do_WhatsApp_de_2025-07-16_%C3%A0_s_11.20.50_cbeb2873_nlhddx.jpg"
 
@@ -135,7 +140,7 @@ for cliente, grupo in atendimentos.groupby("Cliente"):
     })
 
 freq_df = pd.DataFrame(frequencia_clientes)
-freq_df = freq_df.merge(df_status[["Cliente", "Imagem"]], on="Cliente", how="left")  # (corrigido: sem duplicar)
+freq_df = freq_df.merge(df_status[["Cliente", "Imagem"]], on="Cliente", how="left")
 
 # === INDICADORES ===
 st.markdown("### 📊 Indicadores")
@@ -145,9 +150,22 @@ col2.metric("🟢 Em dia", freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente
 col3.metric("🟠 Pouco atrasado", freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique())
 col4.metric("🔴 Muito atrasado", freq_df[freq_df["Status_Label"] == "Muito atrasado"]["Cliente"].nunique())
 
-# ======= SIDEBAR: Ações de Notificação =======
+# ======= SIDEBAR: Auto Notificações =======
 st.sidebar.header("🔔 Notificações")
-if st.sidebar.button("Enviar resumo geral"):
+auto_on = st.sidebar.toggle("⚡ Enviar automaticamente", value=AUTO_DEFAULT,
+                            help="Envia resumo e listas automaticamente ao abrir a página.")
+st.sidebar.caption("Cada tipo de mensagem é enviado no máximo 1x por dia.")
+
+def already_sent(kind: str) -> bool:
+    """Controle simples para não enviar mais de 1x por dia por tipo."""
+    key = f"sent_{kind}_{pd.Timestamp.today().date().isoformat()}"
+    return st.session_state.get(key, False)
+
+def mark_sent(kind: str):
+    key = f"sent_{kind}_{pd.Timestamp.today().date().isoformat()}"
+    st.session_state[key] = True
+
+def enviar_resumo():
     tot = freq_df["Cliente"].nunique()
     n_ok = freq_df[freq_df["Status_Label"] == "Em dia"]["Cliente"].nunique()
     n_pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"]["Cliente"].nunique()
@@ -159,8 +177,7 @@ if st.sidebar.button("Enviar resumo geral"):
         f"🟠 Pouco atrasado: *{n_pouco}*\n"
         f"🔴 Muito atrasado: *{n_muito}*"
     )
-    ok = notificar(msg)
-    st.sidebar.success("Resumo enviado!") if ok else st.sidebar.error("Falha ao enviar.")
+    return notificar(msg)
 
 def enviar_lista(df_list, titulo_emoji):
     if df_list.empty:
@@ -169,21 +186,48 @@ def enviar_lista(df_list, titulo_emoji):
     msg = f"*{titulo_emoji}*\n{nomes}"
     return notificar(msg)
 
+# Botões manuais (mantidos como fallback)
+if st.sidebar.button("Enviar resumo agora"):
+    ok = enviar_resumo()
+    st.sidebar.success("Resumo enviado!") if ok else st.sidebar.error("Falha.")
+
 colA, colB = st.sidebar.columns(2)
 with colA:
-    if st.button("Enviar *Pouco atrasados*"):
+    if st.button("Pouco atrasados"):
         ok = enviar_lista(freq_df[freq_df["Status_Label"] == "Pouco atrasado"][["Cliente"]], "🟠 Pouco atrasados")
         st.success("Enviado!") if ok else st.error("Falha.")
 with colB:
-    if st.button("Enviar *Muito atrasados*"):
-        ok = enviar_lista(freq_df[freq_df["Status_Label"] == "Muito atrasado"][["Cliente"]], "🔴 Muito atrasados")
+    if st.button("Muito atrasados"):
+        ok = enviar_lista(freq_df[freq_df["Status_Label"] == "Muito atrasados"][["Cliente"]], "🔴 Muito atrasados")
         st.success("Enviado!") if ok else st.error("Falha.")
 
-# === NOVO LAYOUT — CARTÕES EM GRADE ===
+# ======= Envio AUTOMÁTICO no carregamento =======
+if auto_on:
+    # Resumo geral
+    if not (DAILY_ONCE and already_sent("resumo")):
+        if enviar_resumo():
+            mark_sent("resumo")
+    # Pouco atrasados
+    df_pouco = freq_df[freq_df["Status_Label"] == "Pouco atrasado"][["Cliente"]]
+    if not (DAILY_ONCE and already_sent("pouco")) and not df_pouco.empty:
+        if enviar_lista(df_pouco, "🟠 Pouco atrasados"):
+            mark_sent("pouco")
+    # Muito atrasados
+    df_muito = freq_df[freq_df["Status_Label"] == "Muito atrasado"][["Cliente"]]
+    if not (DAILY_ONCE and already_sent("muito")) and not df_muito.empty:
+        if enviar_lista(df_muito, "🔴 Muito atrasados"):
+            mark_sent("muito")
+
+# === GALERIA (mantida, sem botões por cliente para evitar duplicidade) ===
 def exibir_clientes_em_galeria(df_input, titulo):
+    import re
     st.markdown(titulo)
 
-    nome_filtrado = st.text_input(f"🔍 Filtrar {titulo.replace('#', '').strip()} por nome", key=titulo).strip().lower()
+    nome_filtrado = st.text_input(
+        f"🔍 Filtrar {titulo.replace('#', '').strip()} por nome",
+        key=f"filtro-{titulo}"
+    ).strip().lower()
+
     if nome_filtrado:
         df_input = df_input[df_input["Cliente"].str.lower().str.contains(nome_filtrado)]
 
@@ -197,12 +241,11 @@ def exibir_clientes_em_galeria(df_input, titulo):
         col = colunas[idx % 3]
         with col:
             st.markdown("----")
-            imagem = carregar_imagem(row["Imagem"])
+            imagem = carregar_imagem(row.get("Imagem", ""))
             if imagem:
                 st.image(imagem, width=80)
             st.markdown(f"**{row['Cliente']}**")
 
-            # ✅ Formatar data para dd/mm/aaaa
             try:
                 data_formatada = pd.to_datetime(row["Último Atendimento"]).strftime("%d/%m/%Y")
             except Exception:
@@ -213,19 +256,6 @@ def exibir_clientes_em_galeria(df_input, titulo):
                 f"🔁 Freq: {row['Frequência Média (dias)']}d  \n"
                 f"⏳ {row['Dias Desde Último']} dias sem vir"
             )
-
-            # Botão para notificar este cliente (mensagem administrativa para você)
-            if st.button(f"🔔 Notificar sobre {row['Cliente']}", key=f"btn_{idx}"):
-                msg = (
-                    "⏰ *Alerta de Frequência*\n"
-                    f"👤 Cliente: *{row['Cliente']}*\n"
-                    f"🟢 Status: {row['Status']}\n"
-                    f"🗓️ Último: {data_formatada}\n"
-                    f"🔁 Média: {row['Frequência Média (dias)']} dias\n"
-                    f"⏳ Sem vir há: {row['Dias Desde Último']} dias"
-                )
-                ok = notificar(msg)
-                st.success("Notificado!") if ok else st.error("Falha ao enviar.")
 
 # === EXIBIÇÃO FINAL COM NOVO LAYOUT ===
 st.divider()
