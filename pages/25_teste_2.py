@@ -1,64 +1,33 @@
+# 25_Teste_Telegram.py
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe
 import requests
 
 st.set_page_config(page_title="🔔 Teste de Notificação Telegram", layout="wide")
 st.title("🔔 Teste de Notificação Telegram")
 
 # ======================
-# CONFIG PLANILHA
+# Lê TELEGRAM dos Secrets (aceita 2 formatos)
 # ======================
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_STATUS_ALVOS = [
-    "clientes_status", "Clientes_status", "clientes status",
-    "clientes_status_feminino", "status_feminino"
-]
-
-# ======================
-# TELEGRAM (lê dos secrets, com fallback na UI)
-# ======================
-TOKEN_DEFAULT = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_DEFAULT  = st.secrets.get("TELEGRAM_CHAT_ID", "")
+tg_block = st.secrets.get("TELEGRAM", {})
+TOKEN_DEFAULT = tg_block.get("bot_token") or st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_DEFAULT  = tg_block.get("chat_id")   or st.secrets.get("TELEGRAM_CHAT_ID", "")
 
 with st.sidebar:
     st.subheader("⚙️ Configuração do Telegram")
     TELEGRAM_BOT_TOKEN = st.text_input("BOT TOKEN", value=TOKEN_DEFAULT, type="password")
     TELEGRAM_CHAT_ID   = st.text_input("CHAT ID", value=str(CHAT_DEFAULT))
-    st.caption("Se preferir, salve em *Secrets* como TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID.")
-
-# ======================
-# Conexão com Google Sheets (com tratamento de ausência de secret)
-# ======================
-def conectar_sheets():
-    info = st.secrets.get("gcp_service_account")
-    if not info:
-        st.warning("⚠️ Secret `gcp_service_account` não encontrado. "
-                   "Sem ele não dá para ler a planilha. Configure nos Secrets.")
-        return None
-    creds = Credentials.from_service_account_info(
-        info,
-        scopes=["https://spreadsheets.google.com/feeds",
-                "https://www.googleapis.com/auth/drive"]
-    )
-    return gspread.authorize(creds)
-
-def abrir_primeira_aba_existente(sh, nomes):
-    existentes = {ws.title.strip().lower(): ws for ws in sh.worksheets()}
-    for nome in nomes:
-        key = nome.strip().lower()
-        if key in existentes:
-            return existentes[key]
-    return None
+    st.caption("Você pode salvar no Secrets como [TELEGRAM] bot_token/chat_id ou TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID.")
 
 def send_telegram(token: str, chat_id: str, text: str):
     if not token or not chat_id:
         return False, "Token/ChatID ausentes"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        r = requests.post(url, json={"chat_id": int(chat_id), "text": text}, timeout=15)
+        # aceita chat_id numérico ou string (grupo começa com -100...)
+        payload = {"chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
+                   "text": text}
+        r = requests.post(url, json=payload, timeout=15)
         if r.ok:
             return True, "ok"
         else:
@@ -67,51 +36,84 @@ def send_telegram(token: str, chat_id: str, text: str):
         return False, str(e)
 
 # ======================
-# UI / Execução
+# Teste rápido (SEM Sheets)
 # ======================
-gc = conectar_sheets()
-if gc:
-    sh = gc.open_by_key(SHEET_ID)
-    ws = abrir_primeira_aba_existente(sh, ABA_STATUS_ALVOS)
-    if not ws:
-        st.error(f"Não encontrei nenhuma aba entre: {ABA_STATUS_ALVOS}.")
-        st.stop()
+st.subheader("✅ Envio rápido (sem planilha)")
+col1, col2 = st.columns([3,1])
+with col1:
+    msg = st.text_input("Mensagem", "🚀 Teste do Dashboard JP!")
+with col2:
+    if st.button("Enviar agora"):
+        ok, resp = send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
+        st.success("Mensagem enviada!") if ok else st.error(f"Falhou: {resp}")
 
-    df_status = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
-    if df_status.empty:
-        st.info("Aba de status vazia.")
-    else:
-        # Normaliza
-        df_status.columns = [str(c).strip() for c in df_status.columns]
-        if not {"Cliente","Status"}.issubset(df_status.columns):
-            st.error("A aba precisa ter as colunas 'Cliente' e 'Status'.")
-            st.stop()
+st.divider()
 
-        df_status["Cliente"] = df_status["Cliente"].astype(str).str.strip()
-        df_status["Status"]  = df_status["Status"].astype(str).str.strip()
+# ======================
+# (Opcional) Ler planilha e enviar alertas
+# Só tenta se a credencial MAIÚSCULA existir
+# ======================
+if "GCP_SERVICE_ACCOUNT" in st.secrets:
+    import gspread
+    from gspread_dataframe import get_as_dataframe
+    from google.oauth2.service_account import Credentials
 
-        st.subheader("📋 Status atual (amostra)")
-        st.dataframe(df_status.head(50), use_container_width=True)
+    SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+    ABA_STATUS_ALVOS = [
+        "clientes_status", "Clientes_status", "clientes status",
+        "clientes_status_feminino", "status_feminino"
+    ]
 
-        df_alerta = df_status[df_status["Status"].isin(["Pouco atrasado", "Muito atrasado"])].copy()
-        st.write(f"Clientes em alerta: **{len(df_alerta)}**")
+    st.subheader("📒 Enviar alertas a partir da planilha (opcional)")
+    try:
+        creds = Credentials.from_service_account_info(
+            st.secrets["GCP_SERVICE_ACCOUNT"],
+            scopes=["https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive"]
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(SHEET_ID)
+        existentes = {ws.title.strip().lower(): ws for ws in sh.worksheets()}
+        ws = None
+        for nome in ABA_STATUS_ALVOS:
+            if nome.strip().lower() in existentes:
+                ws = existentes[nome.strip().lower()]
+                break
 
-        colA, colB = st.columns(2)
-        with colA:
-            if st.button("🚨 Enviar notificações agora"):
-                if df_alerta.empty:
-                    st.info("Nenhum cliente com atraso no momento.")
+        if ws is None:
+            st.info(f"Não encontrei nenhuma aba entre: {ABA_STATUS_ALVOS}.")
+        else:
+            df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
+            if df.empty:
+                st.info("Aba vazia.")
+            else:
+                df.columns = [str(c).strip() for c in df.columns]
+                if not {"Cliente", "Status"}.issubset(df.columns):
+                    st.error("A aba precisa ter as colunas 'Cliente' e 'Status'.")
                 else:
-                    resultados = []
-                    for _, row in df_alerta.iterrows():
-                        cliente = row["Cliente"]
-                        status  = row["Status"]
-                        msg = f"⏰ Alerta: {cliente} está {status}."
-                        ok, resp = send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
-                        resultados.append({"Cliente": cliente, "Status": status, "Resultado": "Enviado" if ok else f"Erro: {resp}"})
-                    st.success("Processo concluído.")
-                    st.dataframe(pd.DataFrame(resultados))
-        with colB:
-            st.info("Dica: depois de testar, gere um **novo token** no @BotFather (/token) por segurança.")
+                    df["Cliente"] = df["Cliente"].astype(str).str.strip()
+                    df["Status"]  = df["Status"].astype(str).str.strip()
+                    df_alerta = df[df["Status"].isin(["Pouco atrasado", "Muito atrasado"])].copy()
+
+                    st.write(f"Clientes em alerta: **{len(df_alerta)}**")
+                    st.dataframe(df_alerta.head(50), use_container_width=True)
+
+                    if st.button("🚨 Enviar notificações da planilha"):
+                        if df_alerta.empty:
+                            st.info("Nenhum cliente com atraso no momento.")
+                        else:
+                            resultados = []
+                            for _, row in df_alerta.iterrows():
+                                cliente = row["Cliente"]
+                                status = row["Status"]
+                                text = f"⏰ Alerta: {cliente} está {status}."
+                                ok, resp = send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, text)
+                                resultados.append({"Cliente": cliente, "Status": status,
+                                                   "Resultado": "Enviado" if ok else f"Erro: {resp}"})
+                            st.success("Concluído.")
+                            st.dataframe(pd.DataFrame(resultados), use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao acessar planilha: {e}")
 else:
-    st.stop()
+    st.info("Para usar a leitura da planilha, adicione [GCP_SERVICE_ACCOUNT] nos Secrets. "
+            "O teste rápido acima funciona mesmo sem isso. 😉")
