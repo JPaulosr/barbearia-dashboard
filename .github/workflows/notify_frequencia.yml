@@ -1,21 +1,9 @@
 name: notify_frequencia.yml
 
 on:
-  workflow_dispatch:
-    inputs:
-      test_chat_id:
-        description: "(opcional) CHAT_ID de TESTE do Telegram (vazio = usa o secret)"
-        required: false
-        default: ""
-      force_daily:
-        description: "Forçar envio das listas diárias (útil para teste agora)"
-        required: false
-        default: "false"
   schedule:
     # 08:00 BRT ≈ 11:00 UTC
     - cron: '0 11 * * *'
-    # A cada 10 min (transições + feedback)
-    - cron: '*/10 * * * *'
 
 jobs:
   run:
@@ -26,26 +14,23 @@ jobs:
       # --- SECRETS ---
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      # Se foi passado test_chat_id no dispatch, usa ele; senão, usa o secret
-      TELEGRAM_CHAT_ID: ${{ inputs.test_chat_id != '' && inputs.test_chat_id || secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # --- ABAS / FOTOS ---
-      STATUS_ABA: clientes_status
-      # FOTO_COL: link_foto
+      BASE_ABA: "Base de Dados"
+      ABA_STATUS_CACHE: "status_cache"
+      STATUS_ABA: "clientes_status"
+      # FOTO_COL: link_foto   # (opcional) se a coluna de foto tiver nome diferente
 
-      # --- FLAGS DE ENVIO ---
-      # Verdadeiro se for o agendado 11:00 UTC OU se o usuário marcou force_daily=true no dispatch
-      SEND_DAILY_HEADER: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
-      SEND_LIST_POUCO:  ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
-      SEND_LIST_MUITO:  ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
-
-      # Feedbacks (ficam ativos nos dois gatilhos; ajuste se quiser)
-      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"
+      # --- Flags fixas para execução diária às 08h ---
+      SEND_DAILY_HEADER: "true"
+      SEND_LIST_POUCO: "true"
+      SEND_LIST_MUITO: "true"
       SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"
-      SEND_TRANSITION_BACK_TO_EM_DIA: "false"
+      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"
+      SEND_TRANSITION_BACK_TO_EM_DIA: "true"
 
-      # Logs Python mais verbosos
       PYTHONUNBUFFERED: "1"
 
     steps:
@@ -89,32 +74,14 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Echo schedule flags (debug)
+      - name: Echo flags (debug)
         run: |
-          echo "event_name=${{ github.event_name }}"
-          echo "event_schedule=${{ github.event.schedule }}"
           echo "SEND_DAILY_HEADER=$SEND_DAILY_HEADER"
           echo "SEND_LIST_POUCO=$SEND_LIST_POUCO"
           echo "SEND_LIST_MUITO=$SEND_LIST_MUITO"
+          echo "SEND_TRANSITION_BACK_TO_EM_DIA=$SEND_TRANSITION_BACK_TO_EM_DIA"
           echo "STATUS_ABA=$STATUS_ABA"
-          echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
           python -V
-
-      # ===== DEBUG: PING TELEGRAM (para validar CHAT_ID/TOKEN) =====
-      - name: Telegram ping (debug)
-        run: |
-          python - <<'PY'
-          import os, requests, sys
-          token = os.environ.get('TELEGRAM_TOKEN')
-          chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-          if not token or not chat_id:
-              print("Token/ChatID ausentes", file=sys.stderr); sys.exit(1)
-          r = requests.get(f"https://api.telegram.org/bot{token}/sendMessage",
-                           params={"chat_id": chat_id, "text": "🔧 Ping do notifier (teste de conexão)."})
-          print("Ping status:", r.status_code, r.text)
-          if r.status_code != 200:
-              sys.exit(2)
-          PY
 
       - name: Run notifier
         run: |
