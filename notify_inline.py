@@ -1,4 +1,4 @@
-# notify_inline.py — Frequência por MÉDIA + cache + FOTO (cards às 08:00)
+# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (resumo/entradas/retorno)
 import os
 import sys
 import json
@@ -19,9 +19,8 @@ TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
 REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
-STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # Cliente + link da foto
-FOTO_COL_ENV = (os.getenv("FOTO_COL", "") or "").strip()
-ABA_TRANSICOES = os.getenv("ABA_TRANSICOES", "freq_transicoes")
+STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está Cliente + link da foto
+FOTO_COL_ENV = os.getenv("FOTO_COL", "").strip()
 
 def _bool_env(name, default=False):
     val = os.getenv(name)
@@ -29,10 +28,18 @@ def _bool_env(name, default=False):
         return default
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
-# ======== CONTROLES ========
-SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # cards às 08:00
-ALLOW_WRITE = _bool_env("ALLOW_WRITE", True)           # gate de escrita (teste = False)
-SAFE_TELEGRAM = _bool_env("SAFE_TELEGRAM", False)      # não falha se Telegram 400/429
+# ======== CONTROLES DE ENVIO ========
+# (para 08:00 enviar listas; no watch frequente, não)
+SEND_DAILY_HEADER = _bool_env("SEND_DAILY_HEADER", False)
+SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)
+SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
+
+# Feedback ao registrar nova visita (aumentou nº de dias distintos):
+SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", False)  # todos
+SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # ou só se estava atrasado
+
+# Transições:
+SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)  # “voltou pra Em dia”
 
 # =========================
 # ENVS obrigatórios
@@ -42,9 +49,7 @@ TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
 TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
 
 def fail(msg):
-    import traceback
-    print("💥 ERRO:", msg, file=sys.stderr)
-    traceback.print_exc()
+    print(f"💥 {msg}", file=sys.stderr)
     sys.exit(1)
 
 need = ["SHEET_ID", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"]
@@ -79,13 +84,7 @@ else:
         fail(f"GCP service account JSON inválido: {e}")
 
 gc = gspread.authorize(creds)
-
-# 🔁 key → url fallback
-try:
-    sh = gc.open_by_key(SHEET_ID)
-except Exception:
-    sh = gc.open_by_url(SHEET_ID)
-
+sh = gc.open_by_key(SHEET_ID)
 print(f"✅ Conectado no Sheets: {sh.title}")
 
 # =========================
@@ -93,9 +92,6 @@ print(f"✅ Conectado no Sheets: {sh.title}")
 # =========================
 def now_br():
     return datetime.now(pytz.timezone(TZ)).strftime("%d/%m/%Y %H:%M:%S")
-
-def today_local_date():
-    return datetime.now(pytz.timezone(TZ)).date()
 
 def parse_dt_cell(x):
     s = (str(x or "")).strip()
@@ -119,33 +115,14 @@ def _norm(s: str) -> str:
     s = unicodedata.normalize("NFD", s)
     return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
 
-def _normalize_header(s):
-    s = (s or "").strip().lower()
-    s = unicodedata.normalize("NFD", s)
-    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-
-def _pick_col(cols, candidates):
-    norm_map = {_normalize_header(c): c for c in cols if isinstance(c, str)}
-    for cand in candidates:
-        c = norm_map.get(_normalize_header(cand))
-        if c:
-            return c
-    return None
-
 def tg_send(text):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
-                   "parse_mode": "HTML", "disable_web_page_preview": True}
-        r = requests.post(url, json=payload, timeout=30)
-        print("↪ Telegram:", r.status_code, r.text[:160])
-        if not r.ok and not SAFE_TELEGRAM:
-            raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
-    except Exception as e:
-        if SAFE_TELEGRAM:
-            print("⚠️ Telegram sendMessage falhou, mas ignorado (SAFE_TELEGRAM):", e)
-        else:
-            raise
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
+               "parse_mode": "HTML", "disable_web_page_preview": True}
+    r = requests.post(url, json=payload, timeout=30)
+    print("↪ Telegram:", r.status_code, r.text[:160])
+    if not r.ok:
+        raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
 
 def tg_send_photo(photo_url, caption):
     try:
@@ -157,47 +134,22 @@ def tg_send_photo(photo_url, caption):
         if not r.ok:
             raise RuntimeError(f"sendPhoto {r.status_code}: {r.text}")
     except Exception as e:
-        print("⚠️ Falha sendPhoto:", e)
-        tg_send(caption)  # respeita SAFE_TELEGRAM
+        print("⚠️ Falha sendPhoto, enviando texto. Motivo:", e)
+        tg_send(caption)
 
 # =========================
-# Ler aba base (com autodetecção de colunas)
+# Ler abas
 # =========================
 abas = {w.title: w for w in sh.worksheets()}
-ws_base = abas.get(ABA_BASE)
-df_base = None
+if ABA_BASE not in abas:
+    fail(f"Aba '{ABA_BASE}' não encontrada.")
+ws_base = abas[ABA_BASE]
 
-if not ws_base:
-    print(f"ℹ️ Aba '{ABA_BASE}' não encontrada. Tentando autodetectar…")
-    for w in sh.worksheets():
-        df_try = get_as_dataframe(w, evaluate_formulas=True, dtype=str).fillna("")
-        if df_try.empty or df_try.columns.size == 0:
-            continue
-        cols = list(df_try.columns)
-        col_cliente = _pick_col(cols, ["Cliente","cliente","nome","nome cliente","nome_cliente","cliente_nome"])
-        col_data    = _pick_col(cols, ["Data","data","dt","data visita","ultima visita","última visita","dia"])
-        if col_cliente and col_data:
-            ws_base = w
-            df_base = df_try.rename(columns={col_cliente: "Cliente", col_data: "Data"})
-            print(f"✅ Base autodetectada: {w.title} (cliente={col_cliente} | data={col_data})")
-            break
-    if not ws_base:
-        fail(f"Não encontrei uma aba com colunas equivalentes a 'Cliente' e 'Data'. Abas: {list(abas.keys())}")
-else:
-    df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
-    if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
-        cols = list(df_base.columns)
-        col_cliente = _pick_col(cols, ["Cliente","cliente","nome","nome cliente","nome_cliente","cliente_nome"])
-        col_data    = _pick_col(cols, ["Data","data","dt","data visita","ultima visita","última visita","dia"])
-        if not (col_cliente and col_data):
-            fail(f"Aba '{ws_base.title}' sem colunas equivalentes a 'Cliente' e 'Data'. Colunas: {cols}")
-        df_base = df_base.rename(columns={col_cliente: "Cliente", col_data: "Data"})
+df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
+if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
+    fail("Aba base precisa das colunas 'Cliente' e 'Data'.")
 
-print(f"🗂️ Usando aba base: {ws_base.title}")
-
-# =========================
 # Foto por cliente (opcional)
-# =========================
 foto_map = {}
 if STATUS_ABA in abas:
     try:
@@ -205,9 +157,9 @@ if STATUS_ABA in abas:
         df_status = get_as_dataframe(ws_status, evaluate_formulas=True, dtype=str).fillna("")
         cols_lower = {c.strip().lower(): c for c in df_status.columns if isinstance(c, str)}
         cand = FOTO_COL_ENV.lower() if FOTO_COL_ENV else ""
-        foto_candidates = [cand] if cand else ["foto","imagem","link_foto","url_foto","foto_link","link","image"]
+        foto_candidates = [cand] if cand else ["foto", "imagem", "link_foto", "url_foto", "foto_link", "link", "image"]
         foto_col = next((cols_lower[x] for x in foto_candidates if x in cols_lower), None)
-        cli_col  = next((cols_lower[x] for x in ["cliente","nome","nome_cliente"] if x in cols_lower), None)
+        cli_col  = next((cols_lower[x] for x in ["cliente", "nome", "nome_cliente"] if x in cols_lower), None)
         if foto_col and cli_col:
             tmp = df_status[[cli_col, foto_col]].copy()
             tmp.columns = ["Cliente", "Foto"]
@@ -233,7 +185,7 @@ if df.empty:
     sys.exit(0)
 
 rows = []
-today_ts = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
+today = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
 df["_date_only"] = pd.to_datetime(df["__dt"]).dt.date
 df["_cliente_norm"] = df["Cliente"].astype(str).str.strip()
 df = df[df["_cliente_norm"] != ""]
@@ -248,7 +200,7 @@ for cliente, g in df.groupby("_cliente_norm"):
     if not diffs_pos:
         continue
     media = sum(diffs_pos) / len(diffs_pos)
-    dias_desde_ultima = (today_ts - dias_ts[-1]).days
+    dias_desde_ultima = (today - dias_ts[-1]).days
     label_emoji, label = classificar_relative(dias_desde_ultima, media)
     rows.append({
         "Cliente": cliente,
@@ -265,20 +217,17 @@ print(f"📦 Clientes com histórico válido (≥2 dias distintos): {len(ultimo)
 if ultimo.empty:
     sys.exit(0)
 
-ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
-
 # =========================
-# Cache (estado anterior)
+# Cache
 # =========================
 def ensure_cache():
     try:
         return sh.worksheet(ABA_STATUS_CACHE)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=6) if ALLOW_WRITE else sh.worksheet(ABA_BASE)
-        if ALLOW_WRITE:
-            set_with_dataframe(ws, pd.DataFrame(columns=[
-                "Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"
-            ]))
+        ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=6)
+        set_with_dataframe(ws, pd.DataFrame(columns=[
+            "Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"
+        ]))
         return ws
 
 ws_cache = ensure_cache()
@@ -302,130 +251,124 @@ df_cache["ultima_visita_cache_parsed"] = df_cache["ultima_visita_cache"].apply(p
 cache_by_cli = {str(r["Cliente"]).strip().lower(): r for _, r in df_cache.iterrows()}
 
 # =========================
-# Fila de transições
+# Resumo + listas (para 08:00, conforme flags)
 # =========================
-def ensure_transicoes():
-    try:
-        return sh.worksheet(ABA_TRANSICOES)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(ABA_TRANSICOES, rows=2, cols=8) if ALLOW_WRITE else sh.worksheet(ABA_BASE)
-        if ALLOW_WRITE:
-            set_with_dataframe(ws, pd.DataFrame(columns=[
-                "cliente","cliente_norm","status_novo","dt_evento","ultima_visita_ref",
-                "anunciado","anunciado_em","observacao"
-            ]))
-        return ws
+def daily_summary_and_lists():
+    total = len(ultimo)
+    em_dia = (ultimo["status_atual"]=="Em dia").sum()
+    pouco  = (ultimo["status_atual"]=="Pouco atrasado").sum()
+    muito  = (ultimo["status_atual"]=="Muito atrasado").sum()
 
-ws_trans = ensure_transicoes()
-df_trans = get_as_dataframe(ws_trans, evaluate_formulas=True, dtype=str).fillna("")
-if df_trans.empty or "cliente_norm" not in df_trans.columns:
-    df_trans = pd.DataFrame(columns=[
-        "cliente","cliente_norm","status_novo","dt_evento","ultima_visita_ref",
-        "anunciado","anunciado_em","observacao"
-    ])
-for col in ["anunciado","anunciado_em","observacao","ultima_visita_ref","dt_evento"]:
-    if col not in df_trans.columns:
-        df_trans[col] = ""
+    if SEND_DAILY_HEADER:
+        header = (
+            "<b>📊 Relatório de Frequência — Salão JP</b>\n"
+            f"Data/hora: {html.escape(now_br())}\n\n"
+            f"👥 Ativos (c/ média): <b>{total}</b>\n"
+            f"🟢 Em dia: <b>{em_dia}</b>\n"
+            f"🟠 Pouco atrasado: <b>{pouco}</b>\n"
+            f"🔴 Muito atrasado: <b>{muito}</b>"
+        )
+        tg_send(header)
 
-df_trans["_cliente_norm"] = df_trans["cliente_norm"].astype(str)
-df_trans["_status_novo"]  = df_trans["status_novo"].astype(str)
-df_trans["_ultima_ref"]   = df_trans["ultima_visita_ref"].astype(str)
-
-def upsert_transicao(nome, status_novo, ultima_ref_date):
-    """Unicidade: (cliente_norm, status_novo, ultima_visita_ref) pendente."""
-    cliente_norm = _norm(nome)
-    chave_ref = (df_trans["_cliente_norm"] == cliente_norm) & \
-                (df_trans["_status_novo"]  == status_novo) & \
-                (df_trans["_ultima_ref"]   == (ultima_ref_date or ""))
-    existe_pendente = (df_trans[chave_ref & (df_trans["anunciado"].astype(str).str.strip() == "")].shape[0] > 0)
-    if existe_pendente:
-        return
-    novo = {
-        "cliente": nome,
-        "cliente_norm": cliente_norm,
-        "status_novo": status_novo,
-        "dt_evento": today_local_date().strftime("%Y-%m-%d"),
-        "ultima_visita_ref": (ultima_ref_date or ""),
-        "anunciado": "",
-        "anunciado_em": "",
-        "observacao": ""
-    }
-    global df_trans
-    df_trans = pd.concat([df_trans, pd.DataFrame([novo])], ignore_index=True)
-
-# Detectar mudanças (sem envio agora)
-for key, row in ultimo_by_cli.items():
-    nome = row.Cliente
-    status = row.status_atual
-    ultima = pd.to_datetime(row.ultima_visita).strftime("%Y-%m-%d")
-    cached = cache_by_cli.get(key)
-    cached_status = (cached["status_cache"] if cached is not None else "")
-    if cached is not None and status != cached_status:
-        if status in ("Pouco atrasado", "Muito atrasado"):
-            upsert_transicao(nome, status, ultima)
-
-# Persistir fila após possíveis inserts
-if not df_trans.empty and ALLOW_WRITE:
-    ws_trans.clear()
-    set_with_dataframe(ws_trans, df_trans)
-
-# =========================
-# Disparo às 08:00 — cards por cliente
-# =========================
-def send_cards_from_queue():
-    pend = df_trans[df_trans["anunciado"].astype(str).str.strip() == ""].copy()
-    if pend.empty:
-        print("ℹ️ Sem pendências para anunciar.")
-        return
-    severidade = {"Muito atrasado": 0, "Pouco atrasado": 1}
-    pend["sev"] = pend["status_novo"].map(severidade).fillna(2)
-    pend = pend.sort_values(["sev","cliente"], kind="stable")
-
-    for r in pend.itertuples(index=False):
-        nome = str(r.cliente).strip()
-        status = str(r.status_novo).strip()
-        ultima_ref = (str(r.ultima_visita_ref).strip() or "")
-
-        key = nome.strip().lower()
-        row_atual = ultimo_by_cli.get(key)
-        if not row_atual:
-            caption = (
-                "📣 <b>Atualização de Frequência</b>\n"
-                f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
-                f"📌 Status: <b>{html.escape(status)}</b>\n"
-                f"🗓️ Último: <b>{(ultima_ref or '-')}</b>"
-            )
+    def lista(bucket_name, emoji):
+        subset = ultimo.loc[ultimo["status_atual"]==bucket_name, ["Cliente","media_dias","dias_desde_ultima"]]
+        if subset.empty:
+            return
+        linhas = "\n".join(
+            f"- {html.escape(str(r.Cliente))} (média {r.media_dias}d, {int(r.dias_desde_ultima)}d sem vir)"
+            for r in subset.itertuples(index=False)
+        )
+        body = f"<b>{emoji} {bucket_name}</b>\n{linhas}"
+        if len(body) <= 3500:
+            tg_send(body)
         else:
-            ultima_str = pd.to_datetime(row_atual.ultima_visita).strftime("%d/%m/%Y")
-            media_str = f"{float(row_atual.media_dias):.1f}".replace(".", ",")
-            dias_int = int(row_atual.dias_desde_ultima)
-            emoji = "🟠" if status == "Pouco atrasado" else ("🔴" if status == "Muito atrasado" else "")
-            caption = (
-                f"{emoji} <b>Atualização de Frequência</b>\n"
-                f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
-                f"{emoji} Status: <b>{html.escape(status)}</b>\n"
-                f"🗓️ Último: <b>{ultima_str}</b>\n"
-                f"🔁 Média: <b>{media_str} dias</b>\n"
-                f"⏳ Sem vir há: <b>{dias_int} dias</b>"
-            )
+            nomes = linhas.split("\n")
+            for i in range(0, len(nomes), 60):
+                tg_send(f"<b>{emoji} {bucket_name}</b>\n" + "\n".join(nomes[i:i+60]))
 
-        foto = foto_map.get(_norm(nome))
-        if foto:
-            tg_send_photo(foto, caption)
-        else:
-            tg_send(caption)
-
-    if ALLOW_WRITE:
-        idx = pend.index
-        df_trans.loc[idx, "anunciado"] = "1"
-        df_trans.loc[idx, "anunciado_em"] = now_br()
-        ws_trans.clear()
-        set_with_dataframe(ws_trans, df_trans)
+    if SEND_LIST_POUCO:
+        lista("Pouco atrasado","🟠")
+    if SEND_LIST_MUITO:
+        lista("Muito atrasado","🔴")
 
 # =========================
-# Atualizar cache (estado atual)
+# Transições + Feedback (retorno com foto)
 # =========================
-def update_cache_state():
+def changes_and_feedback():
+    transicoes = []
+    ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
+
+    for key, row in ultimo_by_cli.items():
+        nome = row.Cliente
+        dias = int(row.dias_desde_ultima)
+        media = float(row.media_dias)
+        status = row.status_atual
+        ultima = row.ultima_visita
+        visitas_total = int(row.visitas_total)
+
+        cached = cache_by_cli.get(key)
+        cached_status = (cached["status_cache"] if cached is not None else "")
+        cached_dt = cached["ultima_visita_cache_parsed"] if cached is not None else None
+        cached_visitas = int(cached["visitas_total_cache"]) if (cached is not None and str(cached.get("visitas_total_cache","")).strip().isdigit()) else 0
+
+        # Nova visita = aumentou nº de dias distintos (captura retroativo também)
+        new_visit = visitas_total > cached_visitas
+
+        # FEEDBACK de atendimento (retorno)
+        estava_atrasado = cached_status in ("Pouco atrasado", "Muito atrasado")
+        enviar_feedback = False
+        if SEND_FEEDBACK_ON_NEW_VISIT_ALL:
+            enviar_feedback = True
+        elif SEND_FEEDBACK_ONLY_IF_WAS_LATE and estava_atrasado:
+            enviar_feedback = True
+
+        if new_visit and enviar_feedback:
+            ultima_str = pd.to_datetime(ultima).strftime("%d/%m/%Y")
+            media_str = f"{media:.1f}".replace(".", ",")
+            if estava_atrasado:
+                caption = (
+                    "✅ <b>Retorno registrado</b>\n"
+                    f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+                    f"⚠️ Estava: <b>{html.escape(cached_status)}</b>\n"
+                    f"🗓️ Atendimento registrado em: <b>{ultima_str}</b>\n"
+                    f"🔁 Média: <b>{media_str} dias</b>\n"
+                    f"⏳ Estava há: <b>{dias} dias</b>"
+                )
+            else:
+                caption = (
+                    "📌 <b>Atendimento registrado</b>\n"
+                    f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+                    f"{row.status_emoji or ''} Status: <b>{html.escape(status)}</b>\n"
+                    f"🗓️ Data: <b>{ultima_str}</b>\n"
+                    f"🔁 Média: <b>{media_str} dias</b>\n"
+                    f"⏳ Distância da última: <b>{dias} dias</b>"
+                )
+            foto = foto_map.get(_norm(nome))
+            if foto:
+                tg_send_photo(foto, caption)
+            else:
+                tg_send(caption)
+
+        # Transições de status:
+        if cached is not None and status != cached_status:
+            # Entrou em atraso (Em dia -> Pouco/Muito) → sempre avisar
+            if status in ("Pouco atrasado", "Muito atrasado"):
+                transicoes.append(
+                    "📣 Atualização de Frequência\n"
+                    f"<b>{html.escape(nome)}</b> entrou em <b>{html.escape(status)}</b>."
+                )
+            # Voltou para Em dia → só se flag ligada
+            elif SEND_TRANSITION_BACK_TO_EM_DIA and status == "Em dia":
+                transicoes.append(
+                    "✅ Atualização de Frequência\n"
+                    f"<b>{html.escape(nome)}</b> voltou para <b>Em dia</b>."
+                )
+
+    # Envia transições (anti-flood simples)
+    for txt in transicoes[:30]:
+        tg_send(txt)
+
+    # Atualiza cache
     out = ultimo[["Cliente","ultima_visita","status_atual","media_dias","visitas_total"]].copy()
     out["ultima_visita"] = pd.to_datetime(out["ultima_visita"]).dt.strftime("%Y-%m-%d")
     out.rename(columns={
@@ -435,12 +378,11 @@ def update_cache_state():
         "visitas_total":"visitas_total_cache"
     }, inplace=True)
     out["last_notified_at"] = now_br()
-    if ALLOW_WRITE:
-        ws_cache.clear()
-        set_with_dataframe(ws_cache, out)
+    ws_cache.clear()
+    set_with_dataframe(ws_cache, out)
 
 # =========================
-# MODO INDIVIDUAL (igual)
+# MODO INDIVIDUAL (opcional)
 # =========================
 CLIENTE = os.getenv("CLIENTE") or os.getenv("INPUT_CLIENTE")
 if CLIENTE:
@@ -480,18 +422,10 @@ if CLIENTE:
 if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
-        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES} | "
-              f"ALLOW_WRITE={ALLOW_WRITE} | SAFE_TELEGRAM={SAFE_TELEGRAM} | Worksheet={ws_base.title}")
-
-        if not df_trans.empty and ALLOW_WRITE:
-            ws_trans.clear()
-            set_with_dataframe(ws_trans, df_trans)
-
-        if SEND_AT_8_CARDS:
-            send_cards_from_queue()
-
-        update_cache_state()
-
-        print("✅ Execução concluída (cards às 08:00).")
+        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
+        if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
+            daily_summary_and_lists()   # para 08:00
+        changes_and_feedback()          # para transições + retorno
+        print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
