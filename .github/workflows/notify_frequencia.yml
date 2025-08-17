@@ -3,37 +3,40 @@ name: notify_frequencia.yml
 on:
   workflow_dispatch:
   schedule:
-    # ✅ 08:00 BRT (≈ 11:00 UTC): manda cabeçalho + listas de Pouco/Muito
+    # 08:00 BRT ≈ 11:00 UTC
     - cron: '0 11 * * *'
-    # 🔁 A cada 10 minutos: só transições (entrar em atraso) + feedback de retorno
+    # watcher a cada 10 minutos
     - cron: '*/10 * * * *'
 
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
-      # ===== Secrets obrigatórios =====
+      # ==== Secrets obrigatórios ====
       TZ: America/Sao_Paulo
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # ===== Fotos (opcional) =====
+      # ==== Fotos (opcional) ====
       STATUS_ABA: clientes_status
-      # FOTO_COL: link_foto  # descomente se sua coluna tiver nome específico
+      # FOTO_COL: link_foto   # descomente se o nome da coluna for outro
 
-      # ===== Flags para 08:00 vs watch (auto com base no schedule) =====
+      # ==== Flags 08:00 (listas) vs watcher (sem listas) ====
       SEND_DAILY_HEADER: ${{ github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
       SEND_LIST_POUCO:  ${{ github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
       SEND_LIST_MUITO:  ${{ github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
 
-      # Feedback de nova visita (retorno):
-      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"   # só se estava atrasado antes
-      SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"  # evitar spam de quem já estava Em dia
+      # Feedback no retorno (quando registra atendimento):
+      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"   # só se estava atrasado
+      SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"  # evita spam de quem estava em dia
 
-      # Transição “voltou para Em dia” desligada:
+      # Transição “voltou pra Em dia” (você não quer):
       SEND_TRANSITION_BACK_TO_EM_DIA: "false"
+
+      # Torna log do Python sem buffer
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout
@@ -44,15 +47,48 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Show env summary (masked)
+        run: |
+          echo "TZ=$TZ"
+          echo "SHEET_ID length: ${#SHEET_ID}"
+          echo "TELEGRAM_TOKEN length: ${#TELEGRAM_TOKEN}"
+          echo "TELEGRAM_CHAT_ID length: ${#TELEGRAM_CHAT_ID}"
+          echo "GCP_SERVICE_ACCOUNT length: ${#GCP_SERVICE_ACCOUNT}"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # Pacote correto é gspread-dataframe (com hífen), e no código import é gspread_dataframe
           pip install pandas gspread gspread-dataframe google-auth requests pytz
 
       - name: Write service account to file
         run: |
-          echo "$GCP_SERVICE_ACCOUNT" > sa.json
+          # Grava o JSON exatamente como veio do secret
+          printf '%s' "$GCP_SERVICE_ACCOUNT" > sa.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
+          python - << 'PY'
+          import json,sys
+          try:
+              j=json.load(open("sa.json"))
+              print("Cred OK: project_id=", j.get("project_id"))
+          except Exception as e:
+              print("Cred inválida:", e); sys.exit(1)
+          PY
+
+      - name: Show versions
+        run: |
+          python -V
+          python - << 'PY'
+          import pandas, gspread, gspread_dataframe, google, requests
+          import pkgutil
+          print("pandas:", pandas.__version__)
+          print("gspread:", gspread.__version__)
+          print("gspread_dataframe module OK:", bool(pkgutil.find_loader("gspread_dataframe")))
+          import google.oauth2.service_account as sa
+          print("google-auth OK")
+          PY
 
       - name: Run notifier
-        run: python notify_inline.py
+        run: |
+          ls -la
+          python notify_inline.py
