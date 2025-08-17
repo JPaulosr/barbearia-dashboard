@@ -1,9 +1,20 @@
 name: notify_frequencia.yml
 
 on:
+  # ⏰ roda todo dia às 08:00 BRT (11:00 UTC)
   schedule:
-    # 08:00 BRT ≈ 11:00 UTC
     - cron: '0 11 * * *'
+  # ▶️ habilita "Run workflow" manual com flags
+  workflow_dispatch:
+    inputs:
+      force_daily:
+        description: "Forçar envio das listas agora (cabeçalho + Pouco/Muito)"
+        required: false
+        default: "true"
+      test_chat_id:
+        description: "(opcional) CHAT_ID de teste; vazio = usa o secret"
+        required: false
+        default: ""
 
 jobs:
   run:
@@ -14,22 +25,27 @@ jobs:
       # --- SECRETS ---
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_CHAT_ID: ${{ inputs.test_chat_id != '' && inputs.test_chat_id || secrets.TELEGRAM_CHAT_ID }}
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # --- ABAS / FOTOS ---
       BASE_ABA: "Base de Dados"
       ABA_STATUS_CACHE: "status_cache"
       STATUS_ABA: "clientes_status"
-      # FOTO_COL: link_foto   # (opcional) se a coluna de foto tiver nome diferente
+      # FOTO_COL: link_foto
 
-      # --- Flags fixas para execução diária às 08h ---
-      SEND_DAILY_HEADER: "true"
-      SEND_LIST_POUCO: "true"
-      SEND_LIST_MUITO: "true"
+      # --- Flags p/ execução diária às 08h ---
+      SEND_DAILY_HEADER: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
+      SEND_LIST_POUCO:  ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
+      SEND_LIST_MUITO:  ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
+
+      # Feedbacks
       SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"
       SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"
       SEND_TRANSITION_BACK_TO_EM_DIA: "true"
+
+      # Força no script também (fallback)
+      FORCE_DAILY: ${{ github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true' }}
 
       PYTHONUNBUFFERED: "1"
 
@@ -76,11 +92,15 @@ jobs:
 
       - name: Echo flags (debug)
         run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "event_schedule=${{ github.event.schedule }}"
           echo "SEND_DAILY_HEADER=$SEND_DAILY_HEADER"
           echo "SEND_LIST_POUCO=$SEND_LIST_POUCO"
           echo "SEND_LIST_MUITO=$SEND_LIST_MUITO"
           echo "SEND_TRANSITION_BACK_TO_EM_DIA=$SEND_TRANSITION_BACK_TO_EM_DIA"
+          echo "FORCE_DAILY=$FORCE_DAILY"
           echo "STATUS_ABA=$STATUS_ABA"
+          echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
           python -V
 
       - name: Run notifier
