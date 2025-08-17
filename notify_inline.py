@@ -1,5 +1,4 @@
 # notify_inline.py — Frequência por MÉDIA (relative) + cache + alertas
-
 import os
 import sys
 import json
@@ -15,31 +14,76 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 # =========================
 # PARÂMETROS
 # =========================
-TZ = os.getenv("TIMEZONE", "America/Sao_Paulo")
-REL_MULT = 1.5                       # Pouco atrasado = dias <= média * REL_MULT; Muito = acima disso
+# Aceita TZ (do seu workflow) ou TIMEZONE (fallback)
+TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
+REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
-ABA_STATUS_CACHE = "status_cache"    # cache criado/atualizado por este script
+ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
 ENVIAR_ALERTA_QUANDO_VOLTAR_EM_DIA = True
 
 # =========================
-# ENVS / CREDS (GitHub Secrets)
+# ENVS (nomes iguais aos do seu workflow)
 # =========================
 SHEET_ID = (os.getenv("SHEET_ID") or "").strip()
-TELEGRAM_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
 TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
-GCP_SERVICE_ACCOUNT_JSON = (os.getenv("GCP_SERVICE_ACCOUNT_JSON") or "").strip()
 
 def fail(msg):
     print(f"💥 {msg}", file=sys.stderr)
     sys.exit(1)
 
-need = ["SHEET_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GCP_SERVICE_ACCOUNT_JSON"]
+need = ["SHEET_ID", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"]
 missing = [k for k in need if not os.getenv(k)]
 if missing:
     fail(f"Variáveis ausentes: {', '.join(missing)}")
 
 # =========================
-# HELPERS
+# Credenciais GCP
+# Suporta dois modos:
+#  a) GOOGLE_APPLICATION_CREDENTIALS apontando para um arquivo (sa.json)
+#  b) GCP_SERVICE_ACCOUNT / GCP_SERVICE_ACCOUNT_JSON com o JSON inline
+# =========================
+creds = None
+if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    # Credenciais por arquivo (seu workflow escreve sa.json e exporta esta env)
+    try:
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_file(
+            os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+            scopes=["https://spreadsheets.google.com/feeds",
+                    "https://www.googleapis.com/auth/drive"]
+        )
+    except Exception as e:
+        fail(f"Erro ao ler GOOGLE_APPLICATION_CREDENTIALS: {e}")
+else:
+    raw = os.getenv("GCP_SERVICE_ACCOUNT") or os.getenv("GCP_SERVICE_ACCOUNT_JSON") or ""
+    if not raw.strip():
+        fail("Faltam credenciais GCP: defina GOOGLE_APPLICATION_CREDENTIALS ou GCP_SERVICE_ACCOUNT(_JSON).")
+    try:
+        sa_info = json.loads(raw)
+        creds = Credentials.from_service_account_info(
+            sa_info,
+            scopes=["https://spreadsheets.google.com/feeds",
+                    "https://www.googleapis.com/auth/drive"]
+        )
+    except Exception as e:
+        fail(f"GCP service account JSON inválido: {e}")
+
+gc = gspread.authorize(creds)
+sh = gc.open_by_key(SHEET_ID)
+print(f"✅ Conectado no Sheets: {sh.title}")
+
+abas = {w.title: w for w in sh.worksheets()}
+if ABA_BASE not in abas:
+    fail(f"Aba '{ABA_BASE}' não encontrada.")
+
+ws_base = abas[ABA_BASE]
+df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
+if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
+    fail("Aba base precisa das colunas 'Cliente' e 'Data'.")
+
+# =========================
+# Helpers
 # =========================
 def now_br():
     return datetime.now(pytz.timezone(TZ)).strftime("%d/%m/%Y %H:%M:%S")
@@ -63,46 +107,15 @@ def classificar_relative(dias, media):
 
 def tg_send(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
+               "parse_mode": "HTML", "disable_web_page_preview": True}
     r = requests.post(url, json=payload, timeout=30)
     print("↪ Telegram:", r.status_code, r.text[:200])
     if not r.ok:
         raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
 
 # =========================
-# CONECTAR SHEETS
-# =========================
-try:
-    sa_info = json.loads(GCP_SERVICE_ACCOUNT_JSON)
-except Exception as e:
-    fail(f"GCP_SERVICE_ACCOUNT_JSON inválido: {e}")
-
-scopes = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
-creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
-gc = gspread.authorize(creds)
-sh = gc.open_by_key(SHEET_ID)
-print(f"✅ Conectado no Sheets: {sh.title}")
-
-abas = {w.title: w for w in sh.worksheets()}
-if ABA_BASE not in abas:
-    fail(f"Aba '{ABA_BASE}' não encontrada.")
-
-ws_base = abas[ABA_BASE]
-df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
-
-if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
-    fail("Aba 'Base de Dados' precisa das colunas 'Cliente' e 'Data'.")
-
-# =========================
-# ÚLTIMA VISITA, MÉDIA e STATUS
+# Preparar base
 # =========================
 df = df_base.copy()
 df["__dt"] = df["Data"].apply(parse_dt_cell)
@@ -138,7 +151,7 @@ if ultimo.empty:
     sys.exit(0)
 
 # =========================
-# CACHE (status_cache)
+# Aba de cache (status_cache)
 # =========================
 def ensure_cache():
     try:
@@ -164,7 +177,7 @@ df_cache["ultima_visita_cache_parsed"] = df_cache["ultima_visita_cache"].apply(p
 cache_by_cli = {str(r["Cliente"]).strip().lower(): r for _, r in df_cache.iterrows()}
 
 # =========================
-# MENSAGENS: resumo + listas
+# Envio — resumo/listas + transições/feedback
 # =========================
 def daily_summary_and_lists():
     total = len(ultimo)
@@ -201,9 +214,6 @@ def daily_summary_and_lists():
     lista("Pouco atrasado","🟠")
     lista("Muito atrasado","🔴")
 
-# =========================
-# MENSAGENS: transições + feedback de nova visita
-# =========================
 def changes_and_feedback():
     transicoes, feedbacks = [], []
     ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
@@ -218,10 +228,8 @@ def changes_and_feedback():
         cached_status = (cached["status_cache"] if cached is not None else "")
         cached_dt = cached["ultima_visita_cache_parsed"] if cached is not None else None
 
-        # Nova visita?
         new_visit = True if cached_dt is None else (pd.to_datetime(ultima) > cached_dt)
 
-        # Feedback no registro da nova visita
         if new_visit:
             if status == "Em dia":
                 feedbacks.append(
@@ -241,7 +249,6 @@ def changes_and_feedback():
                     f"➡️ Retomou hoje! Combine reforço e lembrete em ~{int(round(media))} dias."
                 )
 
-        # Mudança de status?
         if cached is not None and status != cached_status:
             if status in ("Pouco atrasado","Muito atrasado") or (ENVIAR_ALERTA_QUANDO_VOLTAR_EM_DIA and status=="Em dia"):
                 if status == "Pouco atrasado":
@@ -263,13 +270,11 @@ def changes_and_feedback():
                         f"Última visita: <b>{dias}</b> (média ~<b>{int(round(media))}</b>)."
                     )
 
-    # Enviar com limite (anti-flood)
     for txt in transicoes[:30]:
         tg_send(txt)
     for txt in feedbacks[:30]:
         tg_send(txt)
 
-    # Atualizar cache
     out = ultimo[["Cliente","ultima_visita","status_atual","media_dias"]].copy()
     out["ultima_visita"] = pd.to_datetime(out["ultima_visita"]).dt.strftime("%Y-%m-%d")
     out.rename(columns={
@@ -283,16 +288,12 @@ def changes_and_feedback():
     ws.clear()
     set_with_dataframe(ws, out)
 
-# =========================
-# ENTRYPOINT
-# =========================
 if __name__ == "__main__":
     try:
-        print("▶️ Iniciando execução…")
-        print(f"• Timezone: {TZ}")
-        print(f"• Aba base: {ABA_BASE} | Cache: {ABA_STATUS_CACHE}")
-        daily_summary_and_lists()     # 1) resumo + listas (agendado ~08:00 BRT)
-        changes_and_feedback()        # 2) transições + feedback por nova visita
+        print("▶️ Iniciando…")
+        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE}")
+        daily_summary_and_lists()
+        changes_and_feedback()
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
