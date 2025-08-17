@@ -1,4 +1,4 @@
-# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (BATCH diário 08:00)
+# notify_inline.py — Frequência por MÉDIA + cache + FOTO (cards às 08:00, sem listas)
 import os
 import sys
 import json
@@ -19,10 +19,10 @@ TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
 REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
-STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está Cliente + link da foto
+STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # Cliente + link da foto
 FOTO_COL_ENV = (os.getenv("FOTO_COL", "") or "").strip()
 
-# Planilha de fila das transições (nova)
+# Fila de transições
 ABA_TRANSICOES = os.getenv("ABA_TRANSICOES", "freq_transicoes")
 
 def _bool_env(name, default=False):
@@ -31,14 +31,11 @@ def _bool_env(name, default=False):
         return default
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
-# ======== CONTROLES (modo diário às 08:00) ========
-# Ative estes três na execução diária das 08:00
-SEND_DAILY_HEADER = _bool_env("SEND_DAILY_HEADER", False)   # envia cabeçalho-resumo
-SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)     # envia lista de quem entrou em "Pouco" (não anunciados)
-SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)     # idem "Muito"
+# ======== CONTROLES ========
+# Use somente no job das 08:00:
+SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # envia um CARD (foto+legenda) por cliente pendente
 
-# Importante: os “envios imediatos” foram desativados neste modo batch.
-# Flags antigas são ignoradas propositalmente (sem envio on-the-fly).
+# Envio imediato desativado (apenas batch às 08:00)
 SEND_FEEDBACK_ON_NEW_VISIT_ALL = False
 SEND_FEEDBACK_ONLY_IF_WAS_LATE = False
 SEND_TRANSITION_BACK_TO_EM_DIA = False
@@ -129,7 +126,6 @@ def tg_send(text):
     if not r.ok:
         raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
 
-# (Fotos desativadas no batch para evitar flood visual; mantenho função caso queira ligar depois)
 def tg_send_photo(photo_url, caption):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
@@ -223,6 +219,8 @@ print(f"📦 Clientes com histórico válido (≥2 dias distintos): {len(ultimo)
 if ultimo.empty:
     sys.exit(0)
 
+ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
+
 # =========================
 # Cache (estado anterior)
 # =========================
@@ -257,7 +255,7 @@ df_cache["ultima_visita_cache_parsed"] = df_cache["ultima_visita_cache"].apply(p
 cache_by_cli = {str(r["Cliente"]).strip().lower(): r for _, r in df_cache.iterrows()}
 
 # =========================
-# Fila de transições (NOVA)
+# Fila de transições
 # =========================
 def ensure_transicoes():
     try:
@@ -265,7 +263,6 @@ def ensure_transicoes():
     except gspread.exceptions.WorksheetNotFound:
         ws = sh.add_worksheet(ABA_TRANSICOES, rows=2, cols=8)
         set_with_dataframe(ws, pd.DataFrame(columns=[
-            # chave única lógica: cliente_norm + status_novo + base em ultima_visita_cache/atual
             "cliente","cliente_norm","status_novo","dt_evento","ultima_visita_ref",
             "anunciado","anunciado_em","observacao"
         ]))
@@ -278,34 +275,23 @@ if df_trans.empty or "cliente_norm" not in df_trans.columns:
         "cliente","cliente_norm","status_novo","dt_evento","ultima_visita_ref",
         "anunciado","anunciado_em","observacao"
     ])
-
-# normaliza colunas
-for col in ["anunciado","anunciado_em","observacao"]:
+for col in ["anunciado","anunciado_em","observacao","ultima_visita_ref","dt_evento"]:
     if col not in df_trans.columns:
         df_trans[col] = ""
-if "ultima_visita_ref" not in df_trans.columns:
-    df_trans["ultima_visita_ref"] = ""
-if "dt_evento" not in df_trans.columns:
-    df_trans["dt_evento"] = ""
 
-# índice rápido de pendentes (não anunciados)
 df_trans["_cliente_norm"] = df_trans["cliente_norm"].astype(str)
 df_trans["_status_novo"]  = df_trans["status_novo"].astype(str)
 df_trans["_ultima_ref"]   = df_trans["ultima_visita_ref"].astype(str)
 
 def upsert_transicao(nome, status_novo, ultima_ref_date):
-    """
-    Insere a transição na fila SE ainda não existir uma pendente igual.
-    Unicidade: (cliente_norm, status_novo, ultima_visita_ref)
-    """
+    """Unicidade: (cliente_norm, status_novo, ultima_visita_ref) pendente."""
     cliente_norm = _norm(nome)
     chave_ref = (df_trans["_cliente_norm"] == cliente_norm) & \
                 (df_trans["_status_novo"]  == status_novo) & \
                 (df_trans["_ultima_ref"]   == (ultima_ref_date or ""))
-    existe = (df_trans[chave_ref & (df_trans["anunciado"].astype(str).str.strip() == "")].shape[0] > 0)
-    if existe:
-        return  # já está na fila pendente
-
+    existe_pendente = (df_trans[chave_ref & (df_trans["anunciado"].astype(str).str.strip() == "")].shape[0] > 0)
+    if existe_pendente:
+        return
     novo = {
         "cliente": nome,
         "cliente_norm": cliente_norm,
@@ -316,15 +302,10 @@ def upsert_transicao(nome, status_novo, ultima_ref_date):
         "anunciado_em": "",
         "observacao": ""
     }
-    # append in-memory
     global df_trans
     df_trans = pd.concat([df_trans, pd.DataFrame([novo])], ignore_index=True)
 
-# =========================
-# Detectar mudanças e alimentar fila (sem envio imediato)
-# =========================
-ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
-
+# Detectar mudanças (sem envio agora)
 for key, row in ultimo_by_cli.items():
     nome = row.Cliente
     status = row.status_atual
@@ -334,66 +315,71 @@ for key, row in ultimo_by_cli.items():
     cached_status = (cached["status_cache"] if cached is not None else "")
 
     if cached is not None and status != cached_status:
-        # Apenas entradas em atraso vão para a fila
         if status in ("Pouco atrasado", "Muito atrasado"):
             upsert_transicao(nome, status, ultima)
 
-# Persistir fila (se houver novas linhas)
+# Persistir fila após possíveis inserts
 if not df_trans.empty:
     ws_trans.clear()
     set_with_dataframe(ws_trans, df_trans)
 
 # =========================
-# Resumo + listas (08:00) — somente com pendentes não anunciados
+# Disparo às 08:00 — cards por cliente
 # =========================
-def daily_summary_and_lists_from_queue():
+def send_cards_from_queue():
     pend = df_trans[df_trans["anunciado"].astype(str).str.strip() == ""].copy()
-    if pend.empty and not SEND_DAILY_HEADER:
-        return  # nada a enviar
+    if pend.empty:
+        return
+    # Ordena por severidade (Muito antes de Pouco), depois por nome
+    severidade = {"Muito atrasado": 0, "Pouco atrasado": 1}
+    pend["sev"] = pend["status_novo"].map(severidade).fillna(2)
+    pend = pend.sort_values(["sev","cliente"], kind="stable")
 
-    # Cabeçalho simples
-    if SEND_DAILY_HEADER:
-        header = (
-            "<b>📊 Relatório de Frequência — Salão JP</b>\n"
-            f"Data/hora: {html.escape(now_br())}\n\n"
-            f"📥 Mudanças de status pendentes: <b>{len(pend)}</b>\n"
-            f"🟠 Entraram em Pouco atrasado: <b>{(pend['status_novo']=='Pouco atrasado').sum()}</b>\n"
-            f"🔴 Entraram em Muito atrasado: <b>{(pend['status_novo']=='Muito atrasado').sum()}</b>"
-        )
-        tg_send(header)
+    for r in pend.itertuples(index=False):
+        nome = str(r.cliente).strip()
+        status = str(r.status_novo).strip()
+        ultima_ref = (str(r.ultima_visita_ref).strip() or "")
 
-    def lista(pivot_status, emoji):
-        subset = pend.loc[pend["status_novo"]==pivot_status, ["cliente","ultima_visita_ref","dt_evento"]]
-        if subset.empty:
-            return
-        linhas = []
-        for r in subset.itertuples(index=False):
-            # r.ultima_visita_ref pode estar vazio (fallback)
-            ultima_txt = r.ultima_visita_ref or "-"
-            dt_evt = r.dt_evento or "-"
-            linhas.append(f"- {html.escape(str(r.cliente))} (última: {ultima_txt}, detectado: {dt_evt})")
-        body = f"<b>{emoji} Entraram em {pivot_status}</b>\n" + "\n".join(linhas)
-        if len(body) <= 3500:
-            tg_send(body)
+        # Busca dados atuais para montar legenda bonita
+        key = nome.strip().lower()
+        row_atual = ultimo_by_cli.get(key)
+        if not row_atual:
+            # se não achar, envia o mínimo com fallback
+            caption = (
+                "📣 <b>Atualização de Frequência</b>\n"
+                f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+                f"📌 Status: <b>{html.escape(status)}</b>\n"
+                f"🗓️ Último: <b>{(ultima_ref or '-')}</b>"
+            )
         else:
-            nomes = body.split("\n")
-            for i in range(0, len(nomes), 60):
-                tg_send("\n".join(nomes[i:i+60]))
+            ultima_str = pd.to_datetime(row_atual.ultima_visita).strftime("%d/%m/%Y")
+            media_str = f"{float(row_atual.media_dias):.1f}".replace(".", ",")
+            dias_int = int(row_atual.dias_desde_ultima)
+            emoji = "🟠" if status == "Pouco atrasado" else ("🔴" if status == "Muito atrasado" else "")
+            caption = (
+                f"{emoji} <b>Atualização de Frequência</b>\n"
+                f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+                f"{emoji} Status: <b>{html.escape(status)}</b>\n"
+                f"🗓️ Último: <b>{ultima_str}</b>\n"
+                f"🔁 Média: <b>{media_str} dias</b>\n"
+                f"⏳ Sem vir há: <b>{dias_int} dias</b>"
+            )
 
-    if SEND_LIST_POUCO:
-        lista("Pouco atrasado","🟠")
-    if SEND_LIST_MUITO:
-        lista("Muito atrasado","🔴")
+        foto = foto_map.get(_norm(nome))
+        if foto:
+            tg_send_photo(foto, caption)
+        else:
+            tg_send(caption)
 
     # Marcar como anunciados
-    if not pend.empty:
-        df_trans.loc[pend.index, "anunciado"] = "1"
-        df_trans.loc[pend.index, "anunciado_em"] = now_br()
-        ws_trans.clear()
-        set_with_dataframe(ws_trans, df_trans)
+    idx = pend.index
+    df_trans.loc[idx, "anunciado"] = "1"
+    df_trans.loc[idx, "anunciado_em"] = now_br()
+    ws_trans.clear()
+    set_with_dataframe(ws_trans, df_trans)
 
 # =========================
-# Atualizar cache (estado atual)
+# Atualizar cache (estado atual p/ próxima comparação)
 # =========================
 def update_cache_state():
     out = ultimo[["Cliente","ultima_visita","status_atual","media_dias","visitas_total"]].copy()
@@ -409,7 +395,7 @@ def update_cache_state():
     set_with_dataframe(ws_cache, out)
 
 # =========================
-# MODO INDIVIDUAL (opcional) — mantém, mas sem fotos em massa
+# MODO INDIVIDUAL (segue igual)
 # =========================
 CLIENTE = os.getenv("CLIENTE") or os.getenv("INPUT_CLIENTE")
 if CLIENTE:
@@ -435,7 +421,11 @@ if CLIENTE:
         f"🔁 Média: <b>{media_str} dias</b>\n"
         f"⏳ Sem vir há: <b>{dias_int} dias</b>"
     )
-    tg_send(caption)
+    foto = foto_map.get(_norm(row["Cliente"]))
+    if foto:
+        tg_send_photo(foto, caption)
+    else:
+        tg_send(caption)
     print("✅ Alerta individual enviado.")
     sys.exit(0)
 
@@ -446,16 +436,16 @@ if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES}")
-        # 1) Detecta mudanças e alimenta fila (sem enviar nada agora)
-        #    (já executado acima na construção do script)
 
-        # 2) Se for a execução das 08:00, enviar o batch pendente
-        if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
-            daily_summary_and_lists_from_queue()
+        # 1) (já feito acima) Detecta mudanças e grava pendências
 
-        # 3) Atualiza o cache com o estado atual, para a próxima comparação
+        # 2) Se for a execução das 08:00 → envia CARDS por cliente pendente
+        if SEND_AT_8_CARDS:
+            send_cards_from_queue()
+
+        # 3) Atualiza cache (estado atual)
         update_cache_state()
 
-        print("✅ Execução concluída (modo batch).")
+        print("✅ Execução concluída (cards às 08:00).")
     except Exception as e:
         fail(e)
