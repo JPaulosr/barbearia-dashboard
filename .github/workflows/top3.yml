@@ -1,51 +1,30 @@
 name: Enviar Top 3 Salão JP
 
 on:
-  # roda todo dia 08:00 BRT (≈ 11:00 UTC)
   schedule:
-    - cron: '0 11 * * *'
-  # permite rodar manualmente pelo botão "Run workflow"
+    - cron: '0 11 * * *'        # 08:00 BRT
   workflow_dispatch:
+  repository_dispatch:
+    types: [top3_update]        # <<< permite disparo via API
+
+concurrency:
+  group: top3
+  cancel-in-progress: true
 
 jobs:
   run-top3:
     runs-on: ubuntu-latest
     env:
       TZ: America/Sao_Paulo
-      # secrets necessários
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: Install deps
         run: |
-          set -euxo pipefail
           python -m pip install --upgrade pip
           pip install gspread gspread-dataframe google-auth pandas pytz requests
-
-      # grava o JSON do service account a partir do secret (opcional — seu script lê direto da env)
-      - name: Validate Service Account JSON
-        run: |
-          python - <<'PY'
-          import os, json, sys
-          raw = os.getenv("GCP_SERVICE_ACCOUNT", "")
-          try:
-              j = json.loads(raw)
-              print("Service account OK:", j.get("client_email"))
-          except Exception as e:
-              print("Service account JSON inválido:", e, file=sys.stderr)
-              sys.exit(1)
-          PY
-
-      - name: Run Top 3 script
-        run: |
-          set -euxo pipefail
-          python top_3_salao_JP.py
+      - name: Run
+        run: python top_3_salao_JP.py
