@@ -16,10 +16,6 @@ on:
         required: false
         default: ""
 
-concurrency:
-  group: notify-frequencia
-  cancel-in-progress: true
-
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -43,9 +39,9 @@ jobs:
       SEND_LIST_POUCO:  ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
       SEND_LIST_MUITO:  ${{ (github.event_name == 'schedule' && github.event.schedule == '0 11 * * *') || (github.event_name == 'workflow_dispatch' && inputs.force_daily == 'true') }}
 
-      # Feedbacks (cards de retorno)
-      SEND_FEEDBACK_ON_NEW_VISIT_ALL: "true"
-      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "false"
+      # Feedbacks
+      SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"
+      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"
       SEND_TRANSITION_BACK_TO_EM_DIA: "true"
 
       # Força no script também (fallback)
