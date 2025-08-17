@@ -29,7 +29,6 @@ def _bool_env(name, default=False):
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 # ======== CONTROLES DE ENVIO ========
-# (para 08:00 enviar listas; no watch frequente, não)
 SEND_DAILY_HEADER = _bool_env("SEND_DAILY_HEADER", False)
 SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)
 SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
@@ -40,6 +39,9 @@ SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", Tr
 
 # Transições:
 SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)  # “voltou pra Em dia”
+
+# ======== NOVO: evitar feedback duplicado por visita ========
+FEEDBACK_ONCE_PER_VISIT = True  # sempre 1 feedback por cliente por data de última visita
 
 # =========================
 # ENVS obrigatórios
@@ -63,12 +65,20 @@ if missing:
 if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     try:
         creds = Credentials.from_service_account_file(
-            os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+            os.getenv("GOOGLE_APPLICATIONS_CREDENTIALS"),  # <- CORREÇÃO? Não! Mantém nome certo
             scopes=["https://spreadsheets.google.com/feeds",
                     "https://www.googleapis.com/auth/drive"]
         )
     except Exception as e:
-        fail(f"Erro ao ler GOOGLE_APPLICATION_CREDENTIALS: {e}")
+        # Corrige nome da env se veio errado
+        try:
+            creds = Credentials.from_service_account_file(
+                os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+                scopes=["https://spreadsheets.google.com/feeds",
+                        "https://www.googleapis.com/auth/drive"]
+            )
+        except Exception as e2:
+            fail(f"Erro ao ler GOOGLE_APPLICATION_CREDENTIALS: {e2}")
 else:
     raw = os.getenv("GCP_SERVICE_ACCOUNT") or os.getenv("GCP_SERVICE_ACCOUNT_JSON") or ""
     if not raw.strip():
@@ -224,9 +234,11 @@ def ensure_cache():
     try:
         return sh.worksheet(ABA_STATUS_CACHE)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=6)
+        ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=7)
         set_with_dataframe(ws, pd.DataFrame(columns=[
-            "Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"
+            "Cliente","ultima_visita_cache","status_cache","last_notified_at",
+            "media_cache","visitas_total_cache",
+            "feedback_sent_for_date"  # NEW
         ]))
         return ws
 
@@ -234,14 +246,16 @@ ws_cache = ensure_cache()
 df_cache = get_as_dataframe(ws_cache, evaluate_formulas=True, dtype=str).fillna("")
 if df_cache.empty or "Cliente" not in df_cache.columns:
     df_cache = pd.DataFrame(columns=[
-        "Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"
+        "Cliente","ultima_visita_cache","status_cache","last_notified_at",
+        "media_cache","visitas_total_cache","feedback_sent_for_date"  # NEW
     ])
 
 def parse_cache_dt(x):
     d = parse_dt_cell(x)
     return None if d is None else pd.to_datetime(d)
 
-need_cols = ["Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"]
+need_cols = ["Cliente","ultima_visita_cache","status_cache","last_notified_at",
+             "media_cache","visitas_total_cache","feedback_sent_for_date"]  # NEW
 for c in need_cols:
     if c not in df_cache.columns:
         df_cache[c] = ""
@@ -311,6 +325,13 @@ def changes_and_feedback():
         cached_dt = cached["ultima_visita_cache_parsed"] if cached is not None else None
         cached_visitas = int(cached["visitas_total_cache"]) if (cached is not None and str(cached.get("visitas_total_cache","")).strip().isdigit()) else 0
 
+        # NEW — já mandou feedback para esta última visita?
+        ultima_key = pd.to_datetime(ultima).strftime("%Y-%m-%d")  # chave de comparação por data
+        feedback_already_sent = False
+        if FEEDBACK_ONCE_PER_VISIT and cached is not None:
+            sent_for = (cached.get("feedback_sent_for_date") or "").strip()
+            feedback_already_sent = (sent_for == ultima_key)
+
         # Nova visita = aumentou nº de dias distintos (captura retroativo também)
         new_visit = visitas_total > cached_visitas
 
@@ -322,14 +343,14 @@ def changes_and_feedback():
         elif SEND_FEEDBACK_ONLY_IF_WAS_LATE and estava_atrasado:
             enviar_feedback = True
 
-        if new_visit and enviar_feedback:
+        if new_visit and enviar_feedback and not feedback_already_sent:
             ultima_str = pd.to_datetime(ultima).strftime("%d/%m/%Y")
             media_str = f"{media:.1f}".replace(".", ",")
             if estava_atrasado:
                 caption = (
                     "✅ <b>Retorno registrado</b>\n"
                     f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
-                    f"⚠️ Estava: <b>{html.escape(cached_status)}</b>\n"
+                    f"⚠️ Estado: <b>{html.escape(cached_status)}</b>\n"
                     f"🗓️ Atendimento registrado em: <b>{ultima_str}</b>\n"
                     f"🔁 Média: <b>{media_str} dias</b>\n"
                     f"⏳ Estava há: <b>{dias} dias</b>"
@@ -349,15 +370,17 @@ def changes_and_feedback():
             else:
                 tg_send(caption)
 
+            # NEW — marca que já enviou feedback para esta data de visita
+            if cached is not None:
+                cached["feedback_sent_for_date"] = ultima_key
+
         # Transições de status:
         if cached is not None and status != cached_status:
-            # Entrou em atraso (Em dia -> Pouco/Muito) → sempre avisar
             if status in ("Pouco atrasado", "Muito atrasado"):
                 transicoes.append(
                     "📣 Atualização de Frequência\n"
                     f"<b>{html.escape(nome)}</b> entrou em <b>{html.escape(status)}</b>."
                 )
-            # Voltou para Em dia → só se flag ligada
             elif SEND_TRANSITION_BACK_TO_EM_DIA and status == "Em dia":
                 transicoes.append(
                     "✅ Atualização de Frequência\n"
@@ -368,7 +391,7 @@ def changes_and_feedback():
     for txt in transicoes[:30]:
         tg_send(txt)
 
-    # Atualiza cache
+    # Atualiza cache (preserva feedback_sent_for_date quando possível)
     out = ultimo[["Cliente","ultima_visita","status_atual","media_dias","visitas_total"]].copy()
     out["ultima_visita"] = pd.to_datetime(out["ultima_visita"]).dt.strftime("%Y-%m-%d")
     out.rename(columns={
@@ -378,8 +401,30 @@ def changes_and_feedback():
         "visitas_total":"visitas_total_cache"
     }, inplace=True)
     out["last_notified_at"] = now_br()
+
+    # NEW — traz coluna já enviada do cache, senão usa vazio
+    sent_map = {k: (v.get("feedback_sent_for_date") or "") for k, v in cache_by_cli.items()}
+    out["key_lower"] = out["Cliente"].astype(str).str.strip().str.lower()
+    out["feedback_sent_for_date"] = out["key_lower"].map(sent_map).fillna("")
+
+    # Se a última visita mudou e já enviamos agora, grava data atual de visita
+    def _maybe_update_sent(row):
+        k = row["key_lower"]
+        cached = cache_by_cli.get(k)
+        if cached is None:
+            return row["feedback_sent_for_date"]
+        # Se o cached já foi atualizado no loop acima, ele tem a marca nova
+        mark = (cached.get("feedback_sent_for_date") or "").strip()
+        return mark or row["feedback_sent_for_date"]
+
+    out["feedback_sent_for_date"] = out.apply(_maybe_update_sent, axis=1)
+    out.drop(columns=["key_lower"], inplace=True)
+
     ws_cache.clear()
-    set_with_dataframe(ws_cache, out)
+    set_with_dataframe(ws_cache, out[[
+        "Cliente","ultima_visita_cache","status_cache","last_notified_at",
+        "media_cache","visitas_total_cache","feedback_sent_for_date"  # mantém coluna nova
+    ]])
 
 # =========================
 # MODO INDIVIDUAL (opcional)
@@ -425,7 +470,7 @@ if __name__ == "__main__":
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
         if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
             daily_summary_and_lists()   # para 08:00
-        changes_and_feedback()          # para transições + retorno
+        changes_and_feedback()          # para transições + retorno (com 1 feedback por visita)
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
