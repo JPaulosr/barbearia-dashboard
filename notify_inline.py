@@ -1,5 +1,13 @@
 # notify_inline.py — Frequência por MÉDIA (relative) + cache + alertas
-import os, sys, json, html, pandas as pd, requests, gspread, pytz
+
+import os
+import sys
+import json
+import html
+import requests
+import gspread
+import pytz
+import pandas as pd
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
@@ -16,13 +24,13 @@ ENVIAR_ALERTA_QUANDO_VOLTAR_EM_DIA = True
 # =========================
 # ENVS / CREDS (GitHub Secrets)
 # =========================
-SHEET_ID = os.getenv("SHEET_ID", "").strip()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-GCP_SERVICE_ACCOUNT_JSON = os.getenv("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+SHEET_ID = (os.getenv("SHEET_ID") or "").strip()
+TELEGRAM_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+GCP_SERVICE_ACCOUNT_JSON = (os.getenv("GCP_SERVICE_ACCOUNT_JSON") or "").strip()
 
 def fail(msg):
-    print("💥", msg, file=sys.stderr)
+    print(f"💥 {msg}", file=sys.stderr)
     sys.exit(1)
 
 need = ["SHEET_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GCP_SERVICE_ACCOUNT_JSON"]
@@ -55,18 +63,29 @@ def classificar_relative(dias, media):
 
 def tg_send(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # HTML para não quebrar com _ * etc
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
     r = requests.post(url, json=payload, timeout=30)
-    print("↪ Telegram:", r.text[:300])
+    print("↪ Telegram:", r.status_code, r.text[:200])
     if not r.ok:
         raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
 
 # =========================
 # CONECTAR SHEETS
 # =========================
-sa_info = json.loads(GCP_SERVICE_ACCOUNT_JSON)
-scopes = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+try:
+    sa_info = json.loads(GCP_SERVICE_ACCOUNT_JSON)
+except Exception as e:
+    fail(f"GCP_SERVICE_ACCOUNT_JSON inválido: {e}")
+
+scopes = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
 creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
 gc = gspread.authorize(creds)
 sh = gc.open_by_key(SHEET_ID)
@@ -78,6 +97,7 @@ if ABA_BASE not in abas:
 
 ws_base = abas[ABA_BASE]
 df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
+
 if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
     fail("Aba 'Base de Dados' precisa das colunas 'Cliente' e 'Data'.")
 
@@ -266,11 +286,13 @@ def changes_and_feedback():
 # =========================
 # ENTRYPOINT
 # =========================
-try:
-    # 1) resumo + listas (o cron do Actions chama 08:00 BRT)
-    daily_summary_and_lists()
-    # 2) transições + feedback por nova visita
-    changes_and_feedback()
-    print("✅ Execução concluída.")
-except Exception as e:
-    fail(e)
+if __name__ == "__main__":
+    try:
+        print("▶️ Iniciando execução…")
+        print(f"• Timezone: {TZ}")
+        print(f"• Aba base: {ABA_BASE} | Cache: {ABA_STATUS_CACHE}")
+        daily_summary_and_lists()     # 1) resumo + listas (agendado ~08:00 BRT)
+        changes_and_feedback()        # 2) transições + feedback por nova visita
+        print("✅ Execução concluída.")
+    except Exception as e:
+        fail(e)
