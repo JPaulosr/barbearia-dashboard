@@ -2,7 +2,7 @@ name: Notificar Frequência (08:00 BRT)
 
 on:
   schedule:
-    # 08:00 em America/Sao_Paulo = 11:00 UTC (sem horário de verão)
+    # 08:00 America/Sao_Paulo ≈ 11:00 UTC (sem horário de verão)
     - cron: "0 11 * * *"
   workflow_dispatch: {}
 
