@@ -2,111 +2,88 @@ name: notify_frequencia.yml
 
 on:
   workflow_dispatch:
-    inputs:
-      test_chat_id:
-        description: "(opcional) CHAT_ID de TESTE do Telegram (vazio = usa o secret)"
-        required: false
-        default: ""
   schedule:
-    - cron: '0 11 * * *'  # 08:00 BRT
-
-concurrency:
-  group: notify-frequencia
-  cancel-in-progress: true
+    # 08:00 BRT ≈ 11:00 UTC
+    - cron: '0 11 * * *'
+    # A cada 10 min (transições + feedback)
+    - cron: '*/10 * * * *'
 
 jobs:
-  morning_send_cards:
+  run:
     runs-on: ubuntu-latest
     env:
       TZ: America/Sao_Paulo
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: "${{ inputs.test_chat_id || secrets.TELEGRAM_CHAT_ID }}"
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # >>> se quiser forçar a aba base, troque o valor abaixo
-      BASE_ABA: "Base de Dados"
-
+      # Abas / fotos
       STATUS_ABA: clientes_status
-      ABA_TRANSICOES: freq_transicoes
-      SEND_AT_8_CARDS: "true"
-      # teste sem gravar na planilha
-      ALLOW_WRITE: "false"
-      # não derruba o job se o Telegram responder 400/429
-      SAFE_TELEGRAM: "true"
-      # traceback limpo no log
-      PYTHONFAULTHANDLER: "1"
+      # FOTO_COL: link_foto
+
+      # Flags (liga listas só às 11:00 UTC)
+      SEND_DAILY_HEADER: ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
+      SEND_LIST_POUCO:  ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
+      SEND_LIST_MUITO:  ${{ github.event_name == 'schedule' && github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
+
+      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"
+      SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"
+      SEND_TRANSITION_BACK_TO_EM_DIA: "false"
+
+      # Logs Python mais verbosos
+      PYTHONUNBUFFERED: "1"
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: |
+          set -euxo pipefail
           python -m pip install --upgrade pip
-          pip install pandas gspread gspread-dataframe google-auth requests pytz
+          pip install \
+            pandas==2.* \
+            gspread==6.* \
+            gspread-dataframe==3.* \
+            google-auth==2.* \
+            requests==2.* \
+            pytz==2024.*
 
-      - name: Persist SA and export path
+      - name: Write service account to file (heredoc safe)
         run: |
-          test -n "$GCP_SERVICE_ACCOUNT" || (echo "❌ GCP_SERVICE_ACCOUNT ausente" && exit 1)
-          echo "$GCP_SERVICE_ACCOUNT" > sa.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
+          set -euxo pipefail
+          cat > sa.json <<'JSON'
+          ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          JSON
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$PWD/sa.json" >> $GITHUB_ENV
 
-      - name: Dump required envs (masked)
-        run: |
-          echo "SHEET_ID set? $(test -n "$SHEET_ID" && echo yes || echo no)"
-          echo "TELEGRAM_TOKEN set? $(test -n "$TELEGRAM_TOKEN" && echo yes || echo no)"
-          echo "TELEGRAM_CHAT_ID (masked): ${TELEGRAM_CHAT_ID:0:3}***"
-          python - <<'PY'
-          import json, os
-          sa = json.loads(os.environ["GCP_SERVICE_ACCOUNT"])
-          print("SA client_email:", sa.get("client_email"))
-          PY
-
-      - name: Test Google Sheets access
+      - name: Sanity check service account JSON
         run: |
           python - <<'PY'
-          import os, json, gspread
-          from google.oauth2.service_account import Credentials
-          scopes = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
-          info = json.loads(os.environ["GCP_SERVICE_ACCOUNT"])
-          creds = Credentials.from_service_account_info(info, scopes=scopes)
-          gc = gspread.authorize(creds)
-          sid = os.environ["SHEET_ID"]
+          import json, sys
           try:
-            sh = gc.open_by_key(sid)
+              j = json.load(open('sa.json','r'))
+              print('Service account OK. project_id=', j.get('project_id'), ' client_email=', j.get('client_email'))
           except Exception as e:
-            print("open_by_key falhou:", e)
-            print("Tentando open_by_url…")
-            sh = gc.open_by_url(sid)
-          print("Sheet title:", sh.title)
-          print("Worksheets:", [w.title for w in sh.worksheets()])
-          PY
-
-      - name: Test Telegram (ping)
-        if: ${{ env.TELEGRAM_TOKEN != '' && env.TELEGRAM_CHAT_ID != '' }}
-        run: |
-          python - <<'PY'
-          import os, requests
-          tok = os.environ["TELEGRAM_TOKEN"].strip()
-          chat = os.environ["TELEGRAM_CHAT_ID"].strip()
-          r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
-                            json={"chat_id": chat, "text": "🔧 ping do notifier (teste)"}, timeout=20)
-          print("HTTP:", r.status_code, r.text[:200])
-          r.raise_for_status()
-          PY
-
-      - name: Run notifier (send cards)
-        run: |
-          python - <<'PY' || exit 1
-          import runpy, sys, traceback
-          try:
-              runpy.run_path("notify_inline.py", run_name="__main__")
-          except SystemExit:
-              raise
-          except Exception:
-              traceback.print_exc()
+              print('JSON inválido do service account:', e, file=sys.stderr)
               sys.exit(1)
           PY
+
+      - name: Echo schedule flags (debug)
+        run: |
+          echo "SEND_DAILY_HEADER=$SEND_DAILY_HEADER"
+          echo "SEND_LIST_POUCO=$SEND_LIST_POUCO"
+          echo "SEND_LIST_MUITO=$SEND_LIST_MUITO"
+          echo "STATUS_ABA=$STATUS_ABA"
+          python -V
+
+      - name: Run notifier
+        run: |
+          set -euxo pipefail
+          python -u notify_inline.py
