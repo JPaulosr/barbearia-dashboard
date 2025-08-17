@@ -1,4 +1,4 @@
-# notify_inline.py — Frequência por MÉDIA + cache + FOTO (cards às 08:00, sem listas)
+# notify_inline.py — Frequência por MÉDIA + cache + FOTO (cards às 08:00)
 import os
 import sys
 import json
@@ -32,8 +32,8 @@ def _bool_env(name, default=False):
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 # ======== CONTROLES ========
-# Use somente no job das 08:00:
-SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # envia um CARD (foto+legenda) por cliente pendente
+SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # envia um CARD por cliente pendente
+ALLOW_WRITE = _bool_env("ALLOW_WRITE", True)           # 👉 gate de escrita (teste = False)
 
 # Envio imediato desativado (apenas batch às 08:00)
 SEND_FEEDBACK_ON_NEW_VISIT_ALL = False
@@ -83,7 +83,13 @@ else:
         fail(f"GCP service account JSON inválido: {e}")
 
 gc = gspread.authorize(creds)
-sh = gc.open_by_key(SHEET_ID)
+
+# 🔁 key → url fallback
+try:
+    sh = gc.open_by_key(SHEET_ID)
+except Exception:
+    sh = gc.open_by_url(SHEET_ID)
+
 print(f"✅ Conectado no Sheets: {sh.title}")
 
 # =========================
@@ -228,10 +234,11 @@ def ensure_cache():
     try:
         return sh.worksheet(ABA_STATUS_CACHE)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=6)
-        set_with_dataframe(ws, pd.DataFrame(columns=[
-            "Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"
-        ]))
+        ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=6) if ALLOW_WRITE else sh.worksheet(ABA_BASE)
+        if ALLOW_WRITE:
+            set_with_dataframe(ws, pd.DataFrame(columns=[
+                "Cliente","ultima_visita_cache","status_cache","last_notified_at","media_cache","visitas_total_cache"
+            ]))
         return ws
 
 ws_cache = ensure_cache()
@@ -261,11 +268,12 @@ def ensure_transicoes():
     try:
         return sh.worksheet(ABA_TRANSICOES)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(ABA_TRANSICOES, rows=2, cols=8)
-        set_with_dataframe(ws, pd.DataFrame(columns=[
-            "cliente","cliente_norm","status_novo","dt_evento","ultima_visita_ref",
-            "anunciado","anunciado_em","observacao"
-        ]))
+        ws = sh.add_worksheet(ABA_TRANSICOES, rows=2, cols=8) if ALLOW_WRITE else sh.worksheet(ABA_BASE)
+        if ALLOW_WRITE:
+            set_with_dataframe(ws, pd.DataFrame(columns=[
+                "cliente","cliente_norm","status_novo","dt_evento","ultima_visita_ref",
+                "anunciado","anunciado_em","observacao"
+            ]))
         return ws
 
 ws_trans = ensure_transicoes()
@@ -319,7 +327,7 @@ for key, row in ultimo_by_cli.items():
             upsert_transicao(nome, status, ultima)
 
 # Persistir fila após possíveis inserts
-if not df_trans.empty:
+if not df_trans.empty and ALLOW_WRITE:
     ws_trans.clear()
     set_with_dataframe(ws_trans, df_trans)
 
@@ -329,6 +337,7 @@ if not df_trans.empty:
 def send_cards_from_queue():
     pend = df_trans[df_trans["anunciado"].astype(str).str.strip() == ""].copy()
     if pend.empty:
+        print("ℹ️ Sem pendências para anunciar.")
         return
     # Ordena por severidade (Muito antes de Pouco), depois por nome
     severidade = {"Muito atrasado": 0, "Pouco atrasado": 1}
@@ -340,11 +349,10 @@ def send_cards_from_queue():
         status = str(r.status_novo).strip()
         ultima_ref = (str(r.ultima_visita_ref).strip() or "")
 
-        # Busca dados atuais para montar legenda bonita
+        # Busca dados atuais para montar legenda
         key = nome.strip().lower()
         row_atual = ultimo_by_cli.get(key)
         if not row_atual:
-            # se não achar, envia o mínimo com fallback
             caption = (
                 "📣 <b>Atualização de Frequência</b>\n"
                 f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
@@ -372,14 +380,15 @@ def send_cards_from_queue():
             tg_send(caption)
 
     # Marcar como anunciados
-    idx = pend.index
-    df_trans.loc[idx, "anunciado"] = "1"
-    df_trans.loc[idx, "anunciado_em"] = now_br()
-    ws_trans.clear()
-    set_with_dataframe(ws_trans, df_trans)
+    if ALLOW_WRITE:
+        idx = pend.index
+        df_trans.loc[idx, "anunciado"] = "1"
+        df_trans.loc[idx, "anunciado_em"] = now_br()
+        ws_trans.clear()
+        set_with_dataframe(ws_trans, df_trans)
 
 # =========================
-# Atualizar cache (estado atual p/ próxima comparação)
+# Atualizar cache (estado atual)
 # =========================
 def update_cache_state():
     out = ultimo[["Cliente","ultima_visita","status_atual","media_dias","visitas_total"]].copy()
@@ -391,8 +400,9 @@ def update_cache_state():
         "visitas_total":"visitas_total_cache"
     }, inplace=True)
     out["last_notified_at"] = now_br()
-    ws_cache.clear()
-    set_with_dataframe(ws_cache, out)
+    if ALLOW_WRITE:
+        ws_cache.clear()
+        set_with_dataframe(ws_cache, out)
 
 # =========================
 # MODO INDIVIDUAL (segue igual)
@@ -435,9 +445,12 @@ if CLIENTE:
 if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
-        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES}")
+        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES} | ALLOW_WRITE={ALLOW_WRITE}")
 
-        # 1) (já feito acima) Detecta mudanças e grava pendências
+        # 1) Detecta mudanças e grava pendências (em memória; persistência só se ALLOW_WRITE)
+        if not df_trans.empty and ALLOW_WRITE:
+            ws_trans.clear()
+            set_with_dataframe(ws_trans, df_trans)
 
         # 2) Se for a execução das 08:00 → envia CARDS por cliente pendente
         if SEND_AT_8_CARDS:
