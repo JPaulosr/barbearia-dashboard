@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TZ: America/Sao_Paulo
-      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }} # opcional (fallback)
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -24,10 +24,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pandas gspread gspread_dataframe google-auth requests pytz
+          python -m pip install --upgrade pip
+          pip install pandas gspread gspread-dataframe google-auth requests pytz
 
       - name: Write service account to file
+        env:
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
         run: |
           echo "$GCP_SERVICE_ACCOUNT" > sa.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
