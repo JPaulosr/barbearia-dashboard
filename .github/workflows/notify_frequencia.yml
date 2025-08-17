@@ -1,35 +1,38 @@
 name: notify_frequencia.yml
 
 on:
-  workflow_dispatch:
+  # dispara automático todo dia
   schedule:
-    # GitHub usa UTC. Para 08:00 em America/Sao_Paulo (~UTC-3), rode às 11:00 UTC.
+    # 08:00 America/Sao_Paulo ≈ 11:00 UTC (sem DST no Brasil)
     - cron: "0 11 * * *"
+  # opcional: botão "Run workflow" manual
+  workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
-      # ====== OBRIGATÓRIAS (vem de Secrets) ======
+      # ===== OBRIGATÓRIAS (defina em Settings > Secrets and variables > Actions > Secrets) =====
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
 
-      # ====== OPCIONAIS (pode ajustar aqui ou nos Secrets) ======
+      # ===== OPCIONAIS =====
       TZ: "America/Sao_Paulo"
       BASE_ABA: "Base de Dados"
       ABA_STATUS_CACHE: "status_cache"
       STATUS_ABA: "clientes_status"
-      FOTO_COL: "link_foto"   # troque se sua coluna tiver outro nome
       ABA_FIADO_CACHE: "fiado_cache"
+      # se sua coluna de foto tiver outro nome, mude:
+      FOTO_COL: "link_foto"
 
-      # Relatório 08:00
-      SEND_DAILY_HEADER: "true"
-      SEND_LIST_POUCO:  "true"
-      SEND_LIST_MUITO:  "true"
+      # ===== Flags de envio (só o que você pediu) =====
+      SEND_DAILY_HEADER: "false"   # não manda cabeçalho/summary
+      SEND_LIST_POUCO:  "true"     # lista Pouco atrasado
+      SEND_LIST_MUITO:  "true"     # lista Muito atrasado
 
-      # Feedbacks/transições
+      # feedbacks/transições (mantive default seguro)
       SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"
       SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"
       SEND_TRANSITION_BACK_TO_EM_DIA: "false"
@@ -44,16 +47,11 @@ jobs:
           python-version: "3.11"
 
       - name: Criar arquivo de credenciais do Google
-        # Muitos erros de exit 1 são por JSON inválido. Aqui gravamos certinho.
         run: |
           echo "$GCP_SERVICE_ACCOUNT_JSON" > sa.json
-          # valida JSON (falha se estiver mal formatado)
           python - << 'PY'
-import json,sys
-open('sa.json','rb').read()  # existir
-with open('sa.json','r',encoding='utf-8') as f:
-    json.load(f)
-print("JSON OK")
+import json; json.load(open('sa.json','r',encoding='utf-8'))
+print("Service Account JSON OK")
 PY
           echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/sa.json" >> $GITHUB_ENV
 
@@ -62,14 +60,6 @@ PY
           python -m pip install --upgrade pip
           pip install gspread gspread_dataframe pandas pytz requests google-auth
 
-      - name: Mostrar contexto (debug leve)
-        run: |
-          python -V
-          pip list | grep -E "gspread|pandas|requests|google-auth" || true
-
       - name: Rodar notify_inline.py
-        # Log agrupado ajuda a ver exatamente onde parou, sem vazar secrets
         run: |
-          echo "::group::RUN"
           python notify_inline.py
-          echo "::endgroup::"
