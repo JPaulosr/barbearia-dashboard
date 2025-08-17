@@ -8,7 +8,7 @@ import requests
 import gspread
 import pytz
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
@@ -21,8 +21,6 @@ ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
 STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # Cliente + link da foto
 FOTO_COL_ENV = (os.getenv("FOTO_COL", "") or "").strip()
-
-# Fila de transições
 ABA_TRANSICOES = os.getenv("ABA_TRANSICOES", "freq_transicoes")
 
 def _bool_env(name, default=False):
@@ -35,11 +33,6 @@ def _bool_env(name, default=False):
 SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # cards às 08:00
 ALLOW_WRITE = _bool_env("ALLOW_WRITE", True)           # gate de escrita (teste = False)
 SAFE_TELEGRAM = _bool_env("SAFE_TELEGRAM", False)      # não falha se Telegram 400/429
-
-# Envio imediato desativado (apenas batch às 08:00)
-SEND_FEEDBACK_ON_NEW_VISIT_ALL = False
-SEND_FEEDBACK_ONLY_IF_WAS_LATE = False
-SEND_TRANSITION_BACK_TO_EM_DIA = False
 
 # =========================
 # ENVS obrigatórios
@@ -126,6 +119,19 @@ def _norm(s: str) -> str:
     s = unicodedata.normalize("NFD", s)
     return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
 
+def _normalize_header(s):
+    s = (s or "").strip().lower()
+    s = unicodedata.normalize("NFD", s)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+
+def _pick_col(cols, candidates):
+    norm_map = {_normalize_header(c): c for c in cols if isinstance(c, str)}
+    for cand in candidates:
+        c = norm_map.get(_normalize_header(cand))
+        if c:
+            return c
+    return None
+
 def tg_send(text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -152,22 +158,46 @@ def tg_send_photo(photo_url, caption):
             raise RuntimeError(f"sendPhoto {r.status_code}: {r.text}")
     except Exception as e:
         print("⚠️ Falha sendPhoto:", e)
-        # Fallback para texto; se também falhar, tg_send respeita SAFE_TELEGRAM
-        tg_send(caption)
+        tg_send(caption)  # respeita SAFE_TELEGRAM
 
 # =========================
-# Ler abas
+# Ler aba base (com autodetecção de colunas)
 # =========================
 abas = {w.title: w for w in sh.worksheets()}
-if ABA_BASE not in abas:
-    fail(f"Aba '{ABA_BASE}' não encontrada.")
-ws_base = abas[ABA_BASE]
+ws_base = abas.get(ABA_BASE)
+df_base = None
 
-df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
-if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
-    fail("Aba base precisa das colunas 'Cliente' e 'Data'.")
+if not ws_base:
+    print(f"ℹ️ Aba '{ABA_BASE}' não encontrada. Tentando autodetectar…")
+    for w in sh.worksheets():
+        df_try = get_as_dataframe(w, evaluate_formulas=True, dtype=str).fillna("")
+        if df_try.empty or df_try.columns.size == 0:
+            continue
+        cols = list(df_try.columns)
+        col_cliente = _pick_col(cols, ["Cliente","cliente","nome","nome cliente","nome_cliente","cliente_nome"])
+        col_data    = _pick_col(cols, ["Data","data","dt","data visita","ultima visita","última visita","dia"])
+        if col_cliente and col_data:
+            ws_base = w
+            df_base = df_try.rename(columns={col_cliente: "Cliente", col_data: "Data"})
+            print(f"✅ Base autodetectada: {w.title} (cliente={col_cliente} | data={col_data})")
+            break
+    if not ws_base:
+        fail(f"Não encontrei uma aba com colunas equivalentes a 'Cliente' e 'Data'. Abas: {list(abas.keys())}")
+else:
+    df_base = get_as_dataframe(ws_base, evaluate_formulas=True, dtype=str).fillna("")
+    if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
+        cols = list(df_base.columns)
+        col_cliente = _pick_col(cols, ["Cliente","cliente","nome","nome cliente","nome_cliente","cliente_nome"])
+        col_data    = _pick_col(cols, ["Data","data","dt","data visita","ultima visita","última visita","dia"])
+        if not (col_cliente and col_data):
+            fail(f"Aba '{ws_base.title}' sem colunas equivalentes a 'Cliente' e 'Data'. Colunas: {cols}")
+        df_base = df_base.rename(columns={col_cliente: "Cliente", col_data: "Data"})
 
+print(f"🗂️ Usando aba base: {ws_base.title}")
+
+# =========================
 # Foto por cliente (opcional)
+# =========================
 foto_map = {}
 if STATUS_ABA in abas:
     try:
@@ -175,9 +205,9 @@ if STATUS_ABA in abas:
         df_status = get_as_dataframe(ws_status, evaluate_formulas=True, dtype=str).fillna("")
         cols_lower = {c.strip().lower(): c for c in df_status.columns if isinstance(c, str)}
         cand = FOTO_COL_ENV.lower() if FOTO_COL_ENV else ""
-        foto_candidates = [cand] if cand else ["foto", "imagem", "link_foto", "url_foto", "foto_link", "link", "image"]
+        foto_candidates = [cand] if cand else ["foto","imagem","link_foto","url_foto","foto_link","link","image"]
         foto_col = next((cols_lower[x] for x in foto_candidates if x in cols_lower), None)
-        cli_col  = next((cols_lower[x] for x in ["cliente", "nome", "nome_cliente"] if x in cols_lower), None)
+        cli_col  = next((cols_lower[x] for x in ["cliente","nome","nome_cliente"] if x in cols_lower), None)
         if foto_col and cli_col:
             tmp = df_status[[cli_col, foto_col]].copy()
             tmp.columns = ["Cliente", "Foto"]
@@ -328,10 +358,8 @@ for key, row in ultimo_by_cli.items():
     nome = row.Cliente
     status = row.status_atual
     ultima = pd.to_datetime(row.ultima_visita).strftime("%Y-%m-%d")
-
     cached = cache_by_cli.get(key)
     cached_status = (cached["status_cache"] if cached is not None else "")
-
     if cached is not None and status != cached_status:
         if status in ("Pouco atrasado", "Muito atrasado"):
             upsert_transicao(nome, status, ultima)
@@ -349,7 +377,6 @@ def send_cards_from_queue():
     if pend.empty:
         print("ℹ️ Sem pendências para anunciar.")
         return
-    # Ordena por severidade (Muito antes de Pouco), depois por nome
     severidade = {"Muito atrasado": 0, "Pouco atrasado": 1}
     pend["sev"] = pend["status_novo"].map(severidade).fillna(2)
     pend = pend.sort_values(["sev","cliente"], kind="stable")
@@ -359,7 +386,6 @@ def send_cards_from_queue():
         status = str(r.status_novo).strip()
         ultima_ref = (str(r.ultima_visita_ref).strip() or "")
 
-        # Busca dados atuais para montar legenda
         key = nome.strip().lower()
         row_atual = ultimo_by_cli.get(key)
         if not row_atual:
@@ -389,7 +415,6 @@ def send_cards_from_queue():
         else:
             tg_send(caption)
 
-    # Marcar como anunciados
     if ALLOW_WRITE:
         idx = pend.index
         df_trans.loc[idx, "anunciado"] = "1"
@@ -415,7 +440,7 @@ def update_cache_state():
         set_with_dataframe(ws_cache, out)
 
 # =========================
-# MODO INDIVIDUAL (segue igual)
+# MODO INDIVIDUAL (igual)
 # =========================
 CLIENTE = os.getenv("CLIENTE") or os.getenv("INPUT_CLIENTE")
 if CLIENTE:
@@ -456,18 +481,15 @@ if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES} | "
-              f"ALLOW_WRITE={ALLOW_WRITE} | SAFE_TELEGRAM={SAFE_TELEGRAM}")
+              f"ALLOW_WRITE={ALLOW_WRITE} | SAFE_TELEGRAM={SAFE_TELEGRAM} | Worksheet={ws_base.title}")
 
-        # 1) Persistir fila (se permitido)
         if not df_trans.empty and ALLOW_WRITE:
             ws_trans.clear()
             set_with_dataframe(ws_trans, df_trans)
 
-        # 2) Batch das 08:00 → envia CARDS por cliente pendente
         if SEND_AT_8_CARDS:
             send_cards_from_queue()
 
-        # 3) Atualiza cache (estado atual)
         update_cache_state()
 
         print("✅ Execução concluída (cards às 08:00).")
