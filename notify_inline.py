@@ -14,7 +14,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 # =========================
 # PARÂMETROS
 # =========================
-# Aceita TZ (do seu workflow) ou TIMEZONE (fallback)
+# Aceita TZ (do workflow) ou TIMEZONE (fallback)
 TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
 REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
@@ -22,7 +22,7 @@ ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
 ENVIAR_ALERTA_QUANDO_VOLTAR_EM_DIA = True
 
 # =========================
-# ENVS (nomes iguais aos do seu workflow)
+# ENVS (compatíveis com seu workflow)
 # =========================
 SHEET_ID = (os.getenv("SHEET_ID") or "").strip()
 TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
@@ -38,16 +38,11 @@ if missing:
     fail(f"Variáveis ausentes: {', '.join(missing)}")
 
 # =========================
-# Credenciais GCP
-# Suporta dois modos:
-#  a) GOOGLE_APPLICATION_CREDENTIALS apontando para um arquivo (sa.json)
-#  b) GCP_SERVICE_ACCOUNT / GCP_SERVICE_ACCOUNT_JSON com o JSON inline
+# Credenciais GCP: arquivo (GOOGLE_APPLICATION_CREDENTIALS) ou JSON inline
 # =========================
 creds = None
 if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-    # Credenciais por arquivo (seu workflow escreve sa.json e exporta esta env)
     try:
-        from google.oauth2.service_account import Credentials
         creds = Credentials.from_service_account_file(
             os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
             scopes=["https://spreadsheets.google.com/feeds",
@@ -126,27 +121,44 @@ if df.empty:
     print("⚠️ Base vazia após parse de datas.")
     sys.exit(0)
 
+# ========= PATCH: 1 visita por dia + ignora nomes vazios + média sem zeros =========
 rows = []
 today = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
-for cliente, g in df.groupby("Cliente"):
-    datas = g.sort_values("__dt")["__dt"].tolist()
-    if len(datas) < 2:
-        continue
-    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
-    media = sum(diffs) / len(diffs)
-    dias = (today - datas[-1]).days
-    label_emoji, label = classificar_relative(dias, media)
+
+# normaliza cliente e data
+df["_date_only"] = pd.to_datetime(df["__dt"]).dt.date
+df["_cliente_norm"] = df["Cliente"].astype(str).str.strip()
+df = df[df["_cliente_norm"] != ""]  # ignora cliente vazio
+
+for cliente, g in df.groupby("_cliente_norm"):
+    # 1 visita por dia
+    dias_unicos = sorted(set(g["_date_only"].tolist()))
+    if len(dias_unicos) < 2:
+        continue  # precisa de 2 dias distintos para ter média
+
+    dias_ts = [pd.to_datetime(d) for d in dias_unicos]
+
+    # intervalos em dias — só positivos (elimina 0)
+    diffs = [(dias_ts[i] - dias_ts[i-1]).days for i in range(1, len(dias_ts))]
+    diffs_pos = [d for d in diffs if d > 0]
+    if len(diffs_pos) == 0:
+        continue  # todos no mesmo dia → sem média útil
+
+    media = sum(diffs_pos) / len(diffs_pos)
+    dias_desde_ultima = (today - dias_ts[-1]).days
+
+    label_emoji, label = classificar_relative(dias_desde_ultima, media)
     rows.append({
-        "Cliente": str(cliente),
-        "ultima_visita": datas[-1],
+        "Cliente": cliente,
+        "ultima_visita": dias_ts[-1],
         "media_dias": round(media, 1),
-        "dias_desde_ultima": int(dias),
+        "dias_desde_ultima": int(dias_desde_ultima),
         "status_atual": label,
         "status_emoji": label_emoji
     })
 
 ultimo = pd.DataFrame(rows)
-print(f"📦 Clientes com histórico ≥2 visitas: {len(ultimo)}")
+print(f"📦 Clientes com histórico válido (≥2 dias distintos): {len(ultimo)}")
 if ultimo.empty:
     sys.exit(0)
 
