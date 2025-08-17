@@ -23,14 +23,18 @@ jobs:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: "${{ inputs.test_chat_id || secrets.TELEGRAM_CHAT_ID }}"
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # >>> se quiser forçar a aba base, troque o valor abaixo
+      BASE_ABA: "Base de Dados"
+
       STATUS_ABA: clientes_status
       ABA_TRANSICOES: freq_transicoes
       SEND_AT_8_CARDS: "true"
-      # 👉 Para testar sem gravar nada na planilha:
+      # teste sem gravar na planilha
       ALLOW_WRITE: "false"
-      # 👉 Ignora erros de Telegram (400/429) e não derruba o job:
+      # não derruba o job se o Telegram responder 400/429
       SAFE_TELEGRAM: "true"
-      # Traceback mais limpo no log:
+      # traceback limpo no log
       PYTHONFAULTHANDLER: "1"
 
     steps:
@@ -50,7 +54,6 @@ jobs:
           echo "$GCP_SERVICE_ACCOUNT" > sa.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
 
-      # ===== DIAGNÓSTICOS ÚTEIS =====
       - name: Dump required envs (masked)
         run: |
           echo "SHEET_ID set? $(test -n "$SHEET_ID" && echo yes || echo no)"
@@ -95,7 +98,6 @@ jobs:
           r.raise_for_status()
           PY
 
-      # ===== EXECUÇÃO COM TRACEBACK =====
       - name: Run notifier (send cards)
         run: |
           python - <<'PY' || exit 1
