@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test_chat_id:
-        description: "(opcional) CHAT_ID de TESTE do Telegram (vazio = usa o secrets)"
+        description: "(opcional) CHAT_ID de TESTE do Telegram (vazio = usa o secret)"
         required: false
         default: ""
   schedule:
@@ -21,37 +21,40 @@ jobs:
       TZ: America/Sao_Paulo
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ inputs.test_chat_id != '' && inputs.test_chat_id || secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_CHAT_ID: "${{ inputs.test_chat_id || secrets.TELEGRAM_CHAT_ID }}"
       GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       STATUS_ABA: clientes_status
       ABA_TRANSICOES: freq_transicoes
-      SEND_AT_8_CARDS: "true"   # envia cards
+      SEND_AT_8_CARDS: "true"
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pandas gspread gspread-dataframe google-auth requests pytz
 
-      - name: Write SA file and export path
+      - name: Persist SA and export path
         run: |
+          test -n "$GCP_SERVICE_ACCOUNT" || (echo "❌ GCP_SERVICE_ACCOUNT ausente" && exit 1)
           echo "$GCP_SERVICE_ACCOUNT" > sa.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
 
-      # ===== DIAGNÓSTICO 1: SA email =====
-      - name: Show Service Account email
+      - name: Dump required envs (masked)
         run: |
+          echo "SHEET_ID set? $(test -n "$SHEET_ID" && echo yes || echo no)"
+          echo "TELEGRAM_TOKEN set? $(test -n "$TELEGRAM_TOKEN" && echo yes || echo no)"
+          echo "TELEGRAM_CHAT_ID (masked): ${TELEGRAM_CHAT_ID:0:3}***"
           python - <<'PY'
           import json, os
           sa = json.loads(os.environ["GCP_SERVICE_ACCOUNT"])
           print("SA client_email:", sa.get("client_email"))
           PY
 
-      # ===== DIAGNÓSTICO 2: Acesso ao Sheets =====
       - name: Test Google Sheets access
         run: |
           python - <<'PY'
@@ -61,24 +64,28 @@ jobs:
           info = json.loads(os.environ["GCP_SERVICE_ACCOUNT"])
           creds = Credentials.from_service_account_info(info, scopes=scopes)
           gc = gspread.authorize(creds)
-          sh = gc.open_by_key(os.environ["SHEET_ID"])
+          sid = os.environ["SHEET_ID"]
+          try:
+            sh = gc.open_by_key(sid)
+          except Exception as e:
+            print("open_by_key falhou:", e)
+            print("Tentando open_by_url…")
+            sh = gc.open_by_url(sid)
           print("Sheet title:", sh.title)
-          print("Worksheets:", [w.title for w in sh.worksheets()])
           PY
 
-      # ===== DIAGNÓSTICO 3: Teste Telegram (opcional) =====
       - name: Test Telegram (ping)
+        if: ${{ env.TELEGRAM_TOKEN != '' && env.TELEGRAM_CHAT_ID != '' }}
         run: |
           python - <<'PY'
           import os, requests
           tok = os.environ["TELEGRAM_TOKEN"].strip()
           chat = os.environ["TELEGRAM_CHAT_ID"].strip()
-          url = f"https://api.telegram.org/bot{tok}/sendMessage"
-          r = requests.post(url, json={"chat_id": chat, "text": "🔧 ping do notifier (teste de conexão)"}, timeout=20)
-          print("HTTP:", r.status_code, r.text[:180])
+          r = requests.post(f"https://api.telegram.org/bot{tok}/sendMessage",
+                            json={"chat_id": chat, "text": "🔧 ping do notifier (teste)"}, timeout=20)
+          print("HTTP:", r.status_code, r.text[:200])
           r.raise_for_status()
           PY
 
-      # ===== EXECUÇÃO REAL =====
       - name: Run notifier (send cards)
         run: python notify_inline.py
