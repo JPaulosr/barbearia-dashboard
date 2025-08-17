@@ -35,13 +35,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas gspread gspread_dataframe google-auth requests pytz
 
-      - name: Write service account and run inline script
+      - name: Write service account to file
         run: |
-          set -e
           echo "$GCP_SERVICE_ACCOUNT" > sa.json
-          export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
 
-          python -u - <<'PY'
+      - name: Create script file
+        run: |
+          cat > notify_inline.py << 'PY'
 import os, sys, json, pandas as pd, requests, gspread, pytz
 from datetime import datetime
 from google.oauth2.service_account import Credentials
@@ -51,7 +52,6 @@ def fail(msg):
     print("ERRO:", msg, file=sys.stderr)
     sys.exit(1)
 
-# ===== 1) Validar envs
 need = ["SHEET_ID", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"]
 missing = [k for k in need if not os.getenv(k)]
 if missing:
@@ -61,14 +61,12 @@ sheet_id = os.getenv("SHEET_ID")
 token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-# ===== 2) Credenciais
 try:
     with open("sa.json", "r", encoding="utf-8") as f:
         sa_info = json.load(f)
 except Exception as e:
     fail(f"Falha lendo sa.json: {e}")
 
-# ===== 3) Conectar no Sheets
 try:
     scopes = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
@@ -80,7 +78,6 @@ try:
 except Exception as e:
     fail(f"Falha conectando no Google Sheets: {e}")
 
-# ===== 4) Ler abas
 def read_tab(name):
     try:
         ws = sh.worksheet(name)
@@ -91,18 +88,14 @@ def read_tab(name):
     except Exception as e:
         fail(f"Aba '{name}' não encontrada ou erro ao ler: {e}")
 
-# Tente com nomes exatos usados na planilha
 base = read_tab("Base de Dados")
 try:
-    status = read_tab("clientes_status")
+    _ = read_tab("clientes_status")
 except SystemExit:
     raise
-except Exception:
-    # não é crítica pra notificação simples; segue sem status
-    print("[WARN] Não foi possível ler 'clientes_status'. Prosseguindo sem ela.")
+except Exception as e:
+    print("[WARN] Não foi possível ler 'clientes_status':", e)
 
-# ===== 5) Montar mensagem (clientes 60+ dias sem vir)
-from datetime import date
 def parse_dt(x):
     x = (x or "").strip()
     for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
@@ -138,7 +131,6 @@ else:
 print("[OK] Mensagem montada:")
 print(msg)
 
-# ===== 6) Enviar pro Telegram
 try:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     r = requests.post(url, json={"chat_id": chat_id, "text": msg}, timeout=30)
@@ -150,3 +142,6 @@ try:
 except Exception as e:
     fail(f"Erro ao enviar Telegram: {e}")
 PY
+
+      - name: Run script
+        run: python notify_inline.py
