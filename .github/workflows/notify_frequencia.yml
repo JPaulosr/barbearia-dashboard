@@ -26,8 +26,12 @@ jobs:
       STATUS_ABA: clientes_status
       ABA_TRANSICOES: freq_transicoes
       SEND_AT_8_CARDS: "true"
-      # 👉 Troque para "true" quando a Service Account tiver EDITOR
+      # 👉 Para testar sem gravar nada na planilha:
       ALLOW_WRITE: "false"
+      # 👉 Ignora erros de Telegram (400/429) e não derruba o job:
+      SAFE_TELEGRAM: "true"
+      # Traceback mais limpo no log:
+      PYTHONFAULTHANDLER: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +50,7 @@ jobs:
           echo "$GCP_SERVICE_ACCOUNT" > sa.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
 
+      # ===== DIAGNÓSTICOS ÚTEIS =====
       - name: Dump required envs (masked)
         run: |
           echo "SHEET_ID set? $(test -n "$SHEET_ID" && echo yes || echo no)"
@@ -74,6 +79,7 @@ jobs:
             print("Tentando open_by_url…")
             sh = gc.open_by_url(sid)
           print("Sheet title:", sh.title)
+          print("Worksheets:", [w.title for w in sh.worksheets()])
           PY
 
       - name: Test Telegram (ping)
@@ -89,5 +95,16 @@ jobs:
           r.raise_for_status()
           PY
 
+      # ===== EXECUÇÃO COM TRACEBACK =====
       - name: Run notifier (send cards)
-        run: python notify_inline.py
+        run: |
+          python - <<'PY' || exit 1
+          import runpy, sys, traceback
+          try:
+              runpy.run_path("notify_inline.py", run_name="__main__")
+          except SystemExit:
+              raise
+          except Exception:
+              traceback.print_exc()
+              sys.exit(1)
+          PY
