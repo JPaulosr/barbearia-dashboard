@@ -32,8 +32,9 @@ def _bool_env(name, default=False):
     return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 # ======== CONTROLES ========
-SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # envia um CARD por cliente pendente
-ALLOW_WRITE = _bool_env("ALLOW_WRITE", True)           # 👉 gate de escrita (teste = False)
+SEND_AT_8_CARDS = _bool_env("SEND_AT_8_CARDS", False)  # cards às 08:00
+ALLOW_WRITE = _bool_env("ALLOW_WRITE", True)           # gate de escrita (teste = False)
+SAFE_TELEGRAM = _bool_env("SAFE_TELEGRAM", False)      # não falha se Telegram 400/429
 
 # Envio imediato desativado (apenas batch às 08:00)
 SEND_FEEDBACK_ON_NEW_VISIT_ALL = False
@@ -48,7 +49,9 @@ TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
 TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
 
 def fail(msg):
-    print(f"💥 {msg}", file=sys.stderr)
+    import traceback
+    print("💥 ERRO:", msg, file=sys.stderr)
+    traceback.print_exc()
     sys.exit(1)
 
 need = ["SHEET_ID", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID"]
@@ -124,13 +127,19 @@ def _norm(s: str) -> str:
     return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
 
 def tg_send(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
-               "parse_mode": "HTML", "disable_web_page_preview": True}
-    r = requests.post(url, json=payload, timeout=30)
-    print("↪ Telegram:", r.status_code, r.text[:160])
-    if not r.ok:
-        raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
+                   "parse_mode": "HTML", "disable_web_page_preview": True}
+        r = requests.post(url, json=payload, timeout=30)
+        print("↪ Telegram:", r.status_code, r.text[:160])
+        if not r.ok and not SAFE_TELEGRAM:
+            raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
+    except Exception as e:
+        if SAFE_TELEGRAM:
+            print("⚠️ Telegram sendMessage falhou, mas ignorado (SAFE_TELEGRAM):", e)
+        else:
+            raise
 
 def tg_send_photo(photo_url, caption):
     try:
@@ -142,7 +151,8 @@ def tg_send_photo(photo_url, caption):
         if not r.ok:
             raise RuntimeError(f"sendPhoto {r.status_code}: {r.text}")
     except Exception as e:
-        print("⚠️ Falha sendPhoto, enviando texto. Motivo:", e)
+        print("⚠️ Falha sendPhoto:", e)
+        # Fallback para texto; se também falhar, tg_send respeita SAFE_TELEGRAM
         tg_send(caption)
 
 # =========================
@@ -445,14 +455,15 @@ if CLIENTE:
 if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
-        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES} | ALLOW_WRITE={ALLOW_WRITE}")
+        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Fila={ABA_TRANSICOES} | "
+              f"ALLOW_WRITE={ALLOW_WRITE} | SAFE_TELEGRAM={SAFE_TELEGRAM}")
 
-        # 1) Detecta mudanças e grava pendências (em memória; persistência só se ALLOW_WRITE)
+        # 1) Persistir fila (se permitido)
         if not df_trans.empty and ALLOW_WRITE:
             ws_trans.clear()
             set_with_dataframe(ws_trans, df_trans)
 
-        # 2) Se for a execução das 08:00 → envia CARDS por cliente pendente
+        # 2) Batch das 08:00 → envia CARDS por cliente pendente
         if SEND_AT_8_CARDS:
             send_cards_from_queue()
 
