@@ -1,4 +1,4 @@
-# notify_inline.py — Frequência por MÉDIA + cache + foto + alerta de retorno
+# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (resumo/entradas/retorno)
 import os
 import sys
 import json
@@ -19,12 +19,30 @@ TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
 REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
-STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está o link da foto
+STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está Cliente + link da foto
 FOTO_COL_ENV = os.getenv("FOTO_COL", "").strip()
-ENVIAR_ALERTA_QUANDO_VOLTAR_EM_DIA = True  # mantém transições globais
+
+def _bool_env(name, default=False):
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+
+# ======== CONTROLES DE ENVIO ========
+# (para 08:00 enviar listas; no watch frequente, não)
+SEND_DAILY_HEADER = _bool_env("SEND_DAILY_HEADER", False)
+SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)
+SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
+
+# Feedback ao registrar nova visita (aumentou nº de dias distintos):
+SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", False)  # todos
+SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # ou só se estava atrasado
+
+# Transições:
+SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)  # “voltou pra Em dia”
 
 # =========================
-# ENVS (compatíveis com seu workflow)
+# ENVS obrigatórios
 # =========================
 SHEET_ID = (os.getenv("SHEET_ID") or "").strip()
 TELEGRAM_TOKEN = (os.getenv("TELEGRAM_TOKEN") or "").strip()
@@ -107,7 +125,6 @@ def tg_send(text):
         raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
 
 def tg_send_photo(photo_url, caption):
-    """Tenta mandar foto; se falhar, manda só a legenda."""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "photo": photo_url,
@@ -138,12 +155,11 @@ if STATUS_ABA in abas:
     try:
         ws_status = abas[STATUS_ABA]
         df_status = get_as_dataframe(ws_status, evaluate_formulas=True, dtype=str).fillna("")
-        # tenta descobrir coluna de foto
         cols_lower = {c.strip().lower(): c for c in df_status.columns if isinstance(c, str)}
         cand = FOTO_COL_ENV.lower() if FOTO_COL_ENV else ""
         foto_candidates = [cand] if cand else ["foto", "imagem", "link_foto", "url_foto", "foto_link", "link", "image"]
         foto_col = next((cols_lower[x] for x in foto_candidates if x in cols_lower), None)
-        cli_col = next((cols_lower[x] for x in ["cliente", "nome", "nome_cliente"] if x in cols_lower), None)
+        cli_col  = next((cols_lower[x] for x in ["cliente", "nome", "nome_cliente"] if x in cols_lower), None)
         if foto_col and cli_col:
             tmp = df_status[[cli_col, foto_col]].copy()
             tmp.columns = ["Cliente", "Foto"]
@@ -193,7 +209,7 @@ for cliente, g in df.groupby("_cliente_norm"):
         "dias_desde_ultima": int(dias_desde_ultima),
         "status_atual": label,
         "status_emoji": label_emoji,
-        "visitas_total": len(dias_unicos)  # NOVO: total de dias distintos (para detectar retroativo)
+        "visitas_total": len(dias_unicos)
     })
 
 ultimo = pd.DataFrame(rows)
@@ -235,7 +251,7 @@ df_cache["ultima_visita_cache_parsed"] = df_cache["ultima_visita_cache"].apply(p
 cache_by_cli = {str(r["Cliente"]).strip().lower(): r for _, r in df_cache.iterrows()}
 
 # =========================
-# Resumo + listas (como antes)
+# Resumo + listas (para 08:00, conforme flags)
 # =========================
 def daily_summary_and_lists():
     total = len(ultimo)
@@ -243,15 +259,16 @@ def daily_summary_and_lists():
     pouco  = (ultimo["status_atual"]=="Pouco atrasado").sum()
     muito  = (ultimo["status_atual"]=="Muito atrasado").sum()
 
-    header = (
-        "<b>📊 Relatório de Frequência — Salão JP</b>\n"
-        f"Data/hora: {html.escape(now_br())}\n\n"
-        f"👥 Ativos (c/ média): <b>{total}</b>\n"
-        f"🟢 Em dia: <b>{em_dia}</b>\n"
-        f"🟠 Pouco atrasado: <b>{pouco}</b>\n"
-        f"🔴 Muito atrasado: <b>{muito}</b>"
-    )
-    tg_send(header)
+    if SEND_DAILY_HEADER:
+        header = (
+            "<b>📊 Relatório de Frequência — Salão JP</b>\n"
+            f"Data/hora: {html.escape(now_br())}\n\n"
+            f"👥 Ativos (c/ média): <b>{total}</b>\n"
+            f"🟢 Em dia: <b>{em_dia}</b>\n"
+            f"🟠 Pouco atrasado: <b>{pouco}</b>\n"
+            f"🔴 Muito atrasado: <b>{muito}</b>"
+        )
+        tg_send(header)
 
     def lista(bucket_name, emoji):
         subset = ultimo.loc[ultimo["status_atual"]==bucket_name, ["Cliente","media_dias","dias_desde_ultima"]]
@@ -269,14 +286,16 @@ def daily_summary_and_lists():
             for i in range(0, len(nomes), 60):
                 tg_send(f"<b>{emoji} {bucket_name}</b>\n" + "\n".join(nomes[i:i+60]))
 
-    lista("Pouco atrasado","🟠")
-    lista("Muito atrasado","🔴")
+    if SEND_LIST_POUCO:
+        lista("Pouco atrasado","🟠")
+    if SEND_LIST_MUITO:
+        lista("Muito atrasado","🔴")
 
 # =========================
-# Transições + FEEDBACK de nova visita (com FOTO)
+# Transições + Feedback (retorno com foto)
 # =========================
 def changes_and_feedback():
-    transicoes, feedbacks = [], []
+    transicoes = []
     ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
 
     for key, row in ultimo_by_cli.items():
@@ -292,63 +311,64 @@ def changes_and_feedback():
         cached_dt = cached["ultima_visita_cache_parsed"] if cached is not None else None
         cached_visitas = int(cached["visitas_total_cache"]) if (cached is not None and str(cached.get("visitas_total_cache","")).strip().isdigit()) else 0
 
-        # NOVO: considerar nova visita quando aumentou o n° de dias distintos
+        # Nova visita = aumentou nº de dias distintos (captura retroativo também)
         new_visit = visitas_total > cached_visitas
 
-        # FEEDBACK quando nova visita:
-        # - Sempre mostra um cartão bonito.
-        # - Se cliente estava atrasado (Pouco/Muito) ANTES, destacar esse fato ("estava atrasado e voltou").
-        if new_visit:
-            estava_atrasado = cached_status in ("Pouco atrasado", "Muito atrasado")
+        # FEEDBACK de atendimento (retorno)
+        estava_atrasado = cached_status in ("Pouco atrasado", "Muito atrasado")
+        enviar_feedback = False
+        if SEND_FEEDBACK_ON_NEW_VISIT_ALL:
+            enviar_feedback = True
+        elif SEND_FEEDBACK_ONLY_IF_WAS_LATE and estava_atrasado:
+            enviar_feedback = True
+
+        if new_visit and enviar_feedback:
             ultima_str = pd.to_datetime(ultima).strftime("%d/%m/%Y")
             media_str = f"{media:.1f}".replace(".", ",")
-            status_emoji = row.status_emoji or ""
-            caption = (
-                "⏰ <b>Alerta de Frequência</b>\n"
-                f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
-                f"{status_emoji} Status: <b>{html.escape(status)}</b>\n"
-                f"🗓️ Último: <b>{ultima_str}</b>\n"
-                f"🔁 Média: <b>{media_str} dias</b>\n"
-                f"⏳ Sem vir há: <b>{dias} dias</b>"
-            )
             if estava_atrasado:
-                caption = "✅ <b>Retorno registrado</b>\n" + \
-                          f"👤 Cliente: <b>{html.escape(nome)}</b>\n" + \
-                          f"⚠️ Estava: <b>{html.escape(cached_status)}</b>\n" + \
-                          f"🗓️ Atendimento registrado em: <b>{ultima_str}</b>\n" + \
-                          f"🔁 Média: <b>{media_str} dias</b>\n" + \
-                          f"⏳ Estava há: <b>{dias} dias</b>"
-
+                caption = (
+                    "✅ <b>Retorno registrado</b>\n"
+                    f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+                    f"⚠️ Estava: <b>{html.escape(cached_status)}</b>\n"
+                    f"🗓️ Atendimento registrado em: <b>{ultima_str}</b>\n"
+                    f"🔁 Média: <b>{media_str} dias</b>\n"
+                    f"⏳ Estava há: <b>{dias} dias</b>"
+                )
+            else:
+                caption = (
+                    "📌 <b>Atendimento registrado</b>\n"
+                    f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+                    f"{row.status_emoji or ''} Status: <b>{html.escape(status)}</b>\n"
+                    f"🗓️ Data: <b>{ultima_str}</b>\n"
+                    f"🔁 Média: <b>{media_str} dias</b>\n"
+                    f"⏳ Distância da última: <b>{dias} dias</b>"
+                )
             foto = foto_map.get(_norm(nome))
             if foto:
                 tg_send_photo(foto, caption)
             else:
                 tg_send(caption)
 
-        # Mudança de status (como antes)
+        # Transições de status:
         if cached is not None and status != cached_status:
-            if status in ("Pouco atrasado","Muito atrasado") or (ENVIAR_ALERTA_QUANDO_VOLTAR_EM_DIA and status=="Em dia"):
-                if status == "Pouco atrasado":
-                    transicoes.append(
-                        "📣 Atualização de Frequência\n"
-                        f"<b>{html.escape(nome)}</b> entrou em <b>Pouco atrasado</b>."
-                    )
-                elif status == "Muito atrasado":
-                    transicoes.append(
-                        "📣 Atualização de Frequência\n"
-                        f"<b>{html.escape(nome)}</b> entrou em <b>Muito atrasado</b>."
-                    )
-                else:
-                    transicoes.append(
-                        "✅ Atualização de Frequência\n"
-                        f"<b>{html.escape(nome)}</b> voltou para <b>Em dia</b>."
-                    )
+            # Entrou em atraso (Em dia -> Pouco/Muito) → sempre avisar
+            if status in ("Pouco atrasado", "Muito atrasado"):
+                transicoes.append(
+                    "📣 Atualização de Frequência\n"
+                    f"<b>{html.escape(nome)}</b> entrou em <b>{html.escape(status)}</b>."
+                )
+            # Voltou para Em dia → só se flag ligada
+            elif SEND_TRANSITION_BACK_TO_EM_DIA and status == "Em dia":
+                transicoes.append(
+                    "✅ Atualização de Frequência\n"
+                    f"<b>{html.escape(nome)}</b> voltou para <b>Em dia</b>."
+                )
 
-    # Envios anti-flood
+    # Envia transições (anti-flood simples)
     for txt in transicoes[:30]:
         tg_send(txt)
 
-    # Atualizar cache (inclui visitas_total_cache)
+    # Atualiza cache
     out = ultimo[["Cliente","ultima_visita","status_atual","media_dias","visitas_total"]].copy()
     out["ultima_visita"] = pd.to_datetime(out["ultima_visita"]).dt.strftime("%Y-%m-%d")
     out.rename(columns={
@@ -362,7 +382,7 @@ def changes_and_feedback():
     set_with_dataframe(ws_cache, out)
 
 # =========================
-# MODO INDIVIDUAL (input opcional CLIENTE)
+# MODO INDIVIDUAL (opcional)
 # =========================
 CLIENTE = os.getenv("CLIENTE") or os.getenv("INPUT_CLIENTE")
 if CLIENTE:
@@ -403,8 +423,9 @@ if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
-        daily_summary_and_lists()
-        changes_and_feedback()
+        if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
+            daily_summary_and_lists()   # para 08:00
+        changes_and_feedback()          # para transições + retorno
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
