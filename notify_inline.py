@@ -34,15 +34,21 @@ SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)
 SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
 
 # Feedback ao registrar nova visita (aumentou nº de dias distintos):
-# >>> NOVO PADRÃO: sempre enviar feedback (com foto) <<<
+# >>> PADRÃO: sempre enviar feedback (com foto) <<<
 SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", True)
 SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", False)
 
-# Transições:
-SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)
+# Transições (alertas individuais):
+SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", True)
+
+# Lista agrupada de transições para acompanhar os envios diários
+SEND_TRANSITION_SUMMARY = _bool_env("SEND_TRANSITION_SUMMARY", True)
 
 # Evitar feedback duplicado por visita
 FEEDBACK_ONCE_PER_VISIT = True
+
+# Forçar diárias via workflow_dispatch (fallback)
+FORCE_DAILY = _bool_env("FORCE_DAILY", False)
 
 # =========================
 # ENVS obrigatórios
@@ -297,11 +303,76 @@ def daily_summary_and_lists():
     if SEND_LIST_MUITO:
         lista("Muito atrasado","🔴")
 
+# --- Meta-cache para envio diário único ---
+ABA_META = "status_cache_meta"
+
+def ensure_meta():
+    try:
+        return sh.worksheet(ABA_META)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(ABA_META, rows=2, cols=2)
+        set_with_dataframe(ws, pd.DataFrame(columns=["last_daily_sent"]))
+        return ws
+
+def get_last_daily_sent(ws_meta):
+    dfm = get_as_dataframe(ws_meta, evaluate_formulas=True, dtype=str).fillna("")
+    if "last_daily_sent" in dfm.columns and not dfm["last_daily_sent"].empty:
+        return str(dfm["last_daily_sent"].iloc[0]).strip()
+    return ""
+
+def set_last_daily_sent(ws_meta, ymd):
+    dfm = pd.DataFrame({"last_daily_sent":[ymd]})
+    ws_meta.clear()
+    set_with_dataframe(ws_meta, dfm)
+
+DAILY_SENT_THIS_RUN = False  # marcado quando as listas do dia forem enviadas
+
+def daily_once_guard_and_run():
+    global DAILY_SENT_THIS_RUN
+    ws_meta = ensure_meta()
+    hoje_ymd = pd.Timestamp.now(tz=pytz.timezone(TZ)).strftime("%Y-%m-%d")
+    last = get_last_daily_sent(ws_meta)
+
+    if not FORCE_DAILY and last == hoje_ymd:
+        print(f"ℹ️ Listas diárias já enviadas hoje ({last}). Pulando…")
+        DAILY_SENT_THIS_RUN = False
+        return
+
+    daily_summary_and_lists()
+    set_last_daily_sent(ws_meta, hoje_ymd)
+    DAILY_SENT_THIS_RUN = True
+    print(f"✅ Listas marcadas como enviadas em {hoje_ymd}.")
+
 # =========================
-# Transições + Feedback (retorno com foto)
+# Transições + Feedback (retorno com foto) + Grupos
 # =========================
+TRANSITION_GROUPS = {"E2P": [], "P2M": [], "E2M": []}
+
+def send_transition_summary():
+    """Envia um resumo agrupado das transições detectadas nesta execução."""
+    if not SEND_TRANSITION_SUMMARY:
+        return
+    if not DAILY_SENT_THIS_RUN:
+        # só manda a lista agrupada quando as listas diárias foram enviadas nesta execução
+        return
+
+    blocos = []
+    if TRANSITION_GROUPS["E2P"]:
+        nomes = "\n".join(f"- {html.escape(n)}" for n in sorted(set(TRANSITION_GROUPS["E2P"])))
+        blocos.append(f"<b>🟢→🟠 Em dia → Pouco atrasado</b>\n{nomes}")
+    if TRANSITION_GROUPS["P2M"]:
+        nomes = "\n".join(f"- {html.escape(n)}" for n in sorted(set(TRANSITION_GROUPS["P2M"])))
+        blocos.append(f"<b>🟠→🔴 Pouco atrasado → Muito atrasado</b>\n{nomes}")
+    if TRANSITION_GROUPS["E2M"]:
+        nomes = "\n".join(f"- {html.escape(n)}" for n in sorted(set(TRANSITION_GROUPS["E2M"])))
+        blocos.append(f"<b>🟢→🔴 Em dia → Muito atrasado</b>\n{nomes}")
+
+    if blocos:
+        body = "<b>📣 Mudanças de status desde a última atualização</b>\n\n" + "\n\n".join(blocos)
+        tg_send(body)
+
 def changes_and_feedback():
-    transicoes = []
+    transicoes_individuais = []
     ultimo_by_cli = {r.Cliente.strip().lower(): r for r in ultimo.itertuples(index=False)}
 
     for key, row in ultimo_by_cli.items():
@@ -365,21 +436,30 @@ def changes_and_feedback():
             if cached is not None:
                 cached["feedback_sent_for_date"] = ultima_key  # marca como enviado
 
-        # Transições de status
+        # Transições de status (individuais + grupos)
         if cached is not None and status != cached_status:
+            # grupos
+            if cached_status == "Em dia" and status == "Pouco atrasado":
+                TRANSITION_GROUPS["E2P"].append(nome)
+            elif cached_status == "Pouco atrasado" and status == "Muito atrasado":
+                TRANSITION_GROUPS["P2M"].append(nome)
+            elif cached_status == "Em dia" and status == "Muito atrasado":
+                TRANSITION_GROUPS["E2M"].append(nome)
+
+            # individuais
             if status in ("Pouco atrasado", "Muito atrasado"):
-                transicoes.append(
+                transicoes_individuais.append(
                     "📣 Atualização de Frequência\n"
                     f"<b>{html.escape(nome)}</b> entrou em <b>{html.escape(status)}</b>."
                 )
             elif SEND_TRANSITION_BACK_TO_EM_DIA and status == "Em dia":
-                transicoes.append(
+                transicoes_individuais.append(
                     "✅ Atualização de Frequência\n"
                     f"<b>{html.escape(nome)}</b> voltou para <b>Em dia</b>."
                 )
 
-    # Envia transições (anti-flood simples)
-    for txt in transicoes[:30]:
+    # Envia transições individuais (anti-flood simples)
+    for txt in transicoes_individuais[:30]:
         tg_send(txt)
 
     # Atualiza cache (preserva feedback_sent_for_date quando possível)
@@ -427,7 +507,7 @@ if CLIENTE:
         sys.exit(0)
     row = sel.sort_values("ultima_visita", ascending=False).iloc[0]
     ultima_str = pd.to_datetime(row["ultima_visita"]).strftime("%d/%m/%Y")
-    media_str = f"{row['media_dias']:.1f}".replace(".", ",")
+    media_str = f"{row["media_dias"]:.1f}".replace(".", ",")
     dias_int = int(row["dias_desde_ultima"])
     status_emoji = row.get("status_emoji") or ""
     status_txt = row.get("status_atual") or ""
@@ -454,9 +534,17 @@ if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
+
+        # 🔒 Listas de 08h: 1x ao dia (ou força manual)
         if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
-            daily_summary_and_lists()   # para 08:00
-        changes_and_feedback()          # para transições + retorno (1 feedback por visita)
+            daily_once_guard_and_run()
+
+        # 📣 Transições + cards de retorno
+        changes_and_feedback()
+
+        # 🗂️ Resumo agrupado das transições (somente quando houve envio diário nesta execução)
+        send_transition_summary()
+
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
