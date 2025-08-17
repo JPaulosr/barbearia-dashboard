@@ -10,6 +10,7 @@ from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
 from datetime import datetime
 import pytz
+import re
 
 # =========================
 # CONFIG POR VARIÁVEIS DE AMBIENTE (use GitHub Secrets)
@@ -27,6 +28,16 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
 # Timezone (Brasil)
 TZ = os.getenv("TIMEZONE", "America/Sao_Paulo")
 
+# ---------------- Markdown helpers ----------------
+MD_CHARS = r"_*[]()~`>#+-=|{}.!"
+MD_ESCAPER = re.compile("([\\_\\*\\[\\]\\(\\)\\~\\`\\>\\#\\+\\-\\=\\|\\{\\}\\.\\!])")
+
+def md_escape(text: str) -> str:
+    if text is None:
+        return ""
+    return MD_ESCAPER.sub(r"\\\1", str(text))
+
+# ---------------- Telegram ----------------
 def notificar(mensagem: str) -> bool:
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("⚠️ TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID ausentes.")
@@ -39,15 +50,15 @@ def notificar(mensagem: str) -> bool:
         "disable_web_page_preview": True,
     }
     try:
+        print("➡️ Enviando para Telegram...")
         r = requests.post(url, json=payload, timeout=20)
-        ok = r.ok
-        if not ok:
-            print("❌ Falha Telegram:", r.text)
-        return ok
+        print("Resposta do Telegram:", r.text)
+        return r.ok
     except Exception as e:
         print("❌ Erro Telegram:", e)
         return False
 
+# ---------------- Sheets ----------------
 def conectar_sheets():
     if not GCP_SERVICE_ACCOUNT_JSON:
         raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON não configurado.")
@@ -70,6 +81,7 @@ def carregar_dados():
     df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
     df["Cliente"] = df["Cliente"].astype(str).str.strip()
+    print(f"✅ Base carregada: {len(df)} linhas válidas.")
     return df
 
 def carregar_status():
@@ -77,6 +89,7 @@ def carregar_status():
     try:
         ws = sh.worksheet(STATUS_ABA)
     except Exception:
+        print("ℹ️ Aba de status não encontrada; seguindo sem filtro de 'Ativo'.")
         return pd.DataFrame(columns=["Cliente", "Status"])
     stt = get_as_dataframe(ws).dropna(how="all")
     stt.columns = [str(c).strip() for c in stt.columns]
@@ -89,15 +102,16 @@ def carregar_status():
             stt = stt.rename(columns={poss_status[0]: "Status"})
     stt["Cliente"] = stt.get("Cliente", "").astype(str).str.strip()
     stt["Status"]  = stt.get("Status", "").astype(str).str.strip()
+    print(f"✅ Status carregado: {len(stt)} linhas.")
     return stt[["Cliente", "Status"]]
 
+# ---------------- Lógica de frequência ----------------
 def calcular_frequencia(df_base, df_status):
-    # Considera somente clientes 'Ativo' se existir df_status
     if not df_status.empty:
         ativos = set(df_status[df_status["Status"].str.lower() == "ativo"]["Cliente"].tolist())
         df_base = df_base[df_base["Cliente"].isin(ativos)]
+        print(f"🧹 Filtrados 'Ativo': {len(df_base)} linhas sobram.")
 
-    # Um atendimento por dia por cliente
     atendimentos = df_base.drop_duplicates(subset=["Cliente", "Data"]).copy()
 
     hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize()
@@ -129,7 +143,9 @@ def calcular_frequencia(df_base, df_status):
             "Dias Desde Último": dias_sem_vir
         })
 
-    return pd.DataFrame(resultados)
+    df_out = pd.DataFrame(resultados)
+    print(f"📦 Clientes com frequência calculada: {len(df_out)}")
+    return df_out
 
 def enviar_resumo_e_listas(freq_df: pd.DataFrame):
     tot = freq_df["Cliente"].nunique()
@@ -144,34 +160,44 @@ def enviar_resumo_e_listas(freq_df: pd.DataFrame):
         f"🟠 Pouco atrasado: *{n_pouco}*\n"
         f"🔴 Muito atrasado: *{n_muito}*"
     )
+    print("📝 Resumo:\n", msg_resumo)
     ok1 = notificar(msg_resumo)
 
     def lista(txt, df):
-        if df.empty: 
+        if df.empty:
+            print(f"ℹ️ Lista vazia: {txt}")
             return True
-        nomes = "\n".join(f"- {n}" for n in df["Cliente"].tolist())
-        return notificar(f"*{txt}*\n{nomes}")
+        nomes = "\n".join(f"- {md_escape(n)}" for n in df["Cliente"].tolist())
+        msg = f"*{txt}*\n{nomes}"
+        print("📝 Lista:\n", msg)
+        return notificar(msg)
 
     ok2 = lista("🟠 Pouco atrasados", freq_df[freq_df["Status_Label"] == "Pouco atrasado"][["Cliente"]])
     ok3 = lista("🔴 Muito atrasados", freq_df[freq_df["Status_Label"] == "Muito atrasado"][["Cliente"]])
 
     return ok1 and ok2 and ok3
 
-def main():
-    tz = pytz.timezone(TZ)
-    agora = datetime.now(tz)
-    print("🕗 Rodando em:", agora.isoformat())
-
-    df_base = carregar_dados()
-    df_stt  = carregar_status()
-
-    freq_df = calcular_frequencia(df_base, df_stt)
-    if freq_df.empty:
-        print("⚠️ Nenhum cliente com dados suficientes para cálculo de frequência.")
-        return
-
-    sucesso = enviar_resumo_e_listas(freq_df)
-    print("✅ Envio concluído." if sucesso else "❌ Envio com falhas.")
-
+# ---------------- Main ----------------
 if __name__ == "__main__":
-    main()
+    try:
+        tz = pytz.timezone(TZ)
+        agora = datetime.now(tz)
+        print("🕗 Rodando em:", agora.isoformat())
+
+        df_base = carregar_dados()
+        df_stt  = carregar_status()
+
+        freq_df = calcular_frequencia(df_base, df_stt)
+        if freq_df.empty:
+            print("⚠️ Nenhum cliente com dados suficientes para cálculo de frequência.")
+            raise SystemExit(2)
+
+        sucesso = enviar_resumo_e_listas(freq_df)
+        if not sucesso:
+            print("❌ Envio teve falhas (verifique token/chat do Telegram e formatação).")
+            raise SystemExit(3)
+
+        print("✅ Envio concluído.")
+    except Exception as e:
+        print("💥 Erro fatal:", e)
+        raise
