@@ -19,19 +19,17 @@ TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
 REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
-STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está Cliente + link da foto
+STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # aba com Cliente + link da foto
 FOTO_COL_ENV = os.getenv("FOTO_COL", "").strip()
 
-# --- FIADOS ---
-ABA_FIADO = os.getenv("ABA_FIADO", "Fiados")
-ABA_FIADO_CACHE = os.getenv("ABA_FIADO_CACHE", "fiado_cache")
-FIADO_ID_COL_ENV = os.getenv("FIADO_ID_COL", "").strip()
+# FIADOS dentro da Base de Dados
+ABA_FIADO_CACHE = os.getenv("ABA_FIADO_CACHE", "fiado_cache")  # cache de notificação de fiados
 
 def _bool_env(name, default=False):
     val = os.getenv(name)
     if val is None:
         return default
-    return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
+    return str(val).strip().lower() in ("1","true","t","yes","y","on")
 
 # ======== CONTROLES DE ENVIO ========
 # (para 08:00 enviar listas; no watch frequente, não)
@@ -41,7 +39,7 @@ SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
 
 # Feedback ao registrar nova visita (aumentou nº de dias distintos):
 SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", False)  # todos
-SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # ou só se estava atrasado
+SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # só se estava atrasado
 
 # Transições:
 SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)  # “voltou pra Em dia”
@@ -391,36 +389,19 @@ def changes_and_feedback():
     set_with_dataframe(ws_cache, out)
 
 # =========================
-# FIADOS: detectar novos e enviar cartão com foto
+# FIADOS (na Base de Dados): detectar novos e enviar cartão com foto
 # =========================
 def process_fiados():
-    if ABA_FIADO not in abas:
-        print(f"ℹ️ ABA_FIADO '{ABA_FIADO}' não existe — pulando fiados.")
+    ws_base_local = abas[ABA_BASE]
+    df_all = get_as_dataframe(ws_base_local, evaluate_formulas=True, dtype=str).fillna("")
+
+    if df_all.empty or "Conta" not in df_all.columns or "IDLancFiado" not in df_all.columns:
+        print("ℹ️ Fiados: precisa de colunas Conta e IDLancFiado na Base de Dados.")
         return
 
-    ws_fiado = abas[ABA_FIADO]
-    df_fiado = get_as_dataframe(ws_fiado, evaluate_formulas=True, dtype=str).fillna("")
-
+    df_fiado = df_all[df_all["Conta"].str.strip().str.lower() == "fiado"].copy()
     if df_fiado.empty:
-        print("ℹ️ Aba de fiados vazia.")
-        return
-
-    # Normaliza nomes de colunas
-    cols_lower = {c.strip().lower(): c for c in df_fiado.columns if isinstance(c, str)}
-    col_cliente = next((cols_lower[x] for x in ["cliente","nome","nome_cliente"] if x in cols_lower), None)
-    col_serv    = next((cols_lower[x] for x in ["serviços","servicos","servico","serviço","servico(s)"] if x in cols_lower), None)
-    col_total   = next((cols_lower[x] for x in ["total","valor","preco","preço","amount"] if x in cols_lower), None)
-    col_atend   = next((cols_lower[x] for x in ["atendimento","data","data_atendimento"] if x in cols_lower), None)
-    col_venc    = next((cols_lower[x] for x in ["vencimento","vcto","venc"] if x in cols_lower), None)
-
-    # Coluna de ID (pode ser override via env)
-    if FIADO_ID_COL_ENV:
-        col_id = cols_lower.get(FIADO_ID_COL_ENV.strip().lower())
-    else:
-        col_id = next((cols_lower[x] for x in ["id","fiado_id","codigo","código","uid"] if x in cols_lower), None)
-
-    if not col_cliente or not col_id:
-        print("⚠️ Fiados: precisa ao menos de 'Cliente' e 'ID'.")
+        print("ℹ️ Nenhum fiado com Conta=Fiado.")
         return
 
     # Cache de fiados já notificados
@@ -428,32 +409,32 @@ def process_fiados():
         ws_fcache = sh.worksheet(ABA_FIADO_CACHE)
     except gspread.exceptions.WorksheetNotFound:
         ws_fcache = sh.add_worksheet(ABA_FIADO_CACHE, rows=2, cols=3)
-        set_with_dataframe(ws_fcache, pd.DataFrame(columns=["fiado_id","cliente","last_notified_at"]))
+        set_with_dataframe(ws_fcache, pd.DataFrame(columns=["IDLancFiado","Cliente","last_notified_at"]))
 
     df_fcache = get_as_dataframe(ws_fcache, evaluate_formulas=True, dtype=str).fillna("")
-    enviados = set(df_fcache["fiado_id"].astype(str).tolist()) if "fiado_id" in df_fcache.columns else set()
+    enviados = set(df_fcache["IDLancFiado"].astype(str).tolist()) if "IDLancFiado" in df_fcache.columns else set()
 
     novos = []
     for _, r in df_fiado.iterrows():
-        fiado_id = str(r.get(col_id, "")).strip()
+        fiado_id = str(r.get("IDLancFiado", "")).strip()
         if not fiado_id or fiado_id in enviados:
             continue
-        cliente = str(r.get(col_cliente, "")).strip()
-        if not cliente:
-            continue
 
-        serv  = str(r.get(col_serv, "")).strip() if col_serv else ""
-        total = str(r.get(col_total, "")).strip() if col_total else ""
-        atend = fmt_date(r.get(col_atend, "")) if col_atend else ""
-        venc  = fmt_date(r.get(col_venc, "")) if col_venc else ""
+        cliente = str(r.get("Cliente", "")).strip()
+        servico = str(r.get("Serviço", "")).strip() if "Serviço" in df_fiado.columns else ""
+        valor   = str(r.get("Valor", "")).strip() if "Valor" in df_fiado.columns else ""
+        data_atend = fmt_date(r.get("Data", "")) if "Data" in df_fiado.columns else ""
+        venc = fmt_date(r.get("VencimentoFiado", "")) if "VencimentoFiado" in df_fiado.columns else ""
+        status = str(r.get("StatusFiado", "")).strip() if "StatusFiado" in df_fiado.columns else ""
 
         caption = (
             "🧾 <b>Novo fiado criado</b>\n"
             f"👤 Cliente: <b>{html.escape(cliente)}</b>\n"
-            f"{'🧰 Serviços: ' + html.escape(serv) + '\\n' if serv else ''}"
-            f"{'💵 Total: R$ ' + html.escape(total) + '\\n' if total else ''}"
-            f"{'📅 Atendimento: <b>' + html.escape(atend) + '</b>\\n' if atend else ''}"
+            f"{'🧰 Serviços: ' + html.escape(servico) + '\\n' if servico else ''}"
+            f"{'💵 Total: ' + html.escape(valor) + '\\n' if valor else ''}"
+            f"{'📅 Atendimento: <b>' + html.escape(data_atend) + '</b>\\n' if data_atend else ''}"
             f"{'⏳ Vencimento: <b>' + html.escape(venc) + '</b>\\n' if venc else ''}"
+            f"{'📌 Status: <b>' + html.escape(status) + '</b>\\n' if status else ''}"
             f"🆔 ID: <code>{html.escape(fiado_id)}</code>"
         )
 
@@ -463,16 +444,16 @@ def process_fiados():
         else:
             tg_send(caption)
 
-        novos.append({"fiado_id": fiado_id, "cliente": cliente, "last_notified_at": now_br()})
+        novos.append({"IDLancFiado": fiado_id, "Cliente": cliente, "last_notified_at": now_br()})
 
-    # Atualiza cache de fiados
+    # Atualiza cache
     if novos:
         df_out = pd.DataFrame(novos)
         if df_fcache.empty:
             out = df_out
         else:
-            out = pd.concat([df_fcache[["fiado_id","cliente","last_notified_at"]], df_out], ignore_index=True)
-            out = out.drop_duplicates(subset=["fiado_id"], keep="last")
+            out = pd.concat([df_fcache[["IDLancFiado","Cliente","last_notified_at"]], df_out], ignore_index=True)
+            out = out.drop_duplicates(subset=["IDLancFiado"], keep="last")
         ws_fcache.clear()
         set_with_dataframe(ws_fcache, out)
 
@@ -517,7 +498,7 @@ def modo_individual():
 if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
-        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA} | Fiados={ABA_FIADO}")
+        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA} | FiadoCache={ABA_FIADO_CACHE}")
         if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
             daily_summary_and_lists()   # para 08:00
         changes_and_feedback()          # transições + retorno
