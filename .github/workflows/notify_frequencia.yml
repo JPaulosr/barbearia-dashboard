@@ -26,6 +26,8 @@ jobs:
       STATUS_ABA: clientes_status
       ABA_TRANSICOES: freq_transicoes
       SEND_AT_8_CARDS: "true"
+      # 👉 Troque para "true" quando a Service Account tiver EDITOR
+      ALLOW_WRITE: "false"
 
     steps:
       - uses: actions/checkout@v4
