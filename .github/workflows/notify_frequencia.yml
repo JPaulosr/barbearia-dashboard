@@ -2,16 +2,38 @@ name: notify_frequencia.yml
 
 on:
   workflow_dispatch:
+  schedule:
+    # ✅ 08:00 BRT (≈ 11:00 UTC): manda cabeçalho + listas de Pouco/Muito
+    - cron: '0 11 * * *'
+    # 🔁 A cada 10 minutos: só transições (entrar em atraso) + feedback de retorno
+    - cron: '*/10 * * * *'
 
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
+      # ===== Secrets obrigatórios =====
       TZ: America/Sao_Paulo
-      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }} # opcional (fallback)
       SHEET_ID: ${{ secrets.SHEET_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # ===== Fotos (opcional) =====
+      STATUS_ABA: clientes_status
+      # FOTO_COL: link_foto  # descomente se sua coluna tiver nome específico
+
+      # ===== Flags para 08:00 vs watch (auto com base no schedule) =====
+      SEND_DAILY_HEADER: ${{ github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
+      SEND_LIST_POUCO:  ${{ github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
+      SEND_LIST_MUITO:  ${{ github.event.schedule == '0 11 * * *' && 'true' || 'false' }}
+
+      # Feedback de nova visita (retorno):
+      SEND_FEEDBACK_ONLY_IF_WAS_LATE: "true"   # só se estava atrasado antes
+      SEND_FEEDBACK_ON_NEW_VISIT_ALL: "false"  # evitar spam de quem já estava Em dia
+
+      # Transição “voltou para Em dia” desligada:
+      SEND_TRANSITION_BACK_TO_EM_DIA: "false"
 
     steps:
       - name: Checkout
@@ -28,11 +50,9 @@ jobs:
           pip install pandas gspread gspread-dataframe google-auth requests pytz
 
       - name: Write service account to file
-        env:
-          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
         run: |
           echo "$GCP_SERVICE_ACCOUNT" > sa.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=$(pwd)/sa.json" >> $GITHUB_ENV
 
-      - name: Run script
+      - name: Run notifier
         run: python notify_inline.py
