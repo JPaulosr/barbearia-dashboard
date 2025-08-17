@@ -1,7 +1,7 @@
-# notify_frequencia.py
-# Lê Google Sheets, calcula frequência e envia resumo + listas no Telegram.
-
-import os, json, html
+# scripts/notify_frequencia.py
+import os
+import sys
+import json
 import pandas as pd
 import requests
 import gspread
@@ -10,167 +10,98 @@ from gspread_dataframe import get_as_dataframe
 from datetime import datetime
 import pytz
 
-# ====== VARS (dos GitHub Secrets) ======
-SHEET_ID   = os.getenv("SHEET_ID", "")
-BASE_ABA   = os.getenv("BASE_ABA", "Base de Dados")
-STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")
-GCP_SERVICE_ACCOUNT_JSON = os.getenv("GCP_SERVICE_ACCOUNT_JSON", "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
-TZ = os.getenv("TIMEZONE", "America/Sao_Paulo")
+def env_or_fail(key: str) -> str:
+    val = os.getenv(key)
+    if not val:
+        raise RuntimeError(f"Variável de ambiente ausente: {key}")
+    return val
 
-def tlog(*args): print("🔎", *args)
-
-# ====== TELEGRAM (parse_mode=HTML) ======
-def tg_send(text: str) -> bool:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        tlog("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID ausentes.")
-        return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",                # << HTML mais estável que Markdown
-        "disable_web_page_preview": True,
-    }
-    r = requests.post(url, json=payload, timeout=25)
-    tlog("Telegram resp:", r.text)
-    return r.ok
-
-# ====== SHEETS ======
-def conectar_sheets():
-    if not GCP_SERVICE_ACCOUNT_JSON:
-        raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON não configurado.")
-    info = json.loads(GCP_SERVICE_ACCOUNT_JSON)
-    scopes = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
+def connect_gsheet(sheet_id: str, sa_info: dict):
+    scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(SHEET_ID)
+    return gc.open_by_key(sheet_id)
 
-def carregar_base():
-    sh = conectar_sheets()
-    ws = sh.worksheet(BASE_ABA)
-    df = get_as_dataframe(ws).dropna(how="all")
-    df.columns = [str(c).strip() for c in df.columns]
-    if "Data" not in df.columns or "Cliente" not in df.columns:
-        raise RuntimeError("Aba 'Base de Dados' precisa de colunas 'Data' e 'Cliente'.")
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df = df.dropna(subset=["Data"])
-    df["Cliente"] = df["Cliente"].astype(str).str.strip()
-    tlog(f"Base: {len(df)} linhas válidas.")
-    return df
+def br_now(tz="America/Sao_Paulo") -> str:
+    return datetime.now(pytz.timezone(tz)).strftime("%d/%m/%Y %H:%M:%S")
 
-def carregar_status():
-    sh = conectar_sheets()
+def load_dataframe(sh, tab_names=("Base de Dados", "clientes_status")):
+    # Lê as abas; se alguma não existir, lança erro claro
+    abas = {w.title.lower(): w for w in sh.worksheets()}
+    def pick(name_options):
+        for name in name_options:
+            w = abas.get(name.lower())
+            if w:
+                return get_as_dataframe(w, evaluate_formulas=True, dtype=str).fillna("")
+        raise RuntimeError(f"Aba não encontrada: {name_options}")
+    base = pick([tab_names[0]])
+    status = pick([tab_names[1]])
+    return base, status
+
+def build_message(df_base: pd.DataFrame) -> str:
+    # EXEMPLO simples: clientes com mais de 60 dias sem vir
+    if "Cliente" not in df_base.columns or "Data" not in df_base.columns:
+        raise RuntimeError("Colunas esperadas 'Cliente' e 'Data' não encontradas na Base de Dados.")
+    # normaliza datas
+    def parse_dt(x):
+        x = (x or "").strip()
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(x, fmt).date()
+            except Exception:
+                pass
+        return None
+
+    df = df_base.copy()
+    df["__dt"] = df["Data"].apply(parse_dt)
+    df = df.dropna(subset=["__dt"])
+    df["__dt"] = pd.to_datetime(df["__dt"])
+
+    ultimo = df.groupby("Cliente", as_index=False)["__dt"].max()
+    dias = (pd.Timestamp.now().normalize() - ultimo["__dt"]).dt.days
+    ultimo["dias_sem_vir"] = dias
+
+    atrasados = ultimo[ultimo["dias_sem_vir"] >= 60].sort_values("dias_sem_vir", ascending=False)
+    if atrasados.empty:
+        return f"✅ {br_now()} — Ninguém com 60+ dias sem vir."
+
+    linhas = [f"📣 {br_now()} — Clientes com 60+ dias sem vir:"]
+    for _, row in atrasados.iterrows():
+        linhas.append(f"• {row['Cliente']}: {int(row['dias_sem_vir'])} dias")
+    return "\n".join(linhas)
+
+def send_telegram(token: str, chat_id: str, text: str):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    resp = requests.post(url, json={"chat_id": chat_id, "text": text})
+    if not resp.ok:
+        raise RuntimeError(f"Falha no Telegram: {resp.status_code} {resp.text}")
+
+def main():
     try:
-        ws = sh.worksheet(STATUS_ABA)
-    except Exception:
-        tlog("Aba de status não encontrada; seguindo sem filtro de 'Ativo'.")
-        return pd.DataFrame(columns=["Cliente", "Status"])
-    stt = get_as_dataframe(ws).dropna(how="all")
-    stt.columns = [str(c).strip() for c in stt.columns]
-    if "Cliente" not in stt.columns or "Status" not in stt.columns:
-        raise RuntimeError("Aba 'clientes_status' precisa de colunas 'Cliente' e 'Status'.")
-    stt["Cliente"] = stt["Cliente"].astype(str).str.strip()
-    stt["Status"]  = stt["Status"].astype(str).str.strip()
-    tlog(f"Status: {len(stt)} linhas.")
-    return stt[["Cliente","Status"]]
+        sheet_id = env_or_fail("SHEET_ID")
+        token = env_or_fail("TELEGRAM_TOKEN")
+        chat_id = env_or_fail("TELEGRAM_CHAT_ID")
+        sa_json = env_or_fail("GCP_SERVICE_ACCOUNT")
 
-# ====== FREQUÊNCIA ======
-def calcular_frequencia(df_base, df_status):
-    if not df_status.empty:
-        ativos = set(df_status[df_status["Status"].str.lower()=="ativo"]["Cliente"])
-        df_base = df_base[df_base["Cliente"].isin(ativos)]
-        tlog(f"Filtrados 'Ativo': {len(df_base)} linhas.")
-    atend = df_base.drop_duplicates(subset=["Cliente","Data"]).copy()
-    hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().date()
-    out = []
-    for cliente, g in atend.groupby("Cliente"):
-        datas = sorted(g["Data"].tolist())
-        if len(datas) < 2:   # precisa de 2 para média
-            continue
-        diffs = [(datas[i]-datas[i-1]).days for i in range(1,len(datas))]
-        media = sum(diffs)/len(diffs)
-        ultimo = datas[-1].date()
-        dias = (hoje - ultimo).days
-        if dias <= media:
-            label, emoji = "Em dia", "🟢"
-        elif dias <= media*1.5:
-            label, emoji = "Pouco atrasado", "🟠"
-        else:
-            label, emoji = "Muito atrasado", "🔴"
-        out.append({
-            "Cliente": cliente,
-            "Status_Label": label,
-            "Status": f"{emoji} {label}",
-            "Último Atendimento": ultimo,
-            "Qtd Atendimentos": len(datas),
-            "Frequência Média (dias)": round(media,1),
-            "Dias Desde Último": dias,
-        })
-    df = pd.DataFrame(out)
-    tlog(f"Clientes com frequência calculada: {len(df)}")
-    return df
+        try:
+            sa_info = json.loads(sa_json)
+        except json.JSONDecodeError:
+            # caso o secret tenha vindo com quebras/escapes estranhos
+            sa_info = json.loads(sa_json.encode("utf-8").decode("unicode_escape"))
 
-# ====== MENSAGENS ======
-def enviar_resumo_e_listas(freq_df: pd.DataFrame) -> bool:
-    tot   = freq_df["Cliente"].nunique()
-    n_ok  = freq_df[freq_df["Status_Label"]=="Em dia"]["Cliente"].nunique()
-    n_p   = freq_df[freq_df["Status_Label"]=="Pouco atrasado"]["Cliente"].nunique()
-    n_m   = freq_df[freq_df["Status_Label"]=="Muito atrasado"]["Cliente"].nunique()
+        sh = connect_gsheet(sheet_id, sa_info)
+        base, _status = load_dataframe(sh, ("Base de Dados", "clientes_status"))
 
-    # resumo (HTML)
-    msg_resumo = (
-        "<b>📊 Relatório de Frequência — Salão JP</b>\n"
-        f"👥 Ativos: <b>{tot}</b>\n"
-        f"🟢 Em dia: <b>{n_ok}</b>\n"
-        f"🟠 Pouco atrasado: <b>{n_p}</b>\n"
-        f"🔴 Muito atrasado: <b>{n_m}</b>"
-    )
-    tlog("Resumo:\n", msg_resumo)
-    ok1 = tg_send(msg_resumo)
+        msg = build_message(base)
+        send_telegram(token, chat_id, msg)
 
-    def lista(titulo, df):
-        if df.empty:
-            tlog(f"Lista vazia: {titulo}")
-            return True
-        nomes = "\n".join(f"- {html.escape(str(n))}" for n in df["Cliente"].tolist())
-        msg = f"<b>{titulo}</b>\n{nomes}"
-        tlog("Lista:\n", msg)
-        return tg_send(msg)
+        print("OK:", msg.splitlines()[0] if msg else "Mensagem enviada.")
+        sys.exit(0)  # sucesso
 
-    ok2 = lista("🟠 Pouco atrasados",
-                freq_df[freq_df["Status_Label"]=="Pouco atrasado"][["Cliente"]])
-    ok3 = lista("🔴 Muito atrasados",
-                freq_df[freq_df["Status_Label"]=="Muito atrasado"][["Cliente"]])
-
-    return ok1 and ok2 and ok3
-
-# ====== MAIN ======
-if __name__ == "__main__":
-    try:
-        agora = datetime.now(pytz.timezone(TZ))
-        tlog("Rodando em:", agora.isoformat())
-
-        if not SHEET_ID:
-            raise RuntimeError("SHEET_ID ausente nos Secrets.")
-
-        df_base = carregar_base()
-        df_stat = carregar_status()
-        freq_df = calcular_frequencia(df_base, df_stat)
-        if freq_df.empty:
-            tlog("Nenhum cliente com dados suficientes para cálculo (freq_df vazio).")
-            raise SystemExit(2)
-
-        ok = enviar_resumo_e_listas(freq_df)
-        if not ok:
-            tlog("Falha no envio (Telegram).")
-            raise SystemExit(3)
-
-        tlog("✅ Envio concluído.")
     except Exception as e:
-        tlog("💥 ERRO:", e)
-        raise
+        # Nunca sai com 3; sempre 1 em erro para padronizar no Actions
+        print(f"ERRO: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
