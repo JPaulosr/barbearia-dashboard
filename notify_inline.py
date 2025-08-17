@@ -1,4 +1,4 @@
-# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (resumo/entradas/retorno/fiados)
+# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (resumo/entradas/retorno)
 import os
 import sys
 import json
@@ -19,17 +19,14 @@ TZ = os.getenv("TZ") or os.getenv("TIMEZONE") or "America/Sao_Paulo"
 REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
-STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # aba com Cliente + link da foto
+STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está Cliente + link da foto
 FOTO_COL_ENV = os.getenv("FOTO_COL", "").strip()
-
-# FIADOS dentro da Base de Dados
-ABA_FIADO_CACHE = os.getenv("ABA_FIADO_CACHE", "fiado_cache")  # cache de notificação de fiados
 
 def _bool_env(name, default=False):
     val = os.getenv(name)
     if val is None:
         return default
-    return str(val).strip().lower() in ("1","true","t","yes","y","on")
+    return str(val).strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 # ======== CONTROLES DE ENVIO ========
 # (para 08:00 enviar listas; no watch frequente, não)
@@ -39,7 +36,7 @@ SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
 
 # Feedback ao registrar nova visita (aumentou nº de dias distintos):
 SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", False)  # todos
-SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # só se estava atrasado
+SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # ou só se estava atrasado
 
 # Transições:
 SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)  # “voltou pra Em dia”
@@ -104,10 +101,6 @@ def parse_dt_cell(x):
         except Exception:
             pass
     return None
-
-def fmt_date(x):
-    d = parse_dt_cell(x)
-    return datetime.strftime(d, "%d/%m/%Y") if d else (str(x or "").strip())
 
 def classificar_relative(dias, media):
     if dias <= media:
@@ -225,7 +218,7 @@ if ultimo.empty:
     sys.exit(0)
 
 # =========================
-# Cache (status + visitas)
+# Cache
 # =========================
 def ensure_cache():
     try:
@@ -389,79 +382,10 @@ def changes_and_feedback():
     set_with_dataframe(ws_cache, out)
 
 # =========================
-# FIADOS (na Base de Dados): detectar novos e enviar cartão com foto
-# =========================
-def process_fiados():
-    ws_base_local = abas[ABA_BASE]
-    df_all = get_as_dataframe(ws_base_local, evaluate_formulas=True, dtype=str).fillna("")
-
-    if df_all.empty or "Conta" not in df_all.columns or "IDLancFiado" not in df_all.columns:
-        print("ℹ️ Fiados: precisa de colunas Conta e IDLancFiado na Base de Dados.")
-        return
-
-    df_fiado = df_all[df_all["Conta"].str.strip().str.lower() == "fiado"].copy()
-    if df_fiado.empty:
-        print("ℹ️ Nenhum fiado com Conta=Fiado.")
-        return
-
-    # Cache de fiados já notificados
-    try:
-        ws_fcache = sh.worksheet(ABA_FIADO_CACHE)
-    except gspread.exceptions.WorksheetNotFound:
-        ws_fcache = sh.add_worksheet(ABA_FIADO_CACHE, rows=2, cols=3)
-        set_with_dataframe(ws_fcache, pd.DataFrame(columns=["IDLancFiado","Cliente","last_notified_at"]))
-
-    df_fcache = get_as_dataframe(ws_fcache, evaluate_formulas=True, dtype=str).fillna("")
-    enviados = set(df_fcache["IDLancFiado"].astype(str).tolist()) if "IDLancFiado" in df_fcache.columns else set()
-
-    novos = []
-    for _, r in df_fiado.iterrows():
-        fiado_id = str(r.get("IDLancFiado", "")).strip()
-        if not fiado_id or fiado_id in enviados:
-            continue
-
-        cliente = str(r.get("Cliente", "")).strip()
-        servico = str(r.get("Serviço", "")).strip() if "Serviço" in df_fiado.columns else ""
-        valor   = str(r.get("Valor", "")).strip() if "Valor" in df_fiado.columns else ""
-        data_atend = fmt_date(r.get("Data", "")) if "Data" in df_fiado.columns else ""
-        venc = fmt_date(r.get("VencimentoFiado", "")) if "VencimentoFiado" in df_fiado.columns else ""
-        status = str(r.get("StatusFiado", "")).strip() if "StatusFiado" in df_fiado.columns else ""
-
-        caption = (
-            "🧾 <b>Novo fiado criado</b>\n"
-            f"👤 Cliente: <b>{html.escape(cliente)}</b>\n"
-            f"{'🧰 Serviços: ' + html.escape(servico) + '\\n' if servico else ''}"
-            f"{'💵 Total: ' + html.escape(valor) + '\\n' if valor else ''}"
-            f"{'📅 Atendimento: <b>' + html.escape(data_atend) + '</b>\\n' if data_atend else ''}"
-            f"{'⏳ Vencimento: <b>' + html.escape(venc) + '</b>\\n' if venc else ''}"
-            f"{'📌 Status: <b>' + html.escape(status) + '</b>\\n' if status else ''}"
-            f"🆔 ID: <code>{html.escape(fiado_id)}</code>"
-        )
-
-        foto = foto_map.get(_norm(cliente))
-        if foto:
-            tg_send_photo(foto, caption)
-        else:
-            tg_send(caption)
-
-        novos.append({"IDLancFiado": fiado_id, "Cliente": cliente, "last_notified_at": now_br()})
-
-    # Atualiza cache
-    if novos:
-        df_out = pd.DataFrame(novos)
-        if df_fcache.empty:
-            out = df_out
-        else:
-            out = pd.concat([df_fcache[["IDLancFiado","Cliente","last_notified_at"]], df_out], ignore_index=True)
-            out = out.drop_duplicates(subset=["IDLancFiado"], keep="last")
-        ws_fcache.clear()
-        set_with_dataframe(ws_fcache, out)
-
-# =========================
 # MODO INDIVIDUAL (opcional)
 # =========================
 CLIENTE = os.getenv("CLIENTE") or os.getenv("INPUT_CLIENTE")
-def modo_individual():
+if CLIENTE:
     alvo = _norm(CLIENTE)
     ultimo["_norm"] = ultimo["Cliente"].apply(_norm)
     sel = ultimo[ultimo["_norm"] == alvo]
@@ -498,13 +422,10 @@ def modo_individual():
 if __name__ == "__main__":
     try:
         print("▶️ Iniciando…")
-        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA} | FiadoCache={ABA_FIADO_CACHE}")
+        print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
         if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
             daily_summary_and_lists()   # para 08:00
-        changes_and_feedback()          # transições + retorno
-        process_fiados()                # 🧾 novos fiados (com foto)
-        if CLIENTE:
-            modo_individual()
+        changes_and_feedback()          # para transições + retorno
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
