@@ -20,7 +20,7 @@ REL_MULT = 1.5
 ABA_BASE = os.getenv("BASE_ABA", "Base de Dados")
 ABA_STATUS_CACHE = os.getenv("ABA_STATUS_CACHE", "status_cache")
 STATUS_ABA = os.getenv("STATUS_ABA", "clientes_status")  # onde está Cliente + link da foto
-FOTO_COL_ENV = os.getenv("FOTO_COL", "").strip()
+FOTO_COL_ENV = (os.getenv("FOTO_COL") or "").strip()
 
 def _bool_env(name, default=False):
     val = os.getenv(name)
@@ -34,14 +34,15 @@ SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)
 SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
 
 # Feedback ao registrar nova visita (aumentou nº de dias distintos):
-SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", False)  # todos
-SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", True)   # ou só se estava atrasado
+# >>> NOVO PADRÃO: sempre enviar feedback (com foto) <<<
+SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", True)
+SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", False)
 
 # Transições:
-SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)  # “voltou pra Em dia”
+SEND_TRANSITION_BACK_TO_EM_DIA  = _bool_env("SEND_TRANSITION_BACK_TO_EM_DIA", False)
 
-# ======== NOVO: evitar feedback duplicado por visita ========
-FEEDBACK_ONCE_PER_VISIT = True  # sempre 1 feedback por cliente por data de última visita
+# Evitar feedback duplicado por visita
+FEEDBACK_ONCE_PER_VISIT = True
 
 # =========================
 # ENVS obrigatórios
@@ -65,20 +66,12 @@ if missing:
 if os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     try:
         creds = Credentials.from_service_account_file(
-            os.getenv("GOOGLE_APPLICATIONS_CREDENTIALS"),  # <- CORREÇÃO? Não! Mantém nome certo
+            os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
             scopes=["https://spreadsheets.google.com/feeds",
                     "https://www.googleapis.com/auth/drive"]
         )
     except Exception as e:
-        # Corrige nome da env se veio errado
-        try:
-            creds = Credentials.from_service_account_file(
-                os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-                scopes=["https://spreadsheets.google.com/feeds",
-                        "https://www.googleapis.com/auth/drive"]
-            )
-        except Exception as e2:
-            fail(f"Erro ao ler GOOGLE_APPLICATION_CREDENTIALS: {e2}")
+        fail(f"Erro ao ler GOOGLE_APPLICATION_CREDENTIALS: {e}")
 else:
     raw = os.getenv("GCP_SERVICE_ACCOUNT") or os.getenv("GCP_SERVICE_ACCOUNT_JSON") or ""
     if not raw.strip():
@@ -237,8 +230,7 @@ def ensure_cache():
         ws = sh.add_worksheet(ABA_STATUS_CACHE, rows=2, cols=7)
         set_with_dataframe(ws, pd.DataFrame(columns=[
             "Cliente","ultima_visita_cache","status_cache","last_notified_at",
-            "media_cache","visitas_total_cache",
-            "feedback_sent_for_date"  # NEW
+            "media_cache","visitas_total_cache","feedback_sent_for_date"
         ]))
         return ws
 
@@ -247,7 +239,7 @@ df_cache = get_as_dataframe(ws_cache, evaluate_formulas=True, dtype=str).fillna(
 if df_cache.empty or "Cliente" not in df_cache.columns:
     df_cache = pd.DataFrame(columns=[
         "Cliente","ultima_visita_cache","status_cache","last_notified_at",
-        "media_cache","visitas_total_cache","feedback_sent_for_date"  # NEW
+        "media_cache","visitas_total_cache","feedback_sent_for_date"
     ])
 
 def parse_cache_dt(x):
@@ -255,7 +247,7 @@ def parse_cache_dt(x):
     return None if d is None else pd.to_datetime(d)
 
 need_cols = ["Cliente","ultima_visita_cache","status_cache","last_notified_at",
-             "media_cache","visitas_total_cache","feedback_sent_for_date"]  # NEW
+             "media_cache","visitas_total_cache","feedback_sent_for_date"]
 for c in need_cols:
     if c not in df_cache.columns:
         df_cache[c] = ""
@@ -325,17 +317,17 @@ def changes_and_feedback():
         cached_dt = cached["ultima_visita_cache_parsed"] if cached is not None else None
         cached_visitas = int(cached["visitas_total_cache"]) if (cached is not None and str(cached.get("visitas_total_cache","")).strip().isdigit()) else 0
 
-        # NEW — já mandou feedback para esta última visita?
-        ultima_key = pd.to_datetime(ultima).strftime("%Y-%m-%d")  # chave de comparação por data
+        # controle de 1 feedback por visita (chave = data da última visita)
+        ultima_key = pd.to_datetime(ultima).strftime("%Y-%m-%d")
         feedback_already_sent = False
         if FEEDBACK_ONCE_PER_VISIT and cached is not None:
             sent_for = (cached.get("feedback_sent_for_date") or "").strip()
             feedback_already_sent = (sent_for == ultima_key)
 
-        # Nova visita = aumentou nº de dias distintos (captura retroativo também)
+        # Nova visita = aumentou nº de dias distintos
         new_visit = visitas_total > cached_visitas
 
-        # FEEDBACK de atendimento (retorno)
+        # regras para enviar feedback (com foto)
         estava_atrasado = cached_status in ("Pouco atrasado", "Muito atrasado")
         enviar_feedback = False
         if SEND_FEEDBACK_ON_NEW_VISIT_ALL:
@@ -370,11 +362,10 @@ def changes_and_feedback():
             else:
                 tg_send(caption)
 
-            # NEW — marca que já enviou feedback para esta data de visita
             if cached is not None:
-                cached["feedback_sent_for_date"] = ultima_key
+                cached["feedback_sent_for_date"] = ultima_key  # marca como enviado
 
-        # Transições de status:
+        # Transições de status
         if cached is not None and status != cached_status:
             if status in ("Pouco atrasado", "Muito atrasado"):
                 transicoes.append(
@@ -402,28 +393,23 @@ def changes_and_feedback():
     }, inplace=True)
     out["last_notified_at"] = now_br()
 
-    # NEW — traz coluna já enviada do cache, senão usa vazio
     sent_map = {k: (v.get("feedback_sent_for_date") or "") for k, v in cache_by_cli.items()}
     out["key_lower"] = out["Cliente"].astype(str).str.strip().str.lower()
     out["feedback_sent_for_date"] = out["key_lower"].map(sent_map).fillna("")
-
-    # Se a última visita mudou e já enviamos agora, grava data atual de visita
     def _maybe_update_sent(row):
         k = row["key_lower"]
         cached = cache_by_cli.get(k)
         if cached is None:
             return row["feedback_sent_for_date"]
-        # Se o cached já foi atualizado no loop acima, ele tem a marca nova
         mark = (cached.get("feedback_sent_for_date") or "").strip()
         return mark or row["feedback_sent_for_date"]
-
     out["feedback_sent_for_date"] = out.apply(_maybe_update_sent, axis=1)
     out.drop(columns=["key_lower"], inplace=True)
 
     ws_cache.clear()
     set_with_dataframe(ws_cache, out[[
         "Cliente","ultima_visita_cache","status_cache","last_notified_at",
-        "media_cache","visitas_total_cache","feedback_sent_for_date"  # mantém coluna nova
+        "media_cache","visitas_total_cache","feedback_sent_for_date"
     ]])
 
 # =========================
@@ -470,7 +456,7 @@ if __name__ == "__main__":
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
         if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
             daily_summary_and_lists()   # para 08:00
-        changes_and_feedback()          # para transições + retorno (com 1 feedback por visita)
+        changes_and_feedback()          # para transições + retorno (1 feedback por visita)
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
