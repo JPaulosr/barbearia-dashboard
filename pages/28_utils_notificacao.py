@@ -5,11 +5,13 @@
 # - Fiado só entra quando DataPagamento <= terça do pagamento.
 # - Competência SEMPRE = mês/ano do atendimento (para relatórios), mas em Despesas lançamos 1 linha consolidada.
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
+# - (Opcional) Se pago no cartão, comissão calculada sobre TABELA, ignorando desconto do cartão.
 
 import streamlit as st
 import pandas as pd
 import gspread
 import hashlib
+import re
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
@@ -38,6 +40,18 @@ COLS_DESPESAS_FIX = ["Data", "Prestador", "Descrição", "Valor", "Me Pag:"]
 
 # Percentual padrão da comissão
 PERCENTUAL_PADRAO = 50.0
+
+# Tabela de preços para comissão (ajuste se necessário)
+VALOR_TABELA = {
+    "Corte": 25.00,
+    "Barba": 15.00,
+    "Sobrancelha": 7.00,
+    "Luzes": 45.00,
+    "Tintura": 20.00,
+    "Alisamento": 40.00,
+    "Gel": 10.00,
+    "Pomada": 15.00,
+}
 
 # =============================
 # CONEXÃO SHEETS
@@ -123,6 +137,12 @@ def garantir_colunas(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             df[c] = ""
     return df
 
+def is_cartao(conta: str) -> bool:
+    c = (conta or "").strip().lower()
+    # cobre variações comuns: cartao, cartão, crédito, debito, maquininha, pos, etc
+    padrao = r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos)"
+    return bool(re.search(padrao, c))
+
 # =============================
 # UI
 # =============================
@@ -133,7 +153,7 @@ st.title("💈 Pagamento de Comissão — Vinicius (consolidado por terça)")
 base = _read_df(ABA_DADOS)
 base = garantir_colunas(base, COLS_OFICIAIS).copy()
 
-# Filtra VINICIUS (por padrão só Serviço; opção de incluir Produto)
+# Inputs
 colA, colB, colC = st.columns([1,1,1])
 with colA:
     hoje = br_now()
@@ -155,6 +175,12 @@ with colC:
 
 meio_pag = st.selectbox("Meio de pagamento (para DESPESAS)", ["Dinheiro", "Pix", "Cartão", "Transferência"], index=0)
 descricao_padrao = st.text_input("Descrição (para DESPESAS)", value="Comissão Vinícius")
+
+usar_tabela_cartao = st.checkbox(
+    "Usar preço de TABELA para comissão quando pago no cartão",
+    value=True,
+    help="Ignora o valor líquido (com taxa) e comissiona pelo preço de tabela do serviço."
+)
 
 # Conjunto Vinicius
 dfv = base[base["Funcionário"].astype(str).str.strip() == "Vinicius"].copy()
@@ -202,15 +228,28 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
         st.info(f"Todos os itens de **{titulo}** já foram pagos.")
         return pd.DataFrame(), 0.0
 
+    # Valor original e competência
     df["Valor_num"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
     df["Competência"] = df["Data"].apply(competencia_from_data_str)
 
+    # Valor base para comissão (considerando cartão, se habilitado)
+    if usar_tabela_cartao:
+        def _base_valor(row):
+            if is_cartao(row.get("Conta", "")):
+                serv = str(row.get("Serviço", "")).strip()
+                return float(VALOR_TABELA.get(serv, row.get("Valor_num", 0.0)))
+            return float(row.get("Valor_num", 0.0))
+        df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
+    else:
+        df["Valor_base_comissao"] = df["Valor_num"]
+
     st.subheader(titulo)
     st.caption("Edite a % de comissão por linha, se precisar.")
-    ed_cols = ["Data", "Cliente", "Serviço", "Valor_num", "Competência", "RefID"]
-    ed = df[ed_cols].rename(columns={"Valor_num": "Valor (bruto)"})
+
+    ed_cols = ["Data", "Cliente", "Serviço", "Valor_base_comissao", "Competência", "RefID"]
+    ed = df[ed_cols].rename(columns={"Valor_base_comissao": "Valor (para comissão)"})
     ed["% Comissão"] = perc_padrao
-    ed["Comissão (R$)"] = (ed["Valor (bruto)"] * ed["% Comissão"] / 100.0).round(2)
+    ed["Comissão (R$)"] = (ed["Valor (para comissão)"] * ed["% Comissão"] / 100.0).round(2)
     ed = ed.reset_index(drop=True)
 
     edited = st.data_editor(
@@ -218,7 +257,7 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
         key=f"editor_{key_prefix}",
         num_rows="fixed",
         column_config={
-            "Valor (bruto)": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Valor (para comissão)": st.column_config.NumberColumn(format="R$ %.2f"),
             "% Comissão": st.column_config.NumberColumn(format="%.1f %%", min_value=0.0, max_value=100.0, step=0.5),
             "Comissão (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
         }
@@ -258,14 +297,15 @@ if st.button("✅ Registrar comissão (1 linha em DESPESAS) e marcar itens como 
                     "Competencia": r.get("Competência", ""),
                     "Observacao": f'{r.get("Cliente","")} | {r.get("Serviço","")} | {r.get("Data","")}',
                 })
-        cache_upd = pd.concat([cache[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
+        cache_df = _read_df(ABA_COMISSOES_CACHE)
+        cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
+        cache_df = garantir_colunas(cache_df, cache_cols)
+        cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
         # 2) Lança APENAS 1 LINHA na aba DESPESAS no formato do seu print
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
-
-        # garante ordem de colunas (caso a aba tenha outras)
         for c in COLS_DESPESAS_FIX:
             if c not in despesas_df.columns:
                 despesas_df[c] = ""
@@ -279,11 +319,9 @@ if st.button("✅ Registrar comissão (1 linha em DESPESAS) e marcar itens como 
         }
 
         despesas_final = pd.concat([despesas_df, pd.DataFrame([nova_linha])], ignore_index=True)
-        # Reorganiza para manter a ordem desejada:
         colunas_finais = [c for c in COLS_DESPESAS_FIX if c in despesas_final.columns] + \
                          [c for c in despesas_final.columns if c not in COLS_DESPESAS_FIX]
         despesas_final = despesas_final[colunas_finais]
-
         _write_df(ABA_DESPESAS, despesas_final)
 
         st.success(f"🎉 Comissão registrada! 1 linha adicionada em **{ABA_DESPESAS}** (R$ {total_geral:,.2f}) e {len(novos_cache)} itens marcados no **{ABA_COMISSOES_CACHE}**.")
