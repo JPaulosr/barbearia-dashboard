@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# 12_Comissoes_Vinicius.py — Pagamento de comissão consolidado (1 linha por terça)
+# 12_Comissoes_Vinicius.py — Pagamento de comissão consolidado (por competência)
 # Regras:
 # - Paga toda terça o período de terça→segunda anterior.
 # - Fiado só entra quando DataPagamento <= terça do pagamento.
-# - Competência SEMPRE = mês/ano do atendimento (para relatórios), mas em Despesas lançamos 1 linha consolidada.
+# - Lança em Despesas UMA LINHA POR COMPETÊNCIA (mês/ano do atendimento).
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
 # - (Opcional) Se pago no cartão, comissão calculada sobre TABELA, ignorando desconto do cartão.
 
@@ -147,7 +147,7 @@ def is_cartao(conta: str) -> bool:
 # UI
 # =============================
 st.set_page_config(layout="wide")
-st.title("💈 Pagamento de Comissão — Vinicius (consolidado por terça)")
+st.title("💈 Pagamento de Comissão — Vinicius (consolidado por competência)")
 
 # Carrega base
 base = _read_df(ABA_DADOS)
@@ -182,6 +182,13 @@ usar_tabela_cartao = st.checkbox(
     help="Ignora o valor líquido (com taxa) e comissiona pelo preço de tabela do serviço."
 )
 
+# ✅ NOVO: opção para reprocessar a mesma terça
+reprocessar_terca = st.checkbox(
+    "Reprocessar esta terça (regravar): ignorar/limpar cache desta terça antes de salvar",
+    value=False,
+    help="Marque se você apagou as linhas em Despesas e quer gravar novamente esta terça."
+)
+
 # Conjunto Vinicius
 dfv = base[base["Funcionário"].astype(str).str.strip() == "Vinicius"].copy()
 if not incluir_produtos:
@@ -214,7 +221,13 @@ fiados_liberados = df_fiados[(df_fiados["_dt_pagto"].notna()) & (df_fiados["_dt_
 cache = _read_df(ABA_COMISSOES_CACHE)
 cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
 cache = garantir_colunas(cache, cache_cols)
-ja_pagos = set(cache["RefID"].astype(str).tolist())
+
+terca_str = to_br_date(terca_pagto)
+if reprocessar_terca:
+    # Ignora os pagos desta terça na visualização (permite reprocessar)
+    ja_pagos = set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
+else:
+    ja_pagos = set(cache["RefID"].astype(str).tolist())
 
 # Função para montar grade editável e calcular comissões
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
@@ -279,7 +292,7 @@ st.header(f"💵 Total desta terça (consolidado): R$ {total_geral:,.2f}".replac
 # =============================
 # CONFIRMAR E GRAVAR
 # =============================
-if st.button("✅ Registrar comissão (1 linha em DESPESAS) e marcar itens como pagos"):
+if st.button("✅ Registrar comissão (por competência) e marcar itens como pagos"):
     if (semana_grid is None or semana_grid.empty) and (fiados_grid is None or fiados_grid.empty):
         st.warning("Não há itens para pagar.")
     else:
@@ -297,32 +310,60 @@ if st.button("✅ Registrar comissão (1 linha em DESPESAS) e marcar itens como 
                     "Competencia": r.get("Competência", ""),
                     "Observacao": f'{r.get("Cliente","")} | {r.get("Serviço","")} | {r.get("Data","")}',
                 })
+
         cache_df = _read_df(ABA_COMISSOES_CACHE)
-        cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
         cache_df = garantir_colunas(cache_df, cache_cols)
+
+        if reprocessar_terca:
+            # remove do cache tudo desta terça selecionada e regrava do zero
+            cache_df = cache_df[cache_df["TerçaPagamento"] != terca_str].copy()
+
         cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
-        # 2) Lança APENAS 1 LINHA na aba DESPESAS no formato do seu print
+        # 2) Lança em DESPESAS: UMA LINHA POR COMPETÊNCIA (mês/ano do atendimento)
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
         for c in COLS_DESPESAS_FIX:
             if c not in despesas_df.columns:
                 despesas_df[c] = ""
 
-        nova_linha = {
-            "Data": to_br_date(terca_pagto),
-            "Prestador": "Vinicius",
-            "Descrição": descricao_padrao,
-            "Valor": f'R$ {total_geral:.2f}'.replace(".", ","),
-            "Me Pag:": meio_pag
-        }
+        # Concatena itens (semana + fiados) com suas competências e valores de comissão
+        pagaveis = []
+        for df_part in [semana_grid, fiados_grid]:
+            if df_part is None or df_part.empty:
+                continue
+            pagaveis.append(df_part[["Competência", "ComissaoValor"]].copy())
 
-        despesas_final = pd.concat([despesas_df, pd.DataFrame([nova_linha])], ignore_index=True)
-        colunas_finais = [c for c in COLS_DESPESAS_FIX if c in despesas_final.columns] + \
-                         [c for c in despesas_final.columns if c not in COLS_DESPESAS_FIX]
-        despesas_final = despesas_final[colunas_finais]
-        _write_df(ABA_DESPESAS, despesas_final)
+        if pagaveis:
+            comp_totais = pd.concat(pagaveis, ignore_index=True) \
+                            .groupby("Competência", dropna=False)["ComissaoValor"].sum() \
+                            .reset_index()
 
-        st.success(f"🎉 Comissão registrada! 1 linha adicionada em **{ABA_DESPESAS}** (R$ {total_geral:,.2f}) e {len(novos_cache)} itens marcados no **{ABA_COMISSOES_CACHE}**.")
-        st.balloons()
+            linhas = []
+            for _, row in comp_totais.iterrows():
+                comp = str(row["Competência"]).strip() or ""
+                val  = float(row["ComissaoValor"])
+
+                linhas.append({
+                    "Data": to_br_date(terca_pagto),                   # dia do pagamento (terça)
+                    "Prestador": "Vinicius",
+                    "Descrição": f"{descricao_padrao} — Comp {comp}",  # clareza do mês do atendimento
+                    "Valor": f'R$ {val:.2f}'.replace(".", ","),
+                    "Me Pag:": meio_pag
+                })
+
+            despesas_final = pd.concat([despesas_df, pd.DataFrame(linhas)], ignore_index=True)
+            # Mantém a ordem
+            colunas_finais = [c for c in COLS_DESPESAS_FIX if c in despesas_final.columns] + \
+                             [c for c in despesas_final.columns if c not in COLS_DESPESAS_FIX]
+            despesas_final = despesas_final[colunas_finais]
+            _write_df(ABA_DESPESAS, despesas_final)
+
+            st.success(
+                f"🎉 Comissão registrada! {len(linhas)} linha(s) adicionada(s) em **{ABA_DESPESAS}** (por competência) "
+                f"e {len(novos_cache)} itens marcados no **{ABA_COMISSOES_CACHE}**."
+            )
+            st.balloons()
+        else:
+            st.warning("Não há valores a lançar em Despesas.")
