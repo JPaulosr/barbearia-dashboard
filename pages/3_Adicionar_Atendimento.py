@@ -400,28 +400,6 @@ def sugestoes_do_cliente(df_all, cli, conta_default, periodo_default, funcionari
     if func not in ["JPaulo", "Vinicius"]: func = funcionario_default
     return conta, periodo, func
 
-# =========================
-# UI – Cabeçalho e Teste Telegram
-# =========================
-st.set_page_config(layout="wide")
-st.title("📅 Adicionar Atendimento")
-
-with st.expander("🔔 Teste do Telegram"):
-    st.caption("Teste rápido de envio para cada destino.")
-    token_ok = bool((_get_token() or "").strip())
-    chat_j_ok = bool((_get_chat_id_jp() or "").strip())
-    chat_v_ok = bool((_get_chat_id_vini() or "").strip())
-    st.write(f"Token: {'✅' if token_ok else '❌'} • JP privado: {'✅' if chat_j_ok else '❌'} • Vinicius canal: {'✅' if chat_v_ok else '❌'}")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("▶️ Teste — JPaulo (privado)"):
-            ok = tg_send(f"Ping TESTE • JPaulo • {now_br()}", chat_id=_get_chat_id_jp())
-            st.success("Mensagem enviada (privado do JPaulo).") if ok else st.error("Não foi possível enviar para o JP.")
-    with c2:
-        if st.button("▶️ Teste — Vinicius (canal)"):
-            ok = tg_send(f"Ping TESTE • Vinicius • {now_br()}", chat_id=_get_chat_id_vini())
-            st.success("Mensagem enviada (canal do Vinicius).") if ok else st.error("Não foi possível enviar para o canal do Vinicius.")
 
 # =========================
 # DADOS BASE PARA SUGESTÕES
