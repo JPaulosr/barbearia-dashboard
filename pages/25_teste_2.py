@@ -135,10 +135,14 @@ FOTOS = carregar_fotos_mapa()
 # Telegram (roteado por funcionário)
 # =========================================================
 def _has_telegram():
-    return ("TELEGRAM_TOKEN" in st.secrets)
+    # Só considera configurado se TODAS as chaves existirem
+    return all(k in st.secrets for k in [
+        "TELEGRAM_TOKEN",
+        "TELEGRAM_CHAT_ID_JPAULO",
+        "TELEGRAM_CHAT_ID_VINICIUS"
+    ])
 
 def _chat_id_default():
-    # Default para JPaulo caso nada seja passado
     return st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", "")
 
 def _chat_id_por_func(funcionario: str) -> str:
@@ -148,13 +152,10 @@ def _chat_id_por_func(funcionario: str) -> str:
 
 def tg_send(text, chat_id: str | None = None):
     if not _has_telegram():
-        st.warning("Telegram não configurado.")
+        st.warning("⚠️ Telegram não configurado.")
         return
     token = st.secrets["TELEGRAM_TOKEN"]
     chat = chat_id or _chat_id_default()
-    if not chat:
-        st.warning("CHAT_ID não configurado.")
-        return
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
@@ -164,13 +165,10 @@ def tg_send(text, chat_id: str | None = None):
 
 def tg_send_photo(photo_url, caption, chat_id: str | None = None):
     if not _has_telegram():
-        st.warning("Telegram não configurado.")
+        st.warning("⚠️ Telegram não configurado.")
         return
     token = st.secrets["TELEGRAM_TOKEN"]
     chat = chat_id or _chat_id_default()
-    if not chat:
-        st.warning("CHAT_ID não configurado.")
-        return
     try:
         url = f"https://api.telegram.org/bot{token}/sendPhoto"
         payload = {"chat_id": chat, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
