@@ -181,18 +181,29 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
         st.warning(f"Falha ao enviar foto (Telegram): {e}")
         return tg_send(caption, chat_id=chat)
 
-def make_card_caption(nome, status_label, ultima_dt, media, dias_desde_ultima):
-    ultima_str = pd.to_datetime(ultima_dt).strftime("%d/%m/%Y") if pd.notnull(ultima_dt) else "-"
-    media_str = "-" if media is None else f"{media:.1f}".replace(".", ",")
-    dias_str = "-" if dias_desde_ultima is None else str(int(dias_desde_ultima))
-    emoji = {"Em dia":"🟢", "Pouco atrasado":"🟠", "Muito atrasado":"🔴"}.get(status_label, "")
+def make_card_caption(df_all, cliente, funcionario, data, servico, valor, combo):
+    ultima, media, status_label = calcular_metricas_cliente(df_all, cliente)
+    dias = None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days
+
+    total_atend = len(df_all[df_all["Cliente"] == cliente])
+    ultimo_reg = df_all[df_all["Cliente"] == cliente].sort_values("_dt").iloc[-1] if total_atend > 0 else None
+    ultimo_func = ultimo_reg["Funcionário"] if ultimo_reg is not None else "-"
+
+    servico_info = f"{servico}" + (f" (Combo: {combo})" if combo else "")
+    valor_info = f"R$ {valor:.2f}".replace(".", ",")
+
     return (
         "📌 <b>Atendimento registrado</b>\n"
-        f"👤 Cliente: <b>{nome}</b>\n"
-        f"{emoji} Status: <b>{status_label}</b>\n"
-        f"🗓️ Data: <b>{ultima_str}</b>\n"
-        f"🔁 Média: <b>{media_str} dias</b>\n"
-        f"⏳ Distância da última: <b>{dias_str} dias</b>"
+        f"👤 Cliente: <b>{cliente}</b>\n"
+        f"🗓️ Data: <b>{data}</b>\n"
+        f"✂️ Serviço: <b>{servico_info}</b>\n"
+        f"💰 Valor: <b>{valor_info}</b>\n"
+        f"👨‍🔧 Atendido por: <b>{funcionario}</b>\n\n"
+        f"📊 <b>Histórico</b>\n"
+        f"🔁 Média: <b>{'-' if media is None else f'{media:.1f} dias'.replace('.', ',')}</b>\n"
+        f"⏳ Distância da última: <b>{'-' if dias is None else f'{dias} dias'}</b>\n"
+        f"📈 Total de atendimentos: <b>{total_atend}</b>\n"
+        f"👨‍🔧 Último atendente: <b>{ultimo_func}</b>"
     )
 
 def calcular_metricas_cliente(df_all, cliente):
