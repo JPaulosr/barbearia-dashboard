@@ -9,14 +9,6 @@ import json
 import unicodedata
 import requests
 
-# === CONFIG ===
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"
-STATUS_ABA = "clientes_status"  # onde está Cliente + link da foto
-FOTO_COL_CANDIDATES = ["link_foto", "foto", "imagem", "url_foto", "foto_link", "link", "image"]
-
-TZ = "America/Sao_Paulo"
-REL_MULT = 1.5  # classificação relativa: pouco = <= média*1.5, muito acima disso
 
 # Colunas “oficiais” e FIADO
 COLS_OFICIAIS = [
