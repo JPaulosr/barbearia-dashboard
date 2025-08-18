@@ -1,6 +1,4 @@
 # 11_Adicionar_Atendimento.py
-# Página Streamlit para cadastrar atendimentos (simples e em lote avançado)
-# + utilitários de notificação/Telegram + leitura da planilha
 
 import unicodedata
 from datetime import datetime
@@ -12,6 +10,11 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
+
+# =========================================================
+# Flags
+# =========================================================
+SHOW_TG_TEST = True   # <- Coloque False para esconder o bloco de teste do Telegram
 
 # =========================================================
 # Compat de cache
@@ -129,31 +132,52 @@ def carregar_fotos_mapa():
 FOTOS = carregar_fotos_mapa()
 
 # =========================================================
-# Telegram
+# Telegram (roteado por funcionário)
 # =========================================================
 def _has_telegram():
-    return ("TELEGRAM_TOKEN" in st.secrets) and ("TELEGRAM_CHAT_ID" in st.secrets)
+    return ("TELEGRAM_TOKEN" in st.secrets)
 
-def tg_send(text):
+def _chat_id_default():
+    # Default para JPaulo caso nada seja passado
+    return st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", "")
+
+def _chat_id_por_func(funcionario: str) -> str:
+    if funcionario == "Vinicius":
+        return st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS", _chat_id_default())
+    return st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", _chat_id_default())
+
+def tg_send(text, chat_id: str | None = None):
     if not _has_telegram():
+        st.warning("Telegram não configurado.")
+        return
+    token = st.secrets["TELEGRAM_TOKEN"]
+    chat = chat_id or _chat_id_default()
+    if not chat:
+        st.warning("CHAT_ID não configurado.")
         return
     try:
-        url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendMessage"
-        payload = {"chat_id": st.secrets["TELEGRAM_CHAT_ID"], "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         requests.post(url, json=payload, timeout=30)
     except Exception as e:
         st.warning(f"Falha ao enviar Telegram: {e}")
 
-def tg_send_photo(photo_url, caption):
+def tg_send_photo(photo_url, caption, chat_id: str | None = None):
     if not _has_telegram():
+        st.warning("Telegram não configurado.")
+        return
+    token = st.secrets["TELEGRAM_TOKEN"]
+    chat = chat_id or _chat_id_default()
+    if not chat:
+        st.warning("CHAT_ID não configurado.")
         return
     try:
-        url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendPhoto"
-        payload = {"chat_id": st.secrets["TELEGRAM_CHAT_ID"], "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        payload = {"chat_id": chat, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
         requests.post(url, data=payload, timeout=30)
     except Exception as e:
         st.warning(f"Falha ao enviar foto (Telegram): {e}")
-        tg_send(caption)
+        tg_send(caption, chat_id=chat)
 
 def make_card_caption(nome, status_label, ultima_dt, media, dias_desde_ultima):
     ultima_str = pd.to_datetime(ultima_dt).strftime("%d/%m/%Y") if pd.notnull(ultima_dt) else "-"
@@ -191,15 +215,20 @@ def calcular_metricas_cliente(df_all, cliente):
     _, status_label = classificar_relative(dias_since, media)
     return ultima, media, status_label
 
-def enviar_card_vinicius(df_all, cliente):
+def enviar_card(df_all, cliente, funcionario):
     ultima, media, status_label = calcular_metricas_cliente(df_all, cliente)
     dias = None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days
     caption = make_card_caption(cliente, status_label, ultima, media, dias)
     foto = FOTOS.get(_norm(cliente))
-    tg_send_photo(foto, caption) if foto else tg_send(caption)
+    chat_id = _chat_id_por_func(funcionario)
+
+    if foto:
+        tg_send_photo(foto, caption, chat_id=chat_id)
+    else:
+        tg_send(caption, chat_id=chat_id)
 
 # =========================================================
-# Serviços
+# Serviços / helpers
 # =========================================================
 valores_servicos = {
     "Corte": 25.0, "Pezinho": 7.0, "Barba": 15.0, "Sobrancelha": 7.0,
@@ -222,7 +251,6 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
     existe = df[(df["Cliente"] == cliente) & (df["Data"] == data) & (df["Serviço"] == servico) & (df["Combo"] == combo)]
     return not existe.empty
 
-# === Sugestões históricas por cliente ===
 def sugestoes_do_cliente(df_all, cli, conta_default, periodo_default, funcionario_default):
     d = df_all[df_all["Cliente"].astype(str).str.strip() == cli].copy()
     if d.empty:
@@ -235,10 +263,8 @@ def sugestoes_do_cliente(df_all, cli, conta_default, periodo_default, funcionari
     conta = (ultima.get("Conta") or "").strip() or conta_default
     periodo = (ultima.get("Período") or "").strip() or periodo_default
     func = (ultima.get("Funcionário") or "").strip() or funcionario_default
-    if periodo not in ["Manhã", "Tarde", "Noite"]:
-        periodo = periodo_default
-    if func not in ["JPaulo", "Vinicius"]:
-        func = funcionario_default
+    if periodo not in ["Manhã", "Tarde", "Noite"]: periodo = periodo_default
+    if func not in ["JPaulo", "Vinicius"]: func = funcionario_default
     return conta, periodo, func
 
 # =========================================================
@@ -246,6 +272,20 @@ def sugestoes_do_cliente(df_all, cli, conta_default, periodo_default, funcionari
 # =========================================================
 st.set_page_config(layout="wide")
 st.title("📅 Adicionar Atendimento")
+
+# --- Teste de Telegram (pode ocultar com SHOW_TG_TEST=False) ---
+if SHOW_TG_TEST:
+    with st.expander("🔔 Teste do Telegram"):
+        st.caption("Teste rápido de envio para cada destino.")
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            if st.button("▶️ Teste — JPaulo (privado)"):
+                tg_send(f"Ping TESTE • JPaulo • {now_br()}", chat_id=st.secrets.get("TELEGRAM_CHAT_ID_JPAULO"))
+                st.success("Mensagem enviada (verifique o privado do JPaulo).")
+        with col_t2:
+            if st.button("▶️ Teste — Vinicius (canal)"):
+                tg_send(f"Ping TESTE • Vinicius • {now_br()}", chat_id=st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS"))
+                st.success("Mensagem enviada (verifique o canal do Vinicius).")
 
 df_existente, _ = carregar_base()
 
@@ -261,7 +301,7 @@ combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str
 # ------------ Toggle modo --------------
 modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
 
-# campos “globais” (servem como padrão quando não há histórico)
+# defaults globais
 col1, col2 = st.columns(2)
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
@@ -273,7 +313,7 @@ periodo_global = st.selectbox("Período do Atendimento (padrão)", ["Manhã", "T
 fase = "Dono + funcionário"
 
 if not modo_lote:
-    # ----------- MODO UM POR VEZ (sem mudanças além dos padrões acima) -----------
+    # ----------- MODO UM POR VEZ -----------
     colA, colB = st.columns(2)
     with colA:
         cliente = st.selectbox("Nome do Cliente", clientes_existentes)
@@ -281,34 +321,31 @@ if not modo_lote:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
 
-    # sugestões históricas para esse cliente
     sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(df_existente, cliente, conta_global, periodo_global, funcionario_global)
     conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank"])))
     funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=(0 if sug_func=="JPaulo" else 1))
     periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"], index=["Manhã","Tarde","Noite"].index(sug_periodo))
 
-    # último combo para ajudar
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
     combo = ""
     if ultimo is not None:
         combo = st.selectbox("Combo (último primeiro)", [""] + list(dict.fromkeys([ultimo["Combo"]] + combos_existentes)))
 
-    # controles
     if "combo_salvo" not in st.session_state: st.session_state.combo_salvo = False
     if "simples_salvo" not in st.session_state: st.session_state.simples_salvo = False
     if st.button("🧹 Limpar formulário"):
         st.session_state.combo_salvo = False; st.session_state.simples_salvo = False; st.rerun()
 
-    # salvar
     if combo:
         st.subheader("💰 Edite os valores do combo antes de salvar:")
         valores_customizados = {}
         for servico in combo.split("+"):
             s2 = servico.strip()
-            valor_padrao = obter_valor_servico(s2)
-            valores_customizados[s2] = st.number_input(f"{s2} (padrão: R$ {valor_padrao})",
-                                                       value=valor_padrao, step=1.0, key=f"valor_{s2}")
+            valores_customizados[s2] = st.number_input(
+                f"{s2} (padrão: R$ {obter_valor_servico(s2)})",
+                value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
+            )
         if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
             duplicado = any(ja_existe_atendimento(cliente, data, s.strip(), combo) for s in combo.split("+"))
             if duplicado:
@@ -328,7 +365,7 @@ if not modo_lote:
                 salvar_base(df_final)
                 st.session_state.combo_salvo = True
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                if funcionario == "Vinicius": enviar_card_vinicius(df_final, cliente)
+                enviar_card(df_final, cliente, funcionario)
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
         servico = st.selectbox("Serviço", servicos_existentes)
@@ -347,7 +384,8 @@ if not modo_lote:
                 salvar_base(df_final)
                 st.session_state.simples_salvo = True
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                if funcionario == "Vinicius": enviar_card_vinicius(df_final, cliente)
+                enviar_card(df_final, cliente, funcionario)
+
 else:
     # ----------- MODO LOTE AVANÇADO -----------
     st.info("Defina atendimento individual por cliente (misture combos e simples). Também escolha forma de pagamento, período e funcionário para cada um.")
@@ -358,49 +396,45 @@ else:
     lista_final = list(dict.fromkeys(clientes_multi + novos_nomes))
     st.write(f"Total selecionados: **{len(lista_final)}**")
 
-    enviar_telegram_vinic = st.checkbox("Enviar card no Telegram para atendimentos do Vinicius", value=True)
+    enviar_telegram_toggle = st.checkbox("Enviar card no Telegram após salvar", value=True)
 
-    # UI por cliente
     for cli in lista_final:
         with st.container(border=True):
             st.subheader(f"⚙️ Atendimento para {cli}")
-
-            # Sugestões do histórico desse cliente (conta/periodo/func)
             sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(df_existente, cli, conta_global, periodo_global, funcionario_global)
 
-            # Campos por cliente
             tipo_at = st.radio(f"Tipo de atendimento para {cli}", ["Simples", "Combo"], horizontal=True, key=f"tipo_{cli}")
 
-            conta_cli = st.selectbox(
+            st.selectbox(
                 f"Forma de Pagamento de {cli}",
                 list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank"])),
                 key=f"conta_{cli}"
             )
-
-            periodo_cli = st.selectbox(
+            st.selectbox(
                 f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
                 index=["Manhã", "Tarde", "Noite"].index(sug_periodo),
                 key=f"periodo_{cli}"
             )
-
-            func_cli = st.selectbox(
+            st.selectbox(
                 f"Funcionário de {cli}", ["JPaulo", "Vinicius"],
                 index=(0 if sug_func == "JPaulo" else 1),
                 key=f"func_{cli}"
             )
 
             if tipo_at == "Combo":
-                combo_cli = st.selectbox(f"Combo para {cli} (formato corte+barba)", [""] + combos_existentes, key=f"combo_{cli}")
+                st.selectbox(f"Combo para {cli} (formato corte+barba)", [""] + combos_existentes, key=f"combo_{cli}")
+                combo_cli = st.session_state.get(f"combo_{cli}", "")
                 if combo_cli:
                     for s in combo_cli.split("+"):
                         s2 = s.strip()
-                        val_padrao = obter_valor_servico(s2)
-                        st.number_input(f"{cli} - {s2} (padrão: R$ {val_padrao})",
-                                        value=val_padrao, step=1.0, key=f"valor_{cli}_{s2}")
+                        st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
+                                        value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
             else:
-                serv_cli = st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
-                val_padrao = obter_valor_servico(serv_cli)
-                st.number_input(f"{cli} - Valor do serviço", value=val_padrao, step=1.0, key=f"valor_{cli}_simples")
+                st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
+                serv_cli = st.session_state.get(f"servico_{cli}", None)
+                st.number_input(f"{cli} - Valor do serviço",
+                                value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
+                                step=1.0, key=f"valor_{cli}_simples")
 
     if st.button("💾 Salvar TODOS atendimentos"):
         if not lista_final:
@@ -409,6 +443,7 @@ else:
             df_all, _ = carregar_base()
             novas = []
             clientes_salvos = set()
+            funcionario_por_cliente = {}  # para roteamento posterior
 
             for cli in lista_final:
                 tipo_at = st.session_state.get(f"tipo_{cli}", "Simples")
@@ -435,6 +470,7 @@ else:
                         })
                         novas.append(linha)
                     clientes_salvos.add(cli)
+                    funcionario_por_cliente[cli] = func_cli
                 else:
                     serv_cli = st.session_state.get(f"servico_{cli}", None)
                     if not serv_cli:
@@ -451,6 +487,7 @@ else:
                     })
                     novas.append(linha)
                     clientes_salvos.add(cli)
+                    funcionario_por_cliente[cli] = func_cli
 
             if not novas:
                 st.warning("Nenhuma linha válida para inserir.")
@@ -459,9 +496,6 @@ else:
                 salvar_base(df_final)
                 st.success(f"✅ {len(novas)} linhas inseridas para {len(clientes_salvos)} cliente(s).")
 
-                if enviar_telegram_vinic:
+                if enviar_telegram_toggle:
                     for cli in sorted(clientes_salvos):
-                        # só envia se o funcionário do cliente for Vinicius
-                        func_cli = next((linha["Funcionário"] for linha in novas if linha["Cliente"] == cli), None)
-                        if func_cli == "Vinicius":
-                            enviar_card_vinicius(df_final, cli)
+                        enviar_card(df_final, cli, funcionario_por_cliente.get(cli, "JPaulo"))
