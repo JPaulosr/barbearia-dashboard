@@ -5,9 +5,8 @@
 # - Fiado só entra quando DataPagamento <= terça do pagamento.
 # - Em Despesas grava UMA LINHA POR DIA DO ATENDIMENTO (Data = data do serviço).
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
-# - (Novo) Arredondamento para preço cheio por serviço (tabela) com tolerância.
-# - (Novo) Benefício/Ajuste manual dentro do painel (entra no total e em Despesas).
-# - (Opcional) Se pago no cartão, comissão calculada sobre TABELA (ignora desconto do cartão).
+# - Arredondamento opcional para preço cheio por serviço (tabela) com tolerância.
+# - Bloco extra: FIADOS A RECEBER (histórico — ainda NÃO pagos), com comissão futura.
 
 import streamlit as st
 import pandas as pd
@@ -133,9 +132,11 @@ def garantir_colunas(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             df[c] = ""
     return df
 
+def s_lower(s):
+    return s.astype(str).str.strip().str.lower()
+
 def is_cartao(conta: str) -> bool:
     c = (conta or "").strip().lower()
-    # cobre variações comuns: cartao, cartão, crédito, debito, maquininha, pos, etc
     padrao = r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos)"
     return bool(re.search(padrao, c))
 
@@ -143,21 +144,13 @@ def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bo
     """
     Se habilitado, tenta 'grudar' o valor no preço CHEIO da TABELA do serviço,
     desde que esteja dentro da tolerância. Ex.: 23, 24.75, 25.10 → 25.00 (tol=2.00).
-    Caso não haja valor de tabela para o serviço, arredonda para inteiro.
+    Caso não haja valor de tabela para o serviço, mantém o valor.
     """
     if not habilitado:
         return valor
-    srv = (servico or "").strip()
-    cheio = VALOR_TABELA.get(srv)
-    if isinstance(cheio, (int, float)):
-        if abs(valor - float(cheio)) <= tol:
-            return float(cheio)
-        # sem 'snap', mantém o valor original
-        return valor
-    # fallback: sem tabela, arredonda p/ inteiro (sem centavos) se dentro da tol de um inteiro "próximo"
-    arred = round(valor)
-    if abs(valor - arred) <= tol:
-        return float(arred)
+    cheio = VALOR_TABELA.get((servico or "").strip())
+    if isinstance(cheio, (int, float)) and abs(valor - float(cheio)) <= tol:
+        return float(cheio)
     return valor
 
 def format_brl(v: float) -> str:
@@ -221,9 +214,9 @@ reprocessar_terca = st.checkbox(
 )
 
 # Conjunto Vinicius
-dfv = base[base["Funcionário"].astype(str).str.strip() == "Vinicius"].copy()
+dfv = base[s_lower(base["Funcionário"]) == "vinicius"].copy()
 if not incluir_produtos:
-    dfv = dfv[dfv["Tipo"].astype(str).str.strip().str.lower() == "serviço"]
+    dfv = dfv[s_lower(dfv["Tipo"]) == "serviço"]
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
 
 # Janela terça→segunda (anterior à terça de pagamento)
@@ -235,18 +228,17 @@ mask_semana = (
     (dfv["_dt_serv"].notna()) &
     (dfv["_dt_serv"] >= ini) &
     (dfv["_dt_serv"] <= fim) &
-    ((dfv["StatusFiado"].astype(str).str.strip() == "") |
-     (dfv["StatusFiado"].astype(str).str.strip().str.lower() == "nao"))
+    ((s_lower(dfv["StatusFiado"]) == "") | (s_lower(dfv["StatusFiado"]) == "nao"))
 )
 semana_df = dfv[mask_semana].copy()
 
 # 2) Fiados liberados até a terça (independe da data do serviço)
-df_fiados = dfv[
-    (dfv["StatusFiado"].astype(str).str.strip() != "") |
-    (dfv["IDLancFiado"].astype(str).str.strip() != "")
-].copy()
+df_fiados = dfv[(s_lower(dfv["StatusFiado"]) != "") | (s_lower(dfv["IDLancFiado"]) != "")]
 df_fiados["_dt_pagto"] = df_fiados["DataPagamento"].apply(parse_br_date)
 fiados_liberados = df_fiados[(df_fiados["_dt_pagto"].notna()) & (df_fiados["_dt_pagto"] <= terca_pagto)].copy()
+
+# 3) NOVO BLOCO — Fiados pendentes (histórico, ainda não pagos)
+fiados_pendentes = df_fiados[(df_fiados["_dt_pagto"].isna()) | (df_fiados["_dt_pagto"] > terca_pagto)].copy()
 
 # Cache de comissões já pagas (por RefID)
 cache = _read_df(ABA_COMISSOES_CACHE)
@@ -255,44 +247,32 @@ cache = garantir_colunas(cache, cache_cols)
 
 terca_str = to_br_date(terca_pagto)
 if reprocessar_terca:
-    # Ignora os pagos desta terça na visualização (permite reprocessar)
     ja_pagos = set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
 else:
     ja_pagos = set(cache["RefID"].astype(str).tolist())
 
-# ------------------------------------
-# Seção: Benefício / Ajuste manual
-# ------------------------------------
-st.markdown("---")
-st.subheader("➕ Benefício / Ajuste manual (opcional)")
-col_b1, col_b2, col_b3, col_b4 = st.columns([1,1,1,2])
-with col_b1:
-    ben_data = st.date_input("Data do benefício", value=br_now().date(), key="ben_data")
-with col_b2:
-    ben_valor = st.number_input("Valor (R$)", min_value=0.0, step=1.0, value=0.0, key="ben_valor")
-with col_b3:
-    ben_comp = (datetime(ben_data.year, ben_data.month, 1)).strftime("%m/%Y")
-    st.text_input("Competência (auto)", value=ben_comp, key="ben_comp", disabled=True)
-with col_b4:
-    ben_desc = st.text_input("Descrição", value="Benefício/ajuste de comissão", key="ben_desc")
+# Função base de cálculo
+def montar_valor_base(df):
+    if df.empty:
+        df["Valor_num"] = []
+        df["Competência"] = []
+        df["Valor_base_comissao"] = []
+        return df
+    df["Valor_num"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+    df["Competência"] = df["Data"].apply(competencia_from_data_str)
 
-if st.button("💾 Adicionar benefício à lista desta terça"):
-    if ben_valor <= 0:
-        st.warning("Informe um valor de benefício maior que zero.")
-    else:
-        # Guardar em estado da sessão para somar com os itens da semana
-        lista = st.session_state.get("beneficios_tmp", [])
-        lista.append({
-            "RefID": f"BEN|{ben_data.isoformat()}|{ben_valor:.2f}|{ben_desc.strip()}",
-            "Data": ben_data.strftime("%d/%m/%Y"),
-            "Competência": ben_comp,
-            "ComissaoValor": float(ben_valor),
-            "Observacao": f"Benefício — {ben_desc.strip()}",
-        })
-        st.session_state["beneficios_tmp"] = lista
-        st.success(f"Benefício adicionado: {format_brl(ben_valor)} em {ben_data.strftime('%d/%m/%Y')}.")
+    def _base_valor(row):
+        serv = str(row.get("Serviço", "")).strip()
+        conta = str(row.get("Conta", "")).strip()
+        bruto = float(row.get("Valor_num", 0.0))
+        if usar_tabela_cartao and is_cartao(conta):
+            return float(VALOR_TABELA.get(serv, bruto))
+        return snap_para_preco_cheio(serv, bruto, tol_reais, arred_cheio)
 
-# Função para montar grade editável e calcular comissões
+    df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
+    return df
+
+# ------- GRADE EDITÁVEL: semana e fiados liberados -------
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
     if df.empty:
         st.warning(f"Sem itens em **{titulo}**.")
@@ -304,24 +284,7 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
         st.info(f"Todos os itens de **{titulo}** já foram pagos.")
         return pd.DataFrame(), 0.0
 
-    # Valor original e competência
-    df["Valor_num"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
-    df["Competência"] = df["Data"].apply(competencia_from_data_str)
-
-    # Valor base para comissão:
-    # 1) Se cartão + flag → usar TABELA
-    # 2) Senão, aplicar 'snap' (arredondamento p/ CHEIO) se habilitado
-    def _base_valor(row):
-        serv = str(row.get("Serviço", "")).strip()
-        conta = str(row.get("Conta", "")).strip()
-        bruto = float(row.get("Valor_num", 0.0))
-        if usar_tabela_cartao and is_cartao(conta):
-            # comissão em cima do preço CHEIO da TABELA
-            return float(VALOR_TABELA.get(serv, bruto))
-        # snap opcional para valor cheio, mesmo quando não é cartão
-        return snap_para_preco_cheio(serv, bruto, tol_reais, arred_cheio)
-
-    df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
+    df = montar_valor_base(df)
 
     st.subheader(titulo)
     st.caption("Edite a % de comissão por linha, se precisar.")
@@ -351,30 +314,52 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
     return merged, total
 
 semana_grid, total_semana = preparar_grid(semana_df, "Semana (terça→segunda) — NÃO FIADO", "semana")
-fiados_grid, total_fiados = preparar_grid(fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados")
 
-# Adiciona BENEFÍCIOS temporários (se houver)
-beneficios_tmp = st.session_state.get("beneficios_tmp", [])
-if beneficios_tmp:
-    st.info(f"{len(beneficios_tmp)} benefício(s) adicionados nesta sessão:")
-    for b in beneficios_tmp:
-        st.write(f"- {b['Data']} • {b['Observacao']} • {format_brl(b['ComissaoValor'])}")
+fiados_liberados_grid, total_fiados = preparar_grid(
+    fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados"
+)
 
-total_geral = total_semana + total_fiados + sum(b["ComissaoValor"] for b in beneficios_tmp)
-st.header(f"💵 Total desta terça (consolidado): {format_brl(total_geral)}")
+# ------- NOVO: TABELA (somente leitura) — FIADOS A RECEBER -------
+st.subheader("📌 Fiados a receber (histórico — ainda NÃO pagos)")
+if fiados_pendentes.empty:
+    st.info("Nenhum fiado pendente no momento.")
+    total_fiados_pend = 0.0
+else:
+    fiados_pendentes = montar_valor_base(fiados_pendentes)
+    vis = fiados_pendentes[["Data", "Cliente", "Serviço", "Valor", "Valor_base_comissao"]].rename(
+        columns={"Valor_base_comissao": "Valor (para comissão)"}
+    ).copy()
+    vis["% Comissão"] = perc_padrao
+    vis["Comissão (R$)"] = (pd.to_numeric(vis["Valor (para comissão)"], errors="coerce").fillna(0.0) * vis["% Comissão"] / 100.0).round(2)
+    total_fiados_pend = float(vis["Comissão (R$)"].sum())
+
+    st.dataframe(
+        vis.sort_values(by=["Data", "Cliente"]).reset_index(drop=True),
+        use_container_width=True
+    )
+    st.warning(f"Comissão futura (quando pagarem): **{format_brl(total_fiados_pend)}**")
+
+# ------- RESUMO DE MÉTRICAS -------
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+with col_m1:
+    st.metric("Nesta terça — NÃO fiado", format_brl(total_semana))
+with col_m2:
+    st.metric("Nesta terça — fiados liberados", format_brl(total_fiados))
+with col_m3:
+    st.metric("Total desta terça", format_brl(total_semana + total_fiados))
+with col_m4:
+    st.metric("Fiados pendentes (futuro)", format_brl(total_fiados_pend))
 
 # =============================
 # CONFIRMAR E GRAVAR
 # =============================
-if st.button("✅ Registrar comissão (por DIA do atendimento) + benefícios e marcar itens como pagos"):
-    if ((semana_grid is None or semana_grid.empty) and
-        (fiados_grid is None or fiados_grid.empty) and
-        (len(beneficios_tmp) == 0)):
+if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens como pagos"):
+    if (semana_grid is None or semana_grid.empty) and (fiados_liberados_grid is None or fiados_liberados_grid.empty):
         st.warning("Não há itens para pagar.")
     else:
         # 1) Atualiza cache item a item (para não pagar duas vezes)
         novos_cache = []
-        for df_part in [semana_grid, fiados_grid]:
+        for df_part in [semana_grid, fiados_liberados_grid]:
             if df_part is None or df_part.empty:
                 continue
             for _, r in df_part.iterrows():
@@ -387,50 +372,28 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) + benefícios e m
                     "Observacao": f'{r.get("Cliente","")} | {r.get("Serviço","")} | {r.get("Data","")}',
                 })
 
-        # Benefícios entram no cache com RefID próprio
-        for b in beneficios_tmp:
-            novos_cache.append({
-                "RefID": b["RefID"],
-                "PagoEm": to_br_date(br_now()),
-                "TerçaPagamento": to_br_date(terca_pagto),
-                "ValorComissao": f'{b["ComissaoValor"]:.2f}'.replace(".", ","),
-                "Competencia": b["Competência"] if "Competência" in b else b["Competência"] if "Competência" in b else "",
-                "Observacao": b["Observacao"],
-            })
-
         cache_df = _read_df(ABA_COMISSOES_CACHE)
         cache_df = garantir_colunas(cache_df, cache_cols)
 
         if reprocessar_terca:
-            # remove do cache tudo desta terça selecionada e regrava do zero
             cache_df = cache_df[cache_df["TerçaPagamento"] != to_br_date(terca_pagto)].copy()
 
         cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
-        # 2) Lança em DESPESAS: UMA LINHA POR DIA DO ATENDIMENTO + benefícios
+        # 2) Lança em DESPESAS: UMA LINHA POR DIA DO ATENDIMENTO
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
         for c in COLS_DESPESAS_FIX:
             if c not in despesas_df.columns:
                 despesas_df[c] = ""
 
-        # Junta itens pagáveis com Data do serviço, Competência e valor da comissão
         pagaveis = []
-        for df_part in [semana_grid, fiados_grid]:
+        for df_part in [semana_grid, fiados_liberados_grid]:
             if df_part is None or df_part.empty:
                 continue
             pagaveis.append(df_part[["Data", "Competência", "ComissaoValor"]].copy())
 
-        # Benefícios são adicionados com a própria "Data"
-        if beneficios_tmp:
-            ben_df = pd.DataFrame([
-                {"Data": b["Data"], "Competência": b.get("Competência", ""), "ComissaoValor": b["ComissaoValor"]}
-                for b in beneficios_tmp
-            ])
-            pagaveis.append(ben_df)
-
-        linhas = []
         if pagaveis:
             pagos = pd.concat(pagaveis, ignore_index=True)
 
@@ -448,32 +411,28 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) + benefícios e m
 
             por_dia = pagos.groupby(["Data", "Competência"], dropna=False)["ComissaoValor"].sum().reset_index()
 
+            linhas = []
             for _, row in por_dia.iterrows():
-                data_serv = str(row["Data"]).strip()            # dd/mm/aaaa do atendimento/benefício
-                comp      = str(row["Competência"]).strip()     # mm/aaaa
+                data_serv = str(row["Data"]).strip()
+                comp      = str(row["Competência"]).strip()
                 val       = float(row["ComissaoValor"])
-
                 linhas.append({
-                    "Data": data_serv,  # ✅ Data do atendimento ou do benefício
+                    "Data": data_serv,
                     "Prestador": "Vinicius",
                     "Descrição": f"{descricao_padrao} — Comp {comp} — Pago em {to_br_date(terca_pagto)}",
                     "Valor": f'R$ {val:.2f}'.replace(".", ","),
                     "Me Pag:": meio_pag
                 })
 
-        if linhas:
             despesas_final = pd.concat([despesas_df, pd.DataFrame(linhas)], ignore_index=True)
             colunas_finais = [c for c in COLS_DESPESAS_FIX if c in despesas_final.columns] + \
                              [c for c in despesas_final.columns if c not in COLS_DESPESAS_FIX]
             despesas_final = despesas_final[colunas_finais]
             _write_df(ABA_DESPESAS, despesas_final)
 
-            # Limpa os benefícios temporários da sessão
-            st.session_state["beneficios_tmp"] = []
-
             st.success(
                 f"🎉 Comissão registrada! {len(linhas)} linha(s) adicionada(s) em **{ABA_DESPESAS}** "
-                f"(uma por DIA/benefício) e {len(novos_cache)} itens marcados no **{ABA_COMISSOES_CACHE}**."
+                f"(uma por DIA do atendimento) e {len(novos_cache)} itens marcados no **{ABA_COMISSOES_CACHE}**."
             )
             st.balloons()
         else:
