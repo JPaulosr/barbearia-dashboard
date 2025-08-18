@@ -4,7 +4,7 @@
 # - Quitar por COMPETÊNCIA com atualização mínima (sem clear da planilha)
 # - Notificações com FOTO (se existir) e card HTML
 # - Roteamento: Vinícius → canal; JPaulo → privado
-# - Cópia privada p/ JP ao quitar: comissões sugeridas + próxima terça p/ pagar
+# - Cópia privada p/ JP ao quitar: comissões (somente p/ elegíveis) + próxima terça p/ pagar
 # - Cards incluem “🧰 Serviço(s)” (combo se houver; senão serviços) — sem ID
 # - Cópia p/ JP inclui “Histórico por ano” e “Ano corrente: por serviço (qtd × total)”
 
@@ -259,6 +259,11 @@ VALORES_PADRAO = {
     "Luzes": 45.0, "Pintura": 35.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0
 }
 
+# === Comissão (Ajuste pedido) ===
+# Apenas estes funcionários geram comissão; % padrão
+COMISSAO_FUNCIONARIOS = {"vinicius"}   # case-insensitive
+COMISSAO_PERC_PADRAO = 0.50
+
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -291,7 +296,7 @@ def read_base_raw(ss):
     df = df[[*BASE_COLS_ALL, *[c for c in df.columns if c not in BASE_COLS_ALL]]]
     return df, ws
 
-# ---------- [FIX] Append robusto com normalização de cabeçalho ----------
+# ---------- Append robusto com normalização de cabeçalho ----------
 def _norm_key(s: str) -> str:
     return unicodedata.normalize("NFKC", str(s).strip()).casefold()
 
@@ -316,7 +321,7 @@ def append_rows_base(ws, novas_dicts):
 
     if rows:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
-# ---------- [FIX] Fim ----------
+# ---------- Fim ----------
 
 @st.cache_data
 def carregar_listas():
@@ -654,25 +659,26 @@ elif acao == "💰 Registrar pagamento":
             except Exception:
                 pass
 
-            # ---- CÓPIA PRIVADA PARA JPAULO: comissão + histórico anual + breakdown do ano ----
+            # ---- CÓPIA PRIVADA PARA JPAULO: comissão (apenas elegíveis) + histórico anual + breakdown do ano ----
             try:
                 sub = subset_all.copy()
                 sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)
 
+                # Somente funcionários elegíveis geram comissão (ex.: Vinicius)
                 grup = sub.groupby("Funcionário", dropna=True)["Valor"].sum().reset_index()
                 itens_comissao = []
                 total_comissao = 0.0
                 for _, r in grup.iterrows():
-                    func = str(r["Funcionário"]).strip()
-                    if func.lower() == "jpaulo":
-                        continue
+                    func_raw = str(r["Funcionário"]).strip()
+                    func_key = unicodedata.normalize("NFKC", func_raw).casefold()
+                    if func_key not in COMISSAO_FUNCIONARIOS:
+                        continue  # ignora JPaulo ou outros não comissionados
                     base = float(r["Valor"])
-                    comiss = round(base * 0.50, 2)
+                    comiss = round(base * COMISSAO_PERC_PADRAO, 2)
                     total_comissao += comiss
-                    itens_comissao.append(f"• {func}: <b>{_fmt_brl(comiss)}</b>")
+                    itens_comissao.append(f"• {func_raw}: <b>{_fmt_brl(comiss)}</b>")
 
                 dt_pgto = proxima_terca(data_pag)
-                lista = "\n".join(itens_comissao) if itens_comissao else "• (sem comissão)"
 
                 # Histórico por ano do cliente
                 ss_priv = conectar_sheets()
@@ -696,26 +702,36 @@ elif acao == "💰 Registrar pagamento":
                     )
                     if oq > 0:
                         linhas_srv += f"\n• Outros: {oq}× · <b>{_fmt_brl(ov)}</b>"
-                    bloco_srv = f"\n------------------------------\n🔎 <b>{ano_corrente}: por serviço</b>\n{linhas_srv}\n" \
-                                f"Total ({ano_corrente}): <b>{_fmt_brl(tv)}</b>"
+                    bloco_srv = (
+                        f"\n------------------------------\n🔎 <b>{ano_corrente}: por serviço</b>\n{linhas_srv}\n"
+                        f"Total ({ano_corrente}): <b>{_fmt_brl(tv)}</b>"
+                    )
                 else:
                     bloco_srv = f"\n------------------------------\n🔎 <b>{ano_corrente}: por serviço</b>\n• (sem registros)"
 
                 servicos_txt = servicos_compactos_por_ids(subset_all)
-                tot_fmt = _fmt_brl(total_pago)
+                tot_fmt = _fmt_brl(float(sub["Valor"].sum()))
                 ids_txt = ", ".join(id_selecionados)
 
+                # Monta mensagem p/ JP — inclui bloco de comissão só se houver itens
+                sec_comissao = ""
+                if itens_comissao:
+                    lista = "\n".join(itens_comissao)
+                    sec_comissao = (
+                        "\n------------------------------\n"
+                        f"💸 <b>Comissões sugeridas ({int(COMISSAO_PERC_PADRAO*100)}%)</b>\n"
+                        f"{lista}"
+                    )
+
                 msg_jp = (
-                    "🧾 <b>Cópia para controle (comissão)</b>\n"
+                    "🧾 <b>Cópia para controle</b>\n"
                     f"👤 Cliente: <b>{cliente_sel}</b>\n"
                     f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
                     f"🗂️ IDs: <code>{ids_txt}</code>\n"
-                    f"📅 Pagamento em: <b>{data_pag_str}</b>\n"
-                    f"📌 Pagar comissão na próxima terça: <b>{dt_pgto.strftime(DATA_FMT)}</b>\n"
-                    "------------------------------\n"
-                    "💸 <b>Comissões sugeridas (50%)</b>\n"
-                    f"{lista}\n"
-                    "------------------------------\n"
+                    f"📅 Pagamento em: <b>{data_pag.strftime(DATA_FMT)}</b>\n"
+                    f"📌 Pagar comissão na próxima terça: <b>{dt_pgto.strftime(DATA_FMT)}</b>"
+                    f"{sec_comissao}"
+                    "\n------------------------------\n"
                     f"💵 Total recebido: <b>{tot_fmt}</b>"
                     f"{bloco_hist}"
                     f"{bloco_srv}"
