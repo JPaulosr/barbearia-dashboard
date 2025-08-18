@@ -223,7 +223,7 @@ reprocessar_terca = st.checkbox(
 # Conjunto Vinicius
 dfv = base[base["Funcionário"].astype(str).str.strip() == "Vinicius"].copy()
 if not incluir_produtos:
-    dfv = dfv[dfv["Tipo"].astype(str).str.strip().lower() == "serviço"]
+    dfv = dfv[dfv["Tipo"].astype(str).str.strip().str.lower() == "serviço"]
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
 
 # Janela terça→segunda (anterior à terça de pagamento)
