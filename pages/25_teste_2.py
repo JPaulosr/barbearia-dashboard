@@ -110,59 +110,130 @@ def carregar_fotos_mapa():
 FOTOS = carregar_fotos_mapa()
 
 # =========================
-# TELEGRAM (roteado por funcionário)
+# TELEGRAM (fallbacks e testes)
 # =========================
-def _has_telegram():
-    return bool(
-        st.secrets.get("TELEGRAM_TOKEN")
-        and st.secrets.get("TELEGRAM_CHAT_ID_JPAULO")
-        and st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS")
-    )
+TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
+TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
+TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"  # id real do canal
 
-def _chat_id_por_func(funcionario: str) -> str:
+def _get_secret(name: str, default: str | None = None) -> str | None:
+    try:
+        val = st.secrets.get(name)
+        val = (val or "").strip()
+        if val:
+            return val
+    except Exception:
+        pass
+    return (default or "").strip() or None
+
+def _get_token() -> str | None:
+    return _get_secret("TELEGRAM_TOKEN", TELEGRAM_TOKEN_CONST)
+
+def _get_chat_id_jp() -> str | None:
+    return _get_secret("TELEGRAM_CHAT_ID_JPAULO", TELEGRAM_CHAT_ID_JPAULO_CONST)
+
+def _get_chat_id_vini() -> str | None:
+    return _get_secret("TELEGRAM_CHAT_ID_VINICIUS", TELEGRAM_CHAT_ID_VINICIUS_CONST)
+
+def _check_tg_ready(token: str | None, chat_id: str | None) -> bool:
+    return bool((token or "").strip() and (chat_id or "").strip())
+
+def _chat_id_por_func(funcionario: str) -> str | None:
     if funcionario == "Vinicius":
-        return st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS")
-    return st.secrets.get("TELEGRAM_CHAT_ID_JPAULO")
+        return _get_chat_id_vini()
+    return _get_chat_id_jp()
 
-def tg_send(text, chat_id=None):
-    if not _has_telegram():
-        st.warning("⚠️ Telegram não configurado.")
-        return
-    token = st.secrets["TELEGRAM_TOKEN"]
-    chat = chat_id or st.secrets.get("TELEGRAM_CHAT_ID_JPAULO")
+def tg_send(text: str, chat_id: str | None = None) -> bool:
+    token = _get_token()
+    chat = chat_id or _get_chat_id_jp()
+    if not _check_tg_ready(token, chat):
+        st.warning("⚠️ Telegram não configurado para este destino.")
+        return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-        requests.post(url, json=payload, timeout=30)
+        r = requests.post(url, json=payload, timeout=30)
+        js = r.json()
+        if r.ok and js.get("ok"):
+            return True
+        st.warning(f"Falha ao enviar (HTTP {r.status_code}): {js}")
+        return False
     except Exception as e:
         st.warning(f"Falha ao enviar Telegram: {e}")
+        return False
 
-def tg_send_photo(photo_url, caption, chat_id=None):
-    if not _has_telegram():
-        st.warning("⚠️ Telegram não configurado.")
-        return
-    token = st.secrets["TELEGRAM_TOKEN"]
-    chat = chat_id or st.secrets.get("TELEGRAM_CHAT_ID_JPAULO")
+def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> bool:
+    token = _get_token()
+    chat = chat_id or _get_chat_id_jp()
+    if not _check_tg_ready(token, chat):
+        st.warning("⚠️ Telegram não configurado para este destino.")
+        return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendPhoto"
         payload = {"chat_id": chat, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
-        requests.post(url, data=payload, timeout=30)
+        r = requests.post(url, data=payload, timeout=30)
+        js = r.json()
+        if r.ok and js.get("ok"):
+            return True
+        st.warning(f"Falha ao enviar foto (HTTP {r.status_code}): {js}. Tentando enviar como texto…")
+        return tg_send(caption, chat_id=chat)
     except Exception as e:
         st.warning(f"Falha ao enviar foto (Telegram): {e}")
-        tg_send(caption, chat_id=chat)
+        return tg_send(caption, chat_id=chat)
 
-def make_card_caption(nome, status_label, ultima_dt, media, dias_desde_ultima):
-    ultima_str = pd.to_datetime(ultima_dt).strftime("%d/%m/%Y") if pd.notnull(ultima_dt) else "-"
-    media_str = "-" if media is None else f"{media:.1f}".replace(".", ",")
-    dias_str = "-" if dias_desde_ultima is None else str(int(dias_desde_ultima))
-    emoji = {"Em dia":"🟢", "Pouco atrasado":"🟠", "Muito atrasado":"🔴"}.get(status_label, "")
+# =========================
+# CARD – resumo do atendimento e histórico
+# =========================
+def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
+    """
+    Retorna (label_servico, valor_total, is_combo, lista_servicos)
+    pesquisando registros do cliente na data informada.
+    """
+    d = df_all[
+        (df_all["Cliente"].astype(str).str.strip() == cliente) &
+        (df_all["Data"].astype(str).str.strip() == data_str)
+    ].copy()
+
+    d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
+    servicos = [str(s).strip() for s in d["Serviço"].fillna("").tolist() if str(s).strip()]
+    valor_total = float(d["Valor"].sum()) if not d.empty else 0.0
+    is_combo = len(servicos) > 1 or (d["Combo"].fillna("").str.strip() != "").any()
+
+    if servicos:
+        label = " + ".join(servicos) + (" (Combo)" if is_combo else " (Simples)")
+    else:
+        label = "-"
+
+    return label, valor_total, is_combo, servicos
+
+def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total):
+    # métricas de frequência
+    ultima, media, _ = calcular_metricas_cliente(df_all, cliente)
+    dias = None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days
+
+    # histórico
+    d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
+    d_hist["_dt"] = pd.to_datetime(d_hist["Data"], format="%d/%m/%Y", errors="coerce")
+    d_hist = d_hist.dropna(subset=["_dt"]).sort_values("_dt")
+    total_atend = len(d_hist)
+    ultimo_func = d_hist.iloc[-1]["Funcionário"] if total_atend > 0 else "-"
+
+    media_str = "-" if media is None else f"{media:.1f} dias".replace(".", ",")
+    dias_str = "-" if dias is None else f"{dias} dias"
+    valor_str = f"R$ {valor_total:.2f}".replace(".", ",")
+
     return (
         "📌 <b>Atendimento registrado</b>\n"
-        f"👤 Cliente: <b>{nome}</b>\n"
-        f"{emoji} Status: <b>{status_label}</b>\n"
-        f"🗓️ Data: <b>{ultima_str}</b>\n"
-        f"🔁 Média: <b>{media_str} dias</b>\n"
-        f"⏳ Distância da última: <b>{dias_str} dias</b>"
+        f"👤 Cliente: <b>{cliente}</b>\n"
+        f"🗓️ Data: <b>{data_str}</b>\n"
+        f"✂️ Serviço: <b>{servico_label}</b>\n"
+        f"💰 Valor: <b>{valor_str}</b>\n"
+        f"👨‍🔧 Atendido por: <b>{funcionario}</b>\n\n"
+        f"📊 <b>Histórico</b>\n"
+        f"🔁 Média: <b>{media_str}</b>\n"
+        f"⏳ Distância da última: <b>{dias_str}</b>\n"
+        f"📈 Total de atendimentos: <b>{total_atend}</b>\n"
+        f"👨‍🔧 Último atendente: <b>{ultimo_func}</b>"
     )
 
 def calcular_metricas_cliente(df_all, cliente):
@@ -180,18 +251,30 @@ def calcular_metricas_cliente(df_all, cliente):
         ts = [pd.to_datetime(x) for x in dias]
         diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
         diffs = [x for x in diffs if x > 0]
-        if diffs: media = sum(diffs)/len(diffs)
+        if diffs: media = sum(diffs) / len(diffs)
     _, status_label = classificar_relative(dias_since, media)
     return ultima, media, status_label
 
-def enviar_card(df_all, cliente, funcionario):
-    ultima, media, status_label = calcular_metricas_cliente(df_all, cliente)
-    dias = None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days
-    caption = make_card_caption(cliente, status_label, ultima, media, dias)
+def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
+    """
+    data_str: 'dd/mm/aaaa'
+    servico/valor/combo são opcionais. Se não vierem, o resumo é calculado pelo df_all.
+    """
+    if servico is None or valor is None:
+        servico_label, valor_total, _, _ = _resumo_do_dia(df_all, cliente, data_str)
+    else:
+        is_combo = bool(combo and str(combo).strip())
+        servico_label = (f"{servico} (Combo)" if is_combo and "+" in str(servico)
+                         else f"{servico} (Simples)" if not is_combo else f"{servico} (Combo)")
+        valor_total = float(valor)
+
+    caption = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total)
     foto = FOTOS.get(_norm(cliente))
     chat_id = _chat_id_por_func(funcionario)
-    if foto: tg_send_photo(foto, caption, chat_id=chat_id)
-    else:    tg_send(caption, chat_id=chat_id)
+    if foto:
+        tg_send_photo(foto, caption, chat_id=chat_id)
+    else:
+        tg_send(caption, chat_id=chat_id)
 
 # =========================
 # VALORES DE SERVIÇO
@@ -237,15 +320,20 @@ st.title("📅 Adicionar Atendimento")
 
 with st.expander("🔔 Teste do Telegram"):
     st.caption("Teste rápido de envio para cada destino.")
+    token_ok = bool((_get_token() or "").strip())
+    chat_j_ok = bool((_get_chat_id_jp() or "").strip())
+    chat_v_ok = bool((_get_chat_id_vini() or "").strip())
+    st.write(f"Token: {'✅' if token_ok else '❌'} • JP privado: {'✅' if chat_j_ok else '❌'} • Vinicius canal: {'✅' if chat_v_ok else '❌'}")
+
     c1, c2 = st.columns(2)
     with c1:
         if st.button("▶️ Teste — JPaulo (privado)"):
-            tg_send(f"Ping TESTE • JPaulo • {now_br()}", chat_id=st.secrets.get("TELEGRAM_CHAT_ID_JPAULO"))
-            st.success("Mensagem enviada (verifique o privado do JPaulo).")
+            ok = tg_send(f"Ping TESTE • JPaulo • {now_br()}", chat_id=_get_chat_id_jp())
+            st.success("Mensagem enviada (privado do JPaulo).") if ok else st.error("Não foi possível enviar para o JP.")
     with c2:
         if st.button("▶️ Teste — Vinicius (canal)"):
-            tg_send(f"Ping TESTE • Vinicius • {now_br()}", chat_id=st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS"))
-            st.success("Mensagem enviada (verifique o canal do Vinicius).")
+            ok = tg_send(f"Ping TESTE • Vinicius • {now_br()}", chat_id=_get_chat_id_vini())
+            st.success("Mensagem enviada (canal do Vinicius).") if ok else st.error("Não foi possível enviar para o canal do Vinicius.")
 
 # =========================
 # DADOS BASE PARA SUGESTÕES
@@ -307,8 +395,10 @@ if not modo_lote:
         valores_customizados = {}
         for s in combo.split("+"):
             s2 = s.strip()
-            valores_customizados[s2] = st.number_input(f"{s2} (padrão: R$ {obter_valor_servico(s2)})",
-                                                       value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}")
+            valores_customizados[s2] = st.number_input(
+                f"{s2} (padrão: R$ {obter_valor_servico(s2)})",
+                value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
+            )
         if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
             duplicado = any(ja_existe_atendimento(cliente, data, s.strip(), combo) for s in combo.split("+"))
             if duplicado:
@@ -328,7 +418,13 @@ if not modo_lote:
                 salvar_base(df_final)
                 st.session_state.combo_salvo = True
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                enviar_card(df_final, cliente, funcionario)
+                # card: passamos info explícita para já mostrar serviços do combo e somatório
+                enviar_card(
+                    df_final, cliente, funcionario, data,
+                    servico=combo.replace("+", " + "),
+                    valor=sum(valores_customizados.values()),
+                    combo=combo
+                )
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
         servico = st.selectbox("Serviço", servicos_existentes)
@@ -347,7 +443,7 @@ if not modo_lote:
                 salvar_base(df_final)
                 st.session_state.simples_salvo = True
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                enviar_card(df_final, cliente, funcionario)
+                enviar_card(df_final, cliente, funcionario, data, servico=servico, valor=valor, combo="")
 
 # =========================
 # MODO LOTE AVANÇADO
@@ -445,4 +541,5 @@ else:
 
                 if enviar_cards:
                     for cli in sorted(clientes_salvos):
-                        enviar_card(df_final, cli, funcionario_por_cliente.get(cli, "JPaulo"))
+                        # aqui basta passar data; a função resume os serviços/valor do dia
+                        enviar_card(df_final, cli, funcionario_por_cliente.get(cli, "JPaulo"), data)
