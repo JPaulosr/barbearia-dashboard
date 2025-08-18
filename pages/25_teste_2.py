@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 12_Fiado.py — Fiado integrado à Base + Notificações Telegram (por funcionário)
+# 12_Fiado.py — Fiado integrado à Base + Notificações Telegram (por funcionário + cópia p/ JP)
 # - Combo por linhas com valores editáveis
 # - Registrar pagamento por cliente (seleciona 1+ IDs; "selecionar todos")
 # - Sugere última forma de pagamento do cliente (vinda da Base)
@@ -7,7 +7,8 @@
 # - [REMOVIDO] bloco de lançar comissão 50% (feito em outra página)
 # - Exportação Excel (openpyxl) ou CSV (fallback)
 # - Sidebar expandida por padrão
-# - [NOVO] Notificações Telegram roteadas p/ JPaulo e p/ Vinícius
+# - Notificações Telegram roteadas p/ JPaulo e p/ Vinícius
+# - Cópia privada p/ JPaulo ao quitar: comissões sugeridas + próxima terça p/ pagar
 
 import streamlit as st
 import pandas as pd
@@ -15,55 +16,66 @@ import gspread
 import requests
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 import pytz
 
 # =========================
-# NOTIFICAÇÃO TELEGRAM
+# TELEGRAM (idêntico ao 11_Adicionar_Atendimento.py)
 # =========================
-# Roteia por destinatário: "jpaulo", "vinicius" ou "geral"
-def _tg_conf():
-    tg = st.secrets.get("TELEGRAM", {})
-    return {
-        "token": tg.get("bot_token"),
-        "geral": tg.get("chat_id"),
-        "jpaulo": tg.get("chat_id_jpaulo"),
-        "vinicius": tg.get("chat_id_vinicius"),
-    }
+TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
+TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
+TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"  # canal do Vinícius já utilizado no 11_Adicionar
 
-def _send_telegram(token: str, chat_id: str, mensagem: str) -> bool:
-    if not token or not chat_id:
-        return False
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
-        "text": mensagem,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-    }
+def _get_secret(name: str, default: str | None = None) -> str | None:
     try:
-        r = requests.post(url, json=payload, timeout=15)
-        return r.ok
+        val = st.secrets.get(name)
+        val = (val or "").strip()
+        if val:
+            return val
+    except Exception:
+        pass
+    return (default or "").strip() or None
+
+def _get_token() -> str | None:
+    return _get_secret("TELEGRAM_TOKEN", TELEGRAM_TOKEN_CONST)
+
+def _get_chat_id_jp() -> str | None:
+    return _get_secret("TELEGRAM_CHAT_ID_JPAULO", TELEGRAM_CHAT_ID_JPAULO_CONST)
+
+def _get_chat_id_vini() -> str | None:
+    return _get_secret("TELEGRAM_CHAT_ID_VINICIUS", TELEGRAM_CHAT_ID_VINICIUS_CONST)
+
+def _check_tg_ready(token: str | None, chat_id: str | None) -> bool:
+    return bool((token or "").strip() and (chat_id or "").strip())
+
+def _chat_id_por_func(funcionario: str) -> str | None:
+    if str(funcionario).strip() == "Vinicius":
+        return _get_chat_id_vini()
+    return _get_chat_id_jp()
+
+def tg_send(text: str, chat_id: str | None = None) -> bool:
+    token = _get_token()
+    chat = chat_id or _get_chat_id_jp()
+    if not _check_tg_ready(token, chat):
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        r = requests.post(url, json=payload, timeout=30)
+        js = r.json()
+        return bool(r.ok and js.get("ok"))
     except Exception:
         return False
 
-def notificar_para(dest: str, mensagem: str) -> bool:
-    """
-    dest: "jpaulo", "vinicius" ou "geral"
-    Tenta enviar para o destino; se não houver, tenta o 'geral'; se falhar, retorna False.
-    """
-    conf = _tg_conf()
-    token = conf.get("token")
-    chat_map = {
-        "jpaulo": conf.get("jpaulo"),
-        "vinicius": conf.get("vinicius"),
-        "geral": conf.get("geral"),
-    }
-    # prioridade: destino -> geral
-    if _send_telegram(token, chat_map.get(dest), mensagem):
-        return True
-    return _send_telegram(token, chat_map.get("geral"), mensagem)
+# =========================
+# UTILS
+# =========================
+def proxima_terca(d: date) -> date:
+    """Retorna a próxima TERÇA-FEIRA a partir de d (se for terça, retorna d)."""
+    wd = d.weekday()  # Monday=0, Tuesday=1, ..., Sunday=6
+    delta = (1 - wd) % 7
+    return d + timedelta(days=delta)
 
 # =========================
 # APP
@@ -257,17 +269,16 @@ if acao == "➕ Lançar fiado":
             try:
                 total_fmt = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 servicos_txt = "+".join(servicos) if servicos else (combo_str or "-")
-                msg = (
-                    "🧾 *Novo fiado criado*\n"
-                    f"👤 Cliente: *{cliente}*\n"
+                msg_html = (
+                    "🧾 <b>Novo fiado criado</b>\n"
+                    f"👤 Cliente: <b>{cliente}</b>\n"
                     f"🧰 Serviços: {servicos_txt}\n"
-                    f"💵 Total: *{total_fmt}*\n"
+                    f"💵 Total: <b>{total_fmt}</b>\n"
                     f"📅 Atendimento: {data_str}\n"
                     f"⏳ Vencimento: {venc_str or '-'}\n"
-                    f"🆔 ID: `{idl}`"
+                    f"🆔 ID: <code>{idl}</code>"
                 )
-                dest = "vinicius" if str(funcionario).strip().lower() == "vinicius" else "jpaulo"
-                notificar_para(dest, msg)
+                tg_send(msg_html, chat_id=_chat_id_por_func(funcionario))
             except Exception:
                 pass
 
@@ -413,23 +424,60 @@ elif acao == "💰 Registrar pagamento":
             try:
                 tot_fmt = f"R$ {total_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 ids_txt = ", ".join(id_selecionados)
-                msg = (
-                    "✅ *Fiado quitado (competência)*\n"
-                    f"👤 Cliente: *{cliente_sel}*\n"
-                    f"💳 Forma: *{forma_pag}*\n"
-                    f"💵 Total pago: *{tot_fmt}*\n"
+                msg_html = (
+                    "✅ <b>Fiado quitado (competência)</b>\n"
+                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                    f"💳 Forma: <b>{forma_pag}</b>\n"
+                    f"💵 Total pago: <b>{tot_fmt}</b>\n"
                     f"📅 Data pagto: {data_pag.strftime(DATA_FMT)}\n"
-                    f"🆔 IDs: `{ids_txt}`\n"
+                    f"🆔 IDs: <code>{ids_txt}</code>\n"
                     f"📝 Obs: {obs or '-'}"
                 )
-                # Envia para todos os funcionários envolvidos; se nenhum, envia para 'geral'
                 destinos = set()
                 for f in funcs_envio:
-                    destinos.add("vinicius" if f == "vinicius" else "jpaulo")
+                    destinos.add(_chat_id_por_func(f.title()))  # 'vinicius' -> 'Vinicius'
                 if not destinos:
-                    destinos = {"geral"}
-                for d in destinos:
-                    notificar_para(d, msg)
+                    destinos = { _get_chat_id_jp() }  # fallback: manda pra você
+                for chat in destinos:
+                    tg_send(msg_html, chat_id=chat)
+            except Exception:
+                pass
+
+            # ---- CÓPIA PRIVADA PARA JPAULO: comissão sugerida + próxima terça
+            try:
+                sub = subset_all.copy()
+                sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)
+
+                grup = sub.groupby("Funcionário", dropna=True)["Valor"].sum().reset_index()
+                itens_comissao = []
+                total_comissao = 0.0
+                for _, r in grup.iterrows():
+                    func = str(r["Funcionário"]).strip()
+                    if func.lower() == "jpaulo":
+                        continue  # você não recebe comissão aqui
+                    base = float(r["Valor"])
+                    comiss = round(base * 0.50, 2)
+                    total_comissao += comiss
+                    itens_comissao.append(
+                        f"• {func}: <b>R$ {comiss:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", ".")
+                    )
+
+                if itens_comissao:
+                    dt_pgto = proxima_terca(data_pag)  # se terça, usa a mesma; para forçar a seguinte, some +1 dia
+                    lista = "\n".join(itens_comissao)
+                    msg_jp = (
+                        "🧾 <b>Cópia para controle (comissão)</b>\n"
+                        f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                        f"🗂️ IDs: <code>{', '.join(id_selecionados)}</code>\n"
+                        f"📅 Pagamento em: <b>{data_pag.strftime(DATA_FMT)}</b>\n"
+                        f"📌 Pagar comissão na próxima terça: <b>{dt_pgto.strftime(DATA_FMT)}</b>\n"
+                        "------------------------------\n"
+                        "💸 <b>Comissões sugeridas (50%)</b>\n"
+                        f"{lista}\n"
+                        "------------------------------\n"
+                        f"💵 Total recebido: <b>R$ {total_pago:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", ".")
+                    )
+                    tg_send(msg_jp, chat_id=_get_chat_id_jp())
             except Exception:
                 pass
 
