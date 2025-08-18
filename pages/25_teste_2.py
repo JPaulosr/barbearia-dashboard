@@ -337,10 +337,11 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
     """
     data_str: 'dd/mm/aaaa'
     servico/valor/combo são opcionais. Se não vierem, o resumo é calculado pelo df_all.
-    Para JPaulo, acrescenta:
-      - Histórico por ano (total)
-      - <ano>: por serviço (qtd × valor)
-      - Frequência por funcionário (visitas no ano)
+
+    ENVIO:
+      - Funcionário = JPaulo -> envia para JP (com apêndices)
+      - Funcionário = Vinicius -> envia para canal do Vinicius (sem apêndices)
+                               -> e DUPLICA para JP (com apêndices)
     """
     # Monta rótulo/valor/periodo
     if servico is None or valor is None:
@@ -352,24 +353,49 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         valor_total = float(valor)
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
-    # Seções extras apenas para JPaulo
-    extra_sections = []
-    ano = _ano_from_date_str(data_str)
-    if funcionario == "JPaulo" and ano is not None:
-        sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
-        extra_sections = [sec_hist, sec_serv]
+    # Foto (se houver)
+    foto = FOTOS.get(_norm(cliente))
 
-    caption = make_card_caption_v2(
-        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
-        append_sections=extra_sections
+    # --- Destino principal (por funcionário) ---
+    dest_primary = _chat_id_por_func(funcionario)
+
+    # Monta caption SEM apêndices (padrão — usado no canal do Vinicius)
+    caption_base = make_card_caption_v2(
+        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=None
     )
 
-    foto = FOTOS.get(_norm(cliente))
-    chat_id = _chat_id_por_func(funcionario)
+    # Monta caption COM apêndices (para o seu canal pessoal)
+    ano = _ano_from_date_str(data_str)
+    extras = []
+    if ano is not None:
+        sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
+        extras = [sec_hist, sec_serv]
+    caption_jp = make_card_caption_v2(
+        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras
+    )
+
+    # Envia para o destino principal
     if foto:
-        tg_send_photo(foto, caption, chat_id=chat_id)
+        tg_send_photo(foto, caption_base, chat_id=dest_primary)
     else:
-        tg_send(caption, chat_id=chat_id)
+        tg_send(caption_base, chat_id=dest_primary)
+
+    # Se for Vinicius, DUPLICA para o JP com os apêndices
+    if funcionario == "Vinicius":
+        chat_jp = _get_chat_id_jp()
+        if foto:
+            tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:
+            tg_send(caption_jp, chat_id=chat_jp)
+        return
+
+    # Se for JPaulo, já manda direto para JP com apêndices (mantém comportamento anterior)
+    if funcionario == "JPaulo":
+        chat_jp = _get_chat_id_jp()
+        if foto:
+            tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:
+            tg_send(caption_jp, chat_id=chat_jp)
 
 # =========================
 # VALORES DE SERVIÇO
@@ -561,8 +587,9 @@ else:
             tipo_at = st.radio(f"Tipo de atendimento para {cli}", ["Simples", "Combo"], horizontal=True, key=f"tipo_{cli}")
 
             st.selectbox(f"Forma de Pagamento de {cli}",
-                         list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank"])),
-                         key=f"conta_{cli}")
+                         list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank"]))...
+
+            )
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
                          index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}")
             st.selectbox(f"Funcionário de {cli}", ["JPaulo", "Vinicius"],
