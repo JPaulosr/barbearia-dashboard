@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Comissão (3 blocos): Não fiado | Fiados liberados | Fiado a receber
-# Recursos:
 # - IDs únicos (key=) para evitar StreamlitDuplicateElementId
 # - Arredondamento inteligente para TABELA com tolerâncias separadas (abaixo/acima)
-# - Edição manual de % comissão por linha (override) com botão para aplicar
+# - Edição manual de % comissão por linha (override)
+# - Leitura robusta da coluna de Valor (R$, vírgula, ponto, cabeçalho variável, DF/Series/lista)
 
 import streamlit as st
 import pandas as pd
-import gspread, re, hashlib
+import gspread, re, hashlib, unicodedata
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
@@ -60,8 +60,7 @@ def _read_df(title:str)->pd.DataFrame:
     df = get_as_dataframe(ws, evaluate_formulas=True).dropna(how="all").fillna("")
     df.columns = [str(c).strip() for c in df.columns]
     if df.columns.duplicated().any():
-        keep = ~pd.Index(df.columns).duplicated(keep="first")
-        df = df.loc[:, keep]
+        df = df.loc[:, ~df.columns.duplicated(keep="first")]
     return df
 
 def _write_df(title:str, df:pd.DataFrame):
@@ -69,7 +68,7 @@ def _write_df(title:str, df:pd.DataFrame):
     set_with_dataframe(ws, df, include_index=False, include_column_header=True)
 
 # =============================
-# HELPERS
+# HELPERS GERAIS
 # =============================
 def br_now(): 
     return datetime.now(pytz.timezone(TZ))
@@ -85,8 +84,9 @@ def parse_br_date(x: Union[str, datetime]):
             return datetime.strptime(s, fmt)
         except Exception:
             pass
+    # serial do Sheets
     try:
-        num = float(s)  # serial Sheets
+        num = float(s)
         base = datetime(1899,12,30)
         return base + timedelta(days=num)
     except Exception:
@@ -120,6 +120,31 @@ def is_cartao(conta:str)->bool:
     c = (conta or "").strip().lower()
     return bool(re.search(r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos)", c))
 
+# ===== NORMALIZAÇÃO DE CABEÇALHO / VALOR =====
+VAL_COL_CANDS = ["Valor","Valor (R$)","Valor Liquido","Valor Recebido","Valor_liquido","Valor_total"]
+
+def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
+    def norm(s):
+        s = unicodedata.normalize("NFKC", str(s)).replace("\xa0", " ")
+        s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
+        return s.strip()
+    df = df.copy()
+    df.columns = [norm(c) for c in df.columns]
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated(keep="first")]
+    return df
+
+def find_val_col(df: pd.DataFrame) -> str | None:
+    cols_norm = {c.lower().replace(" ", ""): c for c in df.columns}
+    for raw in VAL_COL_CANDS:
+        key = raw.lower().replace(" ", "")
+        if key in cols_norm:
+            return cols_norm[key]
+    for k, v in cols_norm.items():  # fallback
+        if "valor" in k:
+            return v
+    return None
+
 def _series_from_any(s, length_hint:int=0) -> pd.Series:
     if isinstance(s, pd.DataFrame):
         if s.shape[1] == 0:
@@ -133,13 +158,37 @@ def _series_from_any(s, length_hint:int=0) -> pd.Series:
         return pd.Series([s]*length_hint)
 
 def _money_to_float_series(s) -> pd.Series:
+    """Converte Series/DF/lista/escalar em float preservando decimais (ponto ou vírgula)."""
     s = _series_from_any(s)
     if s is None or len(s) == 0:
         return pd.Series(dtype=float)
+    if pd.api.types.is_numeric_dtype(s):
+        return s.astype(float).fillna(0.0)
+
     s = s.astype(str).str.strip()
     s = s.str.replace(r"[^\d,.\-+]", "", regex=True)
-    s = s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-    return pd.to_numeric(s, errors="coerce").fillna(0.0)
+
+    def conv(txt: str) -> float:
+        if not txt:
+            return 0.0
+        # se tem , e . decide o decimal pelo último símbolo
+        if "," in txt and "." in txt:
+            if txt.rfind(",") > txt.rfind("."):
+                # 1.234,56 -> 1234.56
+                txt = txt.replace(".", "").replace(",", ".")
+            else:
+                # 1,234.56 -> 1234.56
+                txt = txt.replace(",", "")
+        elif "," in txt:
+            txt = txt.replace(",", ".")  # 25,5 -> 25.5
+        else:
+            txt = txt  # 25.50 -> 25.50
+        try:
+            return float(txt)
+        except:
+            return 0.0
+
+    return s.apply(conv).astype(float).fillna(0.0)
 
 # =============================
 # UI
@@ -148,6 +197,7 @@ st.set_page_config(layout="wide")
 st.title("💈 Comissão — Vinícius")
 
 base = _read_df(ABA_DADOS)
+base = normalize_headers(base)
 base = garantir_colunas(base, COLS_OFICIAIS).copy()
 
 # ========== Inputs ==========
@@ -215,10 +265,14 @@ else:
 
 # ========= Cálculos =========
 def _valor_num(df: pd.DataFrame) -> pd.Series:
-    if "Valor" in df.columns:
-        col = df.loc[:, ["Valor"]]
-        return _money_to_float_series(col)
-    return pd.Series([0.0]*len(df), dtype=float)
+    df_loc = normalize_headers(df)
+    col_val = find_val_col(df_loc)  # detecta automaticamente
+    if not col_val:
+        # avisa e retorna zeros (evita “zerar silencioso”)
+        st.warning("⚠️ Coluna de valor não encontrada. Procurando por: Valor, Valor (R$), Valor Liquido, Valor Recebido…")
+        return pd.Series([0.0]*len(df_loc), dtype=float)
+    col = df_loc.loc[:, [col_val]]
+    return _money_to_float_series(col)
 
 def _base_valor_row(row) -> float:
     serv = str(row.get("Serviço","")).strip()
@@ -229,19 +283,17 @@ def _base_valor_row(row) -> float:
         if ajustar_quebrados_para_tabela and serv in VALOR_TABELA:
             tab = float(VALOR_TABELA[serv])
             if tab > 0:
-                # distância relativa em relação à TABELA
                 diff = val - tab
                 rel = abs(diff) / tab
-                if diff < 0 and rel <= (tol_baixo/100.0):   # abaixo e próximo -> sobe para tabela
+                if diff < 0 and rel <= (tol_baixo/100.0):   # abaixo e próximo -> sobe p/ tabela
                     return tab
-                if diff > 0 and rel <= (tol_cima/100.0):    # acima e próximo -> desce para tabela
+                if diff > 0 and rel <= (tol_cima/100.0):    # acima e próximo -> desce p/ tabela
                     return tab
         return val
 
     # 2) Fallbacks (só quando Valor==0)
     if usar_tabela_quando_valor_zero and serv in VALOR_TABELA:
         return float(VALOR_TABELA[serv])
-
     if usar_tabela_cartao and is_cartao(row.get("Conta","")) and serv in VALOR_TABELA:
         return float(VALOR_TABELA[serv])
 
@@ -271,12 +323,10 @@ def _preparar(df_in: pd.DataFrame, titulo: str, key_prefix: str):
         st.caption("Preencha apenas onde quiser mudar o percentual daquela linha. Vazio = usa o padrão.")
         edit_cols = ["Data","Cliente","Serviço","Valor_base_comissao","% Comissão (override)"]
         df_edit = st.data_editor(df[edit_cols], key=f"editor_{key_prefix}", use_container_width=True, num_rows="fixed")
-        # injeta de volta os overrides
         df["% Comissão (override)"] = df_edit["% Comissão (override)"]
         if st.button("🧮 Aplicar override nesta seção", key=f"btn_apply_override_{key_prefix}"):
             st.experimental_rerun()
 
-    # aplica cálculo usando override quando preenchido
     pct_override = pd.to_numeric(df.get("% Comissão (override)",""), errors="coerce")
     df["% Efetivo"] = df["% Comissão"]
     df.loc[pct_override.notna(), "% Efetivo"] = pct_override[pct_override.notna()].astype(float).clip(lower=0.0, upper=100.0)
