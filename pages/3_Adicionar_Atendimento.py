@@ -8,6 +8,7 @@ from datetime import datetime
 import pytz
 import unicodedata
 import requests
+from collections import Counter
 
 # =========================
 # CONFIG
@@ -210,8 +211,67 @@ def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
 
     return label, valor_total, is_combo, servicos, periodo_label
 
+def _ano_from_date_str(data_str: str) -> int | None:
+    dt = pd.to_datetime(data_str, format="%d/%m/%Y", errors="coerce")
+    return None if pd.isna(dt) else int(dt.year)
 
-def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label):
+def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> tuple[str, str]:
+    """
+    Retorna (sec_hist_ano_total, sec_por_servico_e_func), prontos para colar no caption.
+    - Total por ano (somatório de Valor).
+    - Por serviço: 'Serviço: Nx • R$ Y,YY'
+    - Frequência por funcionário: visitas/ano por JPaulo/Vinicius (conta dias únicos)
+    """
+    d = df_all.copy()
+    d = d[d["Cliente"].astype(str).str.strip() == cliente].copy()
+    d["_dt"] = pd.to_datetime(d["Data"], format="%d/%m/%Y", errors="coerce")
+    d = d.dropna(subset=["_dt"])
+    d["ano"] = d["_dt"].dt.year
+    d = d[d["ano"] == ano].copy()
+
+    if d.empty:
+        return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00", f"🧾 <b>{ano}: por serviço</b>\n—")
+
+    d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
+
+    # ---------- Total do ano ----------
+    total_ano = float(d["Valor"].sum())
+    sec_hist = (
+        "📚 <b>Histórico por ano</b>\n"
+        f"{ano}: <b>R$ {total_ano:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", "."))
+
+    # ---------- Por serviço ----------
+    grp = (
+        d.dropna(subset=["Serviço"])
+         .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
+         .groupby("Serviço", as_index=False)
+         .agg(qtd=("Serviço", "count"), total=("Valor", "sum"))
+         .sort_values(["total", "qtd"], ascending=[False, False])
+    )
+    linhas_serv = []
+    for _, r in grp.iterrows():
+        linhas_serv.append(
+            f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>R$ {float(r['total']):,.2f}</b>"
+            .replace(",", "X").replace(".", ",").replace("X", "."))
+    sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
+
+    # ---------- Frequência por funcionário (dias únicos) ----------
+    freq = Counter()
+    for dia, bloco in d.groupby(d["_dt"].dt.date):
+        func_most = (bloco["Funcionário"].astype(str).str.strip()
+                                   .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
+        if func_most in ["JPaulo", "Vinicius"]:
+            freq[func_most] += 1
+
+    if freq:
+        ordem = ["JPaulo", "Vinicius"]
+        linhas_func = [f"{f}: <b>{freq.get(f,0)}</b> visita(s)" for f in ordem]
+        sec_serv += "\n\n👥 <b>Frequência por funcionário</b>\n" + "\n".join(linhas_func)
+
+    return sec_hist, sec_serv
+
+def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
+                         append_sections: list[str] | None = None):
     # -------- histórico por DATA (não por linha) --------
     d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
     d_hist["_dt"] = pd.to_datetime(d_hist["Data"], format="%d/%m/%Y", errors="coerce")
@@ -229,20 +289,20 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     prev_days = [d for d in unique_days if (dia_atual is None or d < dia_atual)]
     prev_date = prev_days[-1] if prev_days else None
 
-    # último atendente = quem atendeu na data anterior (se houver)
+    # último atendente
     if prev_date is not None:
         ultimo_reg = d_hist[d_hist["_dt"].dt.date == prev_date].iloc[-1]
         ultimo_func = str(ultimo_reg.get("Funcionário", "-"))
     else:
         ultimo_func = "-"
 
-    # distância da última = dias entre dt_atual e prev_date (se houver)
+    # distância da última
     if prev_date is not None and dia_atual is not None:
         dias_str = f"{(dia_atual - prev_date).days} dias"
     else:
         dias_str = "-"
 
-    # média de intervalo entre visitas (já correta: diffs entre datas únicas)
+    # média entre visitas (datas únicas)
     if len(unique_days) >= 2:
         ts = [pd.to_datetime(x) for x in unique_days]
         diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
@@ -253,7 +313,7 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     media_str = "-" if media is None else f"{media:.1f} dias".replace(".", ",")
     valor_str = f"R$ {valor_total:.2f}".replace(".", ",")
 
-    return (
+    base = (
         "📌 <b>Atendimento registrado</b>\n"
         f"👤 Cliente: <b>{cliente}</b>\n"
         f"🗓️ Data: <b>{data_str}</b>\n"
@@ -268,12 +328,21 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
         f"👨‍🔧 Último atendente: <b>{ultimo_func}</b>"
     )
 
+    if append_sections:
+        base += "\n\n" + "\n\n".join([s for s in append_sections if s and s.strip()])
+
+    return base
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
     """
     data_str: 'dd/mm/aaaa'
     servico/valor/combo são opcionais. Se não vierem, o resumo é calculado pelo df_all.
+    Para JPaulo, acrescenta:
+      - Histórico por ano (total)
+      - <ano>: por serviço (qtd × valor)
+      - Frequência por funcionário (visitas no ano)
     """
+    # Monta rótulo/valor/periodo
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
@@ -281,10 +350,20 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         servico_label = (f"{servico} (Combo)" if is_combo and "+" in str(servico)
                          else f"{servico} (Simples)" if not is_combo else f"{servico} (Combo)")
         valor_total = float(valor)
-        # tenta ler o período direto do DF para o dia, se existir
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
-    caption = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label)
+    # Seções extras apenas para JPaulo
+    extra_sections = []
+    ano = _ano_from_date_str(data_str)
+    if funcionario == "JPaulo" and ano is not None:
+        sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
+        extra_sections = [sec_hist, sec_serv]
+
+    caption = make_card_caption_v2(
+        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
+        append_sections=extra_sections
+    )
+
     foto = FOTOS.get(_norm(cliente))
     chat_id = _chat_id_por_func(funcionario)
     if foto:
@@ -434,7 +513,6 @@ if not modo_lote:
                 salvar_base(df_final)
                 st.session_state.combo_salvo = True
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                # card: passamos info explícita para já mostrar serviços do combo e somatório
                 enviar_card(
                     df_final, cliente, funcionario, data,
                     servico=combo.replace("+", " + "),
@@ -557,5 +635,4 @@ else:
 
                 if enviar_cards:
                     for cli in sorted(clientes_salvos):
-                        # aqui basta passar data; a função resume os serviços/valor do dia
                         enviar_card(df_final, cli, funcionario_por_cliente.get(cli, "JPaulo"), data)
