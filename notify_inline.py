@@ -1,4 +1,4 @@
-# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (resumo/entradas/retorno)
+# notify_inline.py — Frequência por MÉDIA + cache + foto + alertas (cards por cliente)
 import os
 import sys
 import json
@@ -30,11 +30,10 @@ def _bool_env(name, default=False):
 
 # ======== CONTROLES DE ENVIO ========
 SEND_DAILY_HEADER = _bool_env("SEND_DAILY_HEADER", False)
-SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)
-SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)
+SEND_LIST_POUCO   = _bool_env("SEND_LIST_POUCO", False)   # envia cards de "Pouco atrasado"
+SEND_LIST_MUITO   = _bool_env("SEND_LIST_MUITO", False)   # envia cards de "Muito atrasado"
 
 # Feedback ao registrar nova visita (aumentou nº de dias distintos):
-# >>> NOVO PADRÃO: sempre enviar feedback (com foto) <<<
 SEND_FEEDBACK_ON_NEW_VISIT_ALL  = _bool_env("SEND_FEEDBACK_ON_NEW_VISIT_ALL", True)
 SEND_FEEDBACK_ONLY_IF_WAS_LATE  = _bool_env("SEND_FEEDBACK_ONLY_IF_WAS_LATE", False)
 
@@ -139,6 +138,20 @@ def tg_send_photo(photo_url, caption):
     except Exception as e:
         print("⚠️ Falha sendPhoto, enviando texto. Motivo:", e)
         tg_send(caption)
+
+# Formata o MESMO card que você gostou
+def make_card_caption(nome, status_label, status_emoji, ultima_dt, media, dias_desde_ultima):
+    ultima_str = pd.to_datetime(ultima_dt).strftime("%d/%m/%Y")
+    media_str = f"{media:.1f}".replace(".", ",")
+    dias_int = int(dias_desde_ultima)
+    return (
+        "📌 <b>Atendimento registrado</b>\n"
+        f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
+        f"{status_emoji or ''} Status: <b>{html.escape(status_label)}</b>\n"
+        f"🗓️ Data: <b>{ultima_str}</b>\n"
+        f"🔁 Média: <b>{media_str} dias</b>\n"
+        f"⏳ Distância da última: <b>{dias_int} dias</b>"
+    )
 
 # =========================
 # Ler abas
@@ -257,7 +270,7 @@ df_cache["ultima_visita_cache_parsed"] = df_cache["ultima_visita_cache"].apply(p
 cache_by_cli = {str(r["Cliente"]).strip().lower(): r for _, r in df_cache.iterrows()}
 
 # =========================
-# Resumo + listas (para 08:00, conforme flags)
+# Relatório diário — agora como CARDS por cliente
 # =========================
 def daily_summary_and_lists():
     total = len(ultimo)
@@ -276,26 +289,31 @@ def daily_summary_and_lists():
         )
         tg_send(header)
 
-    def lista(bucket_name, emoji):
-        subset = ultimo.loc[ultimo["status_atual"]==bucket_name, ["Cliente","media_dias","dias_desde_ultima"]]
+    def enviar_cards(bucket_name, emoji):
+        subset = ultimo.loc[ultimo["status_atual"]==bucket_name].copy()
         if subset.empty:
             return
-        linhas = "\n".join(
-            f"- {html.escape(str(r.Cliente))} (média {r.media_dias}d, {int(r.dias_desde_ultima)}d sem vir)"
-            for r in subset.itertuples(index=False)
-        )
-        body = f"<b>{emoji} {bucket_name}</b>\n{linhas}"
-        if len(body) <= 3500:
-            tg_send(body)
-        else:
-            nomes = linhas.split("\n")
-            for i in range(0, len(nomes), 60):
-                tg_send(f"<b>{emoji} {bucket_name}</b>\n" + "\n".join(nomes[i:i+60]))
+        # Ordena por “mais tempo sem vir” primeiro
+        subset = subset.sort_values("dias_desde_ultima", ascending=False)
+        for r in subset.itertuples(index=False):
+            caption = make_card_caption(
+                nome=r.Cliente,
+                status_label=bucket_name,
+                status_emoji=emoji + " ",
+                ultima_dt=r.ultima_visita,
+                media=float(r.media_dias),
+                dias_desde_ultima=int(r.dias_desde_ultima),
+            )
+            foto = foto_map.get(_norm(r.Cliente))
+            if foto:
+                tg_send_photo(foto, caption)
+            else:
+                tg_send(caption)
 
     if SEND_LIST_POUCO:
-        lista("Pouco atrasado","🟠")
+        enviar_cards("Pouco atrasado", "🟠")
     if SEND_LIST_MUITO:
-        lista("Muito atrasado","🔴")
+        enviar_cards("Muito atrasado", "🔴")
 
 # =========================
 # Transições + Feedback (retorno com foto)
@@ -336,26 +354,14 @@ def changes_and_feedback():
             enviar_feedback = True
 
         if new_visit and enviar_feedback and not feedback_already_sent:
-            ultima_str = pd.to_datetime(ultima).strftime("%d/%m/%Y")
-            media_str = f"{media:.1f}".replace(".", ",")
-            if estava_atrasado:
-                caption = (
-                    "✅ <b>Retorno registrado</b>\n"
-                    f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
-                    f"⚠️ Estado: <b>{html.escape(cached_status)}</b>\n"
-                    f"🗓️ Atendimento registrado em: <b>{ultima_str}</b>\n"
-                    f"🔁 Média: <b>{media_str} dias</b>\n"
-                    f"⏳ Estava há: <b>{dias} dias</b>"
-                )
-            else:
-                caption = (
-                    "📌 <b>Atendimento registrado</b>\n"
-                    f"👤 Cliente: <b>{html.escape(nome)}</b>\n"
-                    f"{row.status_emoji or ''} Status: <b>{html.escape(status)}</b>\n"
-                    f"🗓️ Data: <b>{ultima_str}</b>\n"
-                    f"🔁 Média: <b>{media_str} dias</b>\n"
-                    f"⏳ Distância da última: <b>{dias} dias</b>"
-                )
+            caption = make_card_caption(
+                nome=nome,
+                status_label=status if not estava_atrasado else cached_status,
+                status_emoji=(row.status_emoji or ""),
+                ultima_dt=ultima,
+                media=media,
+                dias_desde_ultima=dias
+            )
             foto = foto_map.get(_norm(nome))
             if foto:
                 tg_send_photo(foto, caption)
@@ -378,7 +384,7 @@ def changes_and_feedback():
                     f"<b>{html.escape(nome)}</b> voltou para <b>Em dia</b>."
                 )
 
-    # Envia transições (anti-flood simples)
+    # Envia até 30 transições (anti-flood simples)
     for txt in transicoes[:30]:
         tg_send(txt)
 
@@ -426,18 +432,13 @@ if CLIENTE:
         tg_send(f"⚠️ Cliente '{html.escape(CLIENTE)}' não encontrado com histórico suficiente.")
         sys.exit(0)
     row = sel.sort_values("ultima_visita", ascending=False).iloc[0]
-    ultima_str = pd.to_datetime(row["ultima_visita"]).strftime("%d/%m/%Y")
-    media_str = f"{row['media_dias']:.1f}".replace(".", ",")
-    dias_int = int(row["dias_desde_ultima"])
-    status_emoji = row.get("status_emoji") or ""
-    status_txt = row.get("status_atual") or ""
-    caption = (
-        "⏰ <b>Alerta de Frequência</b>\n"
-        f"👤 Cliente: <b>{html.escape(row['Cliente'])}</b>\n"
-        f"{status_emoji} Status: <b>{html.escape(status_txt)}</b>\n"
-        f"🗓️ Último: <b>{ultima_str}</b>\n"
-        f"🔁 Média: <b>{media_str} dias</b>\n"
-        f"⏳ Sem vir há: <b>{dias_int} dias</b>"
+    caption = make_card_caption(
+        nome=row["Cliente"],
+        status_label=row.get("status_atual") or "",
+        status_emoji=row.get("status_emoji") or "",
+        ultima_dt=row["ultima_visita"],
+        media=float(row["media_dias"]),
+        dias_desde_ultima=int(row["dias_desde_ultima"])
     )
     foto = foto_map.get(_norm(row["Cliente"]))
     if foto:
@@ -455,8 +456,8 @@ if __name__ == "__main__":
         print("▶️ Iniciando…")
         print(f"• TZ={TZ} | Base={ABA_BASE} | Cache={ABA_STATUS_CACHE} | Status/Fotos={STATUS_ABA}")
         if SEND_DAILY_HEADER or SEND_LIST_POUCO or SEND_LIST_MUITO:
-            daily_summary_and_lists()   # para 08:00
-        changes_and_feedback()          # para transições + retorno (1 feedback por visita)
+            daily_summary_and_lists()   # 08:00 — agora envia CARDS por cliente
+        changes_and_feedback()          # transições + retorno (1 feedback por visita)
         print("✅ Execução concluída.")
     except Exception as e:
         fail(e)
