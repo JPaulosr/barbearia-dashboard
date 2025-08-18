@@ -1,5 +1,5 @@
 # 11_Adicionar_Atendimento.py
-# Página Streamlit para cadastrar atendimentos (simples e em lote)
+# Página Streamlit para cadastrar atendimentos (simples e em lote avançado)
 # + utilitários de notificação/Telegram + leitura da planilha
 
 import os
@@ -295,12 +295,11 @@ col1, col2 = st.columns(2)
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
     conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys(contas_existentes + ["Carteira", "Nubank"])))
-    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + combos_existentes)
 with col2:
     funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
     fase = "Dono + funcionário"
-    periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"])
+periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"])
 
 if not modo_lote:
     # ----------- MODO UM POR VEZ -----------
@@ -314,11 +313,12 @@ if not modo_lote:
     # sugestão últimos
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
+    combo = ""
     if ultimo is not None:
         conta = st.selectbox("Forma de Pagamento (última primeiro)",
                              list(dict.fromkeys([ultimo["Conta"]] + [conta] + contas_existentes)), index=0)
         combo = st.selectbox("Combo (último primeiro)",
-                             [""] + list(dict.fromkeys([ultimo["Combo"]] + [combo] + combos_existentes)))
+                             [""] + list(dict.fromkeys([ultimo["Combo"]] + combos_existentes)))
 
     # controles
     if "combo_salvo" not in st.session_state:
@@ -398,9 +398,11 @@ if not modo_lote:
             if st.button("➕ Novo Atendimento"):
                 st.session_state.simples_salvo = False
                 st.rerun()
+
 else:
-    # ----------- MODO LOTE -----------
-    st.info("Selecione vários clientes e salve todos de uma vez. O mesmo serviço/combo e dados serão aplicados.")
+    # ----------- MODO LOTE AVANÇADO -----------
+    st.info("Defina atendimento individual para cada cliente. Pode misturar combos e simples no mesmo lote.")
+
     clientes_multi = st.multiselect("Clientes existentes", clientes_existentes)
     novos_nomes_raw = st.text_area("Ou cole novos nomes (um por linha)", value="")
     novos_nomes = [n.strip() for n in novos_nomes_raw.splitlines() if n.strip()]
@@ -409,70 +411,87 @@ else:
 
     enviar_telegram_vinic = st.checkbox("Enviar card no Telegram para atendimentos do Vinicius", value=True)
 
-    if combo:
-        st.subheader("💰 Edite os valores do combo (aplicados a todos):")
-        valores_customizados = {}
-        for servico in combo.split("+"):
-            servico_formatado = servico.strip()
-            valor_padrao = obter_valor_servico(servico_formatado)
-            valor = st.number_input(
-                f"{servico_formatado} (padrão: R$ {valor_padrao})",
-                value=valor_padrao, step=1.0, key=f"lote_{servico_formatado}"
-            )
-            valores_customizados[servico_formatado] = valor
+    # Interface por cliente: escolher Simples ou Combo
+    for cli in lista_final:
+        with st.container(border=True):
+            st.subheader(f"⚙️ Atendimento para {cli}")
+            tipo_at = st.radio(f"Tipo de atendimento para {cli}", ["Simples", "Combo"], horizontal=True, key=f"tipo_{cli}")
 
-        if st.button("✅ Salvar COMBO para todos"):
-            if not lista_final:
-                st.warning("Selecione ou informe ao menos um cliente.")
-            else:
-                df_all, _ = carregar_base()
-                novas = []
-                for cli in lista_final:
-                    # não bloqueia por duplicidade em lote; avisa
-                    dup = any(ja_existe_atendimento(cli, data, s.strip(), combo) for s in combo.split("+"))
-                    if dup:
-                        st.warning(f"⚠️ Já existia combo para {cli} em {data}; pulando.")
-                        continue
-                    for s in combo.split("+"):
+            if tipo_at == "Combo":
+                combo_cli = st.selectbox(
+                    f"Combo para {cli} (formato: corte+barba)", [""] + combos_existentes, key=f"combo_{cli}"
+                )
+                if combo_cli:
+                    for s in combo_cli.split("+"):
                         s2 = s.strip()
+                        val_padrao = obter_valor_servico(s2)
+                        st.number_input(
+                            f"{cli} - {s2} (padrão: R$ {val_padrao})",
+                            value=val_padrao, step=1.0, key=f"valor_{cli}_{s2}"
+                        )
+            else:
+                serv_cli = st.selectbox(
+                    f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}"
+                )
+                val_padrao = obter_valor_servico(serv_cli)
+                st.number_input(
+                    f"{cli} - Valor do serviço", value=val_padrao, step=1.0, key=f"valor_{cli}_simples"
+                )
+
+    if st.button("💾 Salvar TODOS atendimentos"):
+        if not lista_final:
+            st.warning("Selecione ou informe ao menos um cliente.")
+        else:
+            df_all, _ = carregar_base()
+            novas = []
+            clientes_salvos = set()
+
+            for cli in lista_final:
+                tipo_at = st.session_state.get(f"tipo_{cli}", "Simples")
+                if tipo_at == "Combo":
+                    combo_cli = st.session_state.get(f"combo_{cli}", "")
+                    if not combo_cli:
+                        st.warning(f"⚠️ {cli}: combo não definido. Pulando.")
+                        continue
+                    # checa duplicidade (qualquer serviço do combo no mesmo dia)
+                    dup = any(ja_existe_atendimento(cli, data, s.strip(), combo_cli) for s in combo_cli.split("+"))
+                    if dup:
+                        st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando.")
+                        continue
+                    for s in combo_cli.split("+"):
+                        s2 = s.strip()
+                        val = st.session_state.get(f"valor_{cli}_{s2}", obter_valor_servico(s2))
                         linha = {
-                            "Data": data, "Serviço": s2,
-                            "Valor": valores_customizados.get(s2, obter_valor_servico(s2)),
-                            "Conta": conta, "Cliente": cli, "Combo": combo,
-                            "Funcionário": funcionario, "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
+                            "Data": data, "Serviço": s2, "Valor": float(val), "Conta": conta,
+                            "Cliente": cli, "Combo": combo_cli, "Funcionário": funcionario,
+                            "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
                         }
                         novas.append(_preencher_fiado_vazio(linha))
-                if novas:
-                    df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
-                    salvar_base(df_final)
-                    st.success(f"✅ {len(novas)} linhas inseridas para {len(lista_final)} cliente(s).")
-                    if enviar_telegram_vinic and funcionario == "Vinicius":
-                        for cli in lista_final:
-                            enviar_card_vinicius(df_final, cli)
-    else:
-        servico_lote = st.selectbox("Serviço (aplicado a todos)", servicos_existentes)
-        valor_lote = st.number_input("Valor", value=obter_valor_servico(servico_lote), step=1.0)
-
-        if st.button("📁 Salvar SIMPLES para todos"):
-            if not lista_final:
-                st.warning("Selecione ou informe ao menos um cliente.")
-            else:
-                df_all, _ = carregar_base()
-                novas = []
-                for cli in lista_final:
-                    if ja_existe_atendimento(cli, data, servico_lote):
-                        st.warning(f"⚠️ Já existia atendimento p/ {cli} ({servico_lote}) em {data}; pulando.")
+                    clientes_salvos.add(cli)
+                else:
+                    serv_cli = st.session_state.get(f"servico_{cli}", None)
+                    if not serv_cli:
+                        st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando.")
                         continue
-                    nova = {
-                        "Data": data, "Serviço": servico_lote, "Valor": valor_lote, "Conta": conta,
+                    if ja_existe_atendimento(cli, data, serv_cli):
+                        st.warning(f"⚠️ {cli}: já existia atendimento simples ({serv_cli}) em {data}. Pulando.")
+                        continue
+                    val = st.session_state.get(f"valor_{cli}_simples", obter_valor_servico(serv_cli))
+                    linha = {
+                        "Data": data, "Serviço": serv_cli, "Valor": float(val), "Conta": conta,
                         "Cliente": cli, "Combo": "", "Funcionário": funcionario,
                         "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
                     }
-                    novas.append(_preencher_fiado_vazio(nova))
-                if novas:
-                    df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
-                    salvar_base(df_final)
-                    st.success(f"✅ {len(novas)} linhas inseridas para {len(lista_final)} cliente(s).")
-                    if enviar_telegram_vinic and funcionario == "Vinicius":
-                        for cli in lista_final:
-                            enviar_card_vinicius(df_final, cli)
+                    novas.append(_preencher_fiado_vazio(linha))
+                    clientes_salvos.add(cli)
+
+            if not novas:
+                st.warning("Nenhuma linha válida para inserir.")
+            else:
+                df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
+                salvar_base(df_final)
+                st.success(f"✅ {len(novas)} linhas inseridas para {len(clientes_salvos)} cliente(s).")
+
+                if enviar_telegram_vinic and funcionario == "Vinicius":
+                    for cli in sorted(clientes_salvos):
+                        enviar_card_vinicius(df_final, cli)
