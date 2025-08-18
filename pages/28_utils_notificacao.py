@@ -116,7 +116,7 @@ FOTOS = carregar_fotos_mapa()
 # --- Fallbacks (usados se não houver st.secrets) ---
 TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
-TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1001234567890"
+TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"
 
 def _get_secret(name: str, default: str | None = None) -> str | None:
     try:
