@@ -1,75 +1,152 @@
 # -*- coding: utf-8 -*-
-# 12_Fiado.py — Fiado integrado à Base + Notificações Telegram
-# - Combo por linhas com valores editáveis
-# - Registrar pagamento por cliente (seleciona 1+ IDs; "selecionar todos")
-# - Sugere última forma de pagamento do cliente (vinda da Base)
-# - Quitar por COMPETÊNCIA (atualiza as linhas; não cria novas)
-# - Lançar comissão em "Despesas" no mesmo fluxo de quitação
-# - Comissão usa a mesma data do fiado (se única); senão, cai na data do pagamento
-# - Exportação Excel (openpyxl) ou CSV (fallback)
-# - Sidebar expandida por padrão
-# - [NOVO] Notificações Telegram: novo fiado, pagamento e comissões
+# 12_Fiado.py — Fiado + Telegram (foto + card), por funcionário + cópia p/ JP
+# - NUNCA limpa a base ao lançar fiado: usa append_rows
+# - Quitar por COMPETÊNCIA com atualização segura (sem dropna que apaga coisas)
+# - Notificações com FOTO (se existir) e card HTML
+# - Roteamento: Vinícius → canal; JPaulo → privado
+# - Cópia privada p/ JP ao quitar: comissões sugeridas + próxima terça p/ pagar
 
 import streamlit as st
 import pandas as pd
 import gspread
-import requests  # <— usado no fallback do Telegram
+import requests
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 import pytz
+import unicodedata
 
 # =========================
-# NOTIFICAÇÃO TELEGRAM
+# TELEGRAM
 # =========================
-# Tenta importar de utils_notificacao; se não houver, usa um fallback local.
-try:
-    from utils_notificacao import notificar  # type: ignore
-except Exception:
-    def notificar(mensagem: str) -> bool:
-        """Fallback simples para enviar mensagem ao Telegram usando [TELEGRAM] em secrets."""
-        tg = st.secrets.get("TELEGRAM", {})
-        token = tg.get("bot_token")
-        chat_id = tg.get("chat_id")
-        if not token or not chat_id:
-            # silencioso: não trava a página se faltar config
-            return False
+TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
+TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
+TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"  # canal do Vinícius
+
+def _get_secret(name: str, default: str | None = None) -> str | None:
+    try:
+        val = st.secrets.get(name)
+        val = (val or "").strip()
+        if val:
+            return val
+    except Exception:
+        pass
+    return (default or "").strip() or None
+
+def _get_token() -> str | None:
+    return _get_secret("TELEGRAM_TOKEN", TELEGRAM_TOKEN_CONST)
+
+def _get_chat_id_jp() -> str | None:
+    return _get_secret("TELEGRAM_CHAT_ID_JPAULO", TELEGRAM_CHAT_ID_JPAULO_CONST)
+
+def _get_chat_id_vini() -> str | None:
+    return _get_secret("TELEGRAM_CHAT_ID_VINICIUS", TELEGRAM_CHAT_ID_VINICIUS_CONST)
+
+def _check_tg_ready(token: str | None, chat_id: str | None) -> bool:
+    return bool((token or "").strip() and (chat_id or "").strip())
+
+def _chat_id_por_func(funcionario: str) -> str | None:
+    if str(funcionario).strip() == "Vinicius":
+        return _get_chat_id_vini()
+    return _get_chat_id_jp()
+
+def tg_send(text: str, chat_id: str | None = None) -> bool:
+    token = _get_token()
+    chat = chat_id or _get_chat_id_jp()
+    if not _check_tg_ready(token, chat):
+        return False
+    try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {
-            "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
-            "text": mensagem,
-            "parse_mode": "Markdown",  # permite *negrito* e `code`
-            "disable_web_page_preview": True,
-        }
-        try:
-            r = requests.post(url, json=payload, timeout=15)
-            return r.ok
-        except Exception:
-            return False
+        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        r = requests.post(url, json=payload, timeout=30)
+        js = r.json()
+        return bool(r.ok and js.get("ok"))
+    except Exception:
+        return False
 
+def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> bool:
+    token = _get_token()
+    chat = chat_id or _get_chat_id_jp()
+    if not _check_tg_ready(token, chat):
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        data = {"chat_id": chat, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
+        r = requests.post(url, data=data, timeout=30)
+        js = r.json()
+        if r.ok and js.get("ok"):
+            return True
+        return tg_send(caption, chat_id=chat)
+    except Exception:
+        return tg_send(caption, chat_id=chat)
+
+# =========================
+# FOTOS (clientes_status)
+# =========================
+STATUS_ABA = "clientes_status"
+FOTO_COL_CANDIDATES = ["link_foto", "foto", "imagem", "url_foto", "foto_link", "link", "image"]
+
+def _norm(s: str) -> str:
+    s = (s or "").strip().casefold()
+    s = unicodedata.normalize("NFD", s)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+
+@st.cache_data(show_spinner=False)
+def carregar_fotos_mapa():
+    """NÃO recebe função; cria conexão internamente para evitar UnhashableParamError."""
+    try:
+        sh = conectar_sheets()
+        if STATUS_ABA not in [w.title for w in sh.worksheets()]:
+            return {}
+        ws = sh.worksheet(STATUS_ABA)
+        df = get_as_dataframe(ws).fillna("")
+        df.columns = [str(c).strip() for c in df.columns]
+        cols_lower = {c.lower(): c for c in df.columns}
+        foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
+        cli_col  = next((cols_lower[c] for c in ["cliente","nome","nome_cliente"] if c in cols_lower), None)
+        if not (foto_col and cli_col):
+            return {}
+        tmp = df[[cli_col, foto_col]].copy()
+        tmp.columns = ["Cliente", "Foto"]
+        tmp["k"] = tmp["Cliente"].astype(str).map(_norm)
+        return {r["k"]: str(r["Foto"]).strip()
+                for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
+    except Exception:
+        return {}
+
+# =========================
+# UTILS
+# =========================
+def proxima_terca(d: date) -> date:
+    """Retorna a próxima TERÇA-FEIRA a partir de d (se for terça, retorna d)."""
+    wd = d.weekday()  # Monday=0, Tuesday=1, ..., Sunday=6
+    delta = (1 - wd) % 7
+    return d + timedelta(days=delta)
+
+# =========================
+# APP / SHEETS
+# =========================
 st.set_page_config(page_title="Fiado | Salão JP", page_icon="💳", layout="wide",
                    initial_sidebar_state="expanded")
 st.title("💳 Controle de Fiado (combo por linhas + edição de valores)")
 
-# ===== CONFIG =====
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_BASE = "Base de Dados"
 ABA_LANC = "Fiado_Lancamentos"
 ABA_PAGT = "Fiado_Pagamentos"
-ABA_DESP = "Despesas"  # <- aba de despesas para lançar comissão
 TZ = pytz.timezone("America/Sao_Paulo")
 DATA_FMT = "%d/%m/%Y"
 
 BASE_COLS_MIN = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário","Fase","Tipo","Período"]
-EXTRA_COLS    = ["StatusFiado","IDLancFiado","VencimentoFiado"]
+EXTRA_COLS    = ["StatusFiado","IDLancFiado","VencimentoFiado","DataPagamento"]
+BASE_COLS_ALL = BASE_COLS_MIN + EXTRA_COLS
 
 VALORES_PADRAO = {
     "Corte": 25.0, "Pezinho": 7.0, "Barba": 15.0, "Sobrancelha": 7.0,
     "Luzes": 45.0, "Pintura": 35.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0
 }
 
-# ===== Conexão =====
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -79,66 +156,54 @@ def conectar_sheets():
     return gc.open_by_key(SHEET_ID)
 
 def garantir_aba(ss, nome, cols):
+    """Garante a aba com cabeçalho (NÃO limpa se já existir)."""
     try:
         ws = ss.worksheet(nome)
     except gspread.WorksheetNotFound:
         ws = ss.add_worksheet(title=nome, rows=200, cols=max(10, len(cols)))
         ws.append_row(cols)
         return ws
-    if not ws.row_values(1):
+    existing = ws.row_values(1)
+    if not existing:
         ws.append_row(cols)
     return ws
 
-def garantir_base_cols(ss):
-    ws = garantir_aba(ss, ABA_BASE, BASE_COLS_MIN + EXTRA_COLS)
-    df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
-    for c in BASE_COLS_MIN + EXTRA_COLS:
+def read_base_raw(ss):
+    """Lê a 'Base de Dados' SEM dropna, preservando todas as linhas/colunas."""
+    ws = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
+    df = get_as_dataframe(ws, evaluate_formulas=True, header=0)  # NÃO usar dropna aqui
+    df.columns = [str(c).strip() for c in df.columns]
+    for c in BASE_COLS_ALL:
         if c not in df.columns:
             df[c] = ""
-    df = df[[*BASE_COLS_MIN, *EXTRA_COLS, *[c for c in df.columns if c not in BASE_COLS_MIN+EXTRA_COLS]]]
-    ws.clear()
-    set_with_dataframe(ws, df)
-    return ws
+    df = df[[*BASE_COLS_ALL, *[c for c in df.columns if c not in BASE_COLS_ALL]]]
+    return df, ws
 
-def garantir_aba_despesas(ss):
-    """Garante a aba 'Despesas' com colunas mínimas. Retorna (worksheet, headers)."""
-    cols_min = ["Data","Prestador","Descrição","Valor","Forma de Pagamento"]
-    ws = garantir_aba(ss, ABA_DESP, cols_min)
-    headers = ws.row_values(1) or cols_min
-    return ws, headers
+def append_rows_base(ws, novas_dicts):
+    """Append seguro: respeita ordem do cabeçalho sem limpar a planilha."""
+    headers = ws.row_values(1)
+    if not headers:
+        headers = BASE_COLS_ALL
+        ws.append_row(headers)
+    rows = []
+    for d in novas_dicts:
+        row = [d.get(h, "") for h in headers]
+        rows.append(row)
+    if rows:
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
 
 @st.cache_data
-def carregar_tudo():
+def carregar_listas():
     ss = conectar_sheets()
-    ws_base = garantir_base_cols(ss)
-    ws_lanc = garantir_aba(ss, ABA_LANC,
-        ["IDLanc","DataAtendimento","Cliente","Combo","Servicos","ValorTotal","Vencimento","Funcionario","Fase","Tipo","Periodo"])
-    ws_pagt = garantir_aba(ss, ABA_PAGT,
-        ["IDPagamento","IDLanc","DataPagamento","Cliente","FormaPagamento","ValorPago","Obs"])
-    garantir_aba_despesas(ss)  # só para existir
-
-    df_base = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
-    df_lanc = get_as_dataframe(ws_lanc, evaluate_formulas=True, header=0).dropna(how="all")
-    df_pagt = get_as_dataframe(ws_pagt, evaluate_formulas=True, header=0).dropna(how="all")
-
-    # listas para selects
-    try:
-        dfb = df_base.copy()
-        dfb["Cliente"] = dfb["Cliente"].astype(str).str.strip()
-        clientes = sorted([c for c in dfb["Cliente"].dropna().unique() if c])
-        combos  = sorted([c for c in dfb["Combo"].dropna().unique() if c])
-        servs   = sorted([s for s in dfb["Serviço"].dropna().unique() if s])
-        contas_raw = [c for c in dfb["Conta"].dropna().astype(str).str.strip().unique() if c]
-        contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
-    except Exception:
-        clientes, combos, servs, contas = [], [], [], []
-    return df_base, df_lanc, df_pagt, clientes, combos, servs, contas
-
-def salvar_df(nome_aba, df):
-    ss = conectar_sheets()
-    ws = ss.worksheet(nome_aba)
-    ws.clear()
-    set_with_dataframe(ws, df)
+    ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
+    df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
+    df_list.columns = [str(c).strip() for c in df_list.columns]
+    clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
+    combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
+    servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
+    contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
+    contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
+    return clientes, combos, servs, contas
 
 def append_row(nome_aba, vals):
     ss = conectar_sheets()
@@ -170,44 +235,9 @@ def ultima_forma_pagto_cliente(df_base, cliente):
         pass
     return str(df.iloc[0]["Conta"]) if not df.empty else None
 
-def inserir_despesas_lote(linhas_despesas):
-    """
-    linhas_despesas: lista de dicts com chaves:
-      Data, Prestador, Descrição, Valor, Forma de Pagamento
-    """
-    ss = conectar_sheets()
-    ws, headers = garantir_aba_despesas(ss)
-
-    # Normaliza nomes de colunas (case-insensitive)
-    def pega_col(nome_alvo):
-        for h in headers:
-            if h.strip().lower() == nome_alvo.strip().lower():
-                return h
-        return None
-
-    col_data      = pega_col("Data") or "Data"
-    col_prest     = pega_col("Prestador") or "Prestador"
-    col_desc      = pega_col("Descrição") or "Descrição"
-    col_valor     = pega_col("Valor") or "Valor"
-    col_forma_pag = pega_col("Forma de Pagamento") or "Forma de Pagamento"
-
-    if not headers:
-        headers = [col_data, col_prest, col_desc, col_valor, col_forma_pag]
-        ws.append_row(headers)
-
-    for d in linhas_despesas:
-        linha = {
-            col_data: d.get("Data",""),
-            col_prest: d.get("Prestador",""),
-            col_desc: d.get("Descrição",""),
-            col_valor: d.get("Valor",""),
-            col_forma_pag: d.get("Forma de Pagamento",""),
-        }
-        ordered = [linha.get(h, "") for h in headers]
-        ws.append_row(ordered, value_input_option="USER_ENTERED")
-
-# ===== Página =====
-df_base, df_lanc, df_pagt, clientes, combos_exist, servs_exist, contas_exist = carregar_tudo()
+# ===== Caches
+clientes, combos_exist, servs_exist, contas_exist = carregar_listas()
+FOTOS = carregar_fotos_mapa()  # <<< sem passar função (evita UnhashableParamError)
 
 st.sidebar.header("Ações")
 acao = st.sidebar.radio("Escolha:", ["➕ Lançar fiado","💰 Registrar pagamento","📋 Em aberto & exportação"])
@@ -258,17 +288,14 @@ if acao == "➕ Lançar fiado":
                     "Data": data_str, "Serviço": s, "Valor": valor_item, "Conta": "Fiado",
                     "Cliente": cliente, "Combo": combo_str if combo_str else "", "Funcionário": funcionario,
                     "Fase": fase, "Tipo": tipo, "Período": periodo,
-                    "StatusFiado": "Em aberto", "IDLancFiado": idl, "VencimentoFiado": venc_str
+                    "StatusFiado": "Em aberto", "IDLancFiado": idl, "VencimentoFiado": venc_str,
+                    "DataPagamento": ""
                 })
 
+            # === Append seguro: NÃO limpa a planilha ===
             ss = conectar_sheets()
-            ws_base = ss.worksheet(ABA_BASE)
-            dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
-            for c in BASE_COLS_MIN + EXTRA_COLS:
-                if c not in dfb.columns:
-                    dfb[c] = ""
-            dfb = pd.concat([dfb, pd.DataFrame(novas)], ignore_index=True)
-            salvar_df(ABA_BASE, dfb)
+            ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
+            append_rows_base(ws_base, novas)
 
             total = float(pd.to_numeric(pd.DataFrame(novas)["Valor"], errors="coerce").fillna(0).sum())
             append_row(ABA_LANC, [idl, data_str, cliente, combo_str, "+".join(servicos),
@@ -277,20 +304,25 @@ if acao == "➕ Lançar fiado":
             st.success(f"Fiado criado para **{cliente}** — ID: {idl}. Geradas {len(novas)} linhas na Base.")
             st.cache_data.clear()
 
-            # ---- NOTIFICAÇÃO: novo fiado
+            # ---- NOTIFICAÇÃO: novo fiado (FOTO se houver)
             try:
                 total_fmt = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 servicos_txt = "+".join(servicos) if servicos else (combo_str or "-")
-                msg = (
-                    "🧾 *Novo fiado criado*\n"
-                    f"👤 Cliente: *{cliente}*\n"
+                msg_html = (
+                    "🧾 <b>Novo fiado criado</b>\n"
+                    f"👤 Cliente: <b>{cliente}</b>\n"
                     f"🧰 Serviços: {servicos_txt}\n"
-                    f"💵 Total: *{total_fmt}*\n"
+                    f"💵 Total: <b>{total_fmt}</b>\n"
                     f"📅 Atendimento: {data_str}\n"
                     f"⏳ Vencimento: {venc_str or '-'}\n"
-                    f"🆔 ID: `{idl}`"
+                    f"🆔 ID: <code>{idl}</code>"
                 )
-                notificar(msg)
+                chat_dest = _chat_id_por_func(funcionario)
+                foto = FOTOS.get(_norm(cliente))
+                if foto:
+                    tg_send_photo(foto, msg_html, chat_id=chat_dest)
+                else:
+                    tg_send(msg_html, chat_id=chat_dest)
             except Exception:
                 pass
 
@@ -298,14 +330,18 @@ if acao == "➕ Lançar fiado":
 elif acao == "💰 Registrar pagamento":
     st.subheader("💰 Registrar pagamento — escolha o cliente e depois o(s) fiado(s) em aberto")
 
-    df_abertos = df_base[df_base.get("StatusFiado", "") == "Em aberto"].copy()
-    clientes_abertos = sorted(df_abertos["Cliente"].dropna().unique().tolist())
+    # Carrega BASE sem dropna, para não perder linhas
+    ss = conectar_sheets()
+    df_base_full, ws_base = read_base_raw(ss)
+
+    df_abertos = df_base_full[df_base_full.get("StatusFiado", "") == "Em aberto"].copy()
+    clientes_abertos = sorted(df_abertos["Cliente"].dropna().astype(str).str.strip().unique().tolist())
 
     colc1, colc2 = st.columns([1, 1])
     with colc1:
         cliente_sel = st.selectbox("Cliente com fiado em aberto", options=[""] + clientes_abertos, index=0)
 
-    ultima = ultima_forma_pagto_cliente(df_base, cliente_sel) if cliente_sel else None
+    ultima = ultima_forma_pagto_cliente(df_base_full, cliente_sel) if cliente_sel else None
     lista_contas = contas_exist or ["Pix", "Dinheiro", "Cartão", "Transferência", "Outro"]
     default_idx = lista_contas.index(ultima) if (ultima in lista_contas) else 0
     with colc2:
@@ -314,8 +350,8 @@ elif acao == "💰 Registrar pagamento":
     # IDs do cliente com rótulo amigável
     ids_opcoes = []
     if cliente_sel:
-        grupo_cli = df_abertos[df_abertos["Cliente"] == cliente_sel].copy()
-        grupo_cli["Data"] = pd.to_datetime(grupo_cli["Data"], errors="coerce").dt.strftime(DATA_FMT)
+        grupo_cli = df_abertos[df_abertos["Cliente"].astype(str).str.strip() == str(cliente_sel).strip()].copy()
+        grupo_cli["Data"] = pd.to_datetime(grupo_cli["Data"], format=DATA_FMT, errors="coerce").dt.strftime(DATA_FMT)
         grupo_cli["Valor"] = pd.to_numeric(grupo_cli["Valor"], errors="coerce").fillna(0)
 
         def atraso_max(idval):
@@ -359,8 +395,7 @@ elif acao == "💰 Registrar pagamento":
         obs = st.text_input("Observação (opcional)", "")
 
     total_sel = 0.0
-    bloco_comissao = {}
-    registrar_comissao = False
+    funcs_envio = []  # funcionários envolvidos nos IDs selecionados (para roteamento Telegram)
 
     if id_selecionados:
         subset = df_abertos[df_abertos["IDLancFiado"].isin(id_selecionados)].copy()
@@ -383,60 +418,17 @@ elif acao == "💰 Registrar pagamento":
         st.caption("Resumo por serviço selecionado:")
         st.dataframe(resumo_srv, use_container_width=True, hide_index=True)
 
-        # ===== BLOCO DE COMISSÃO =====
-        st.markdown("---")
-        funcs = subset["Funcionário"].dropna().astype(str).unique().tolist()
-        sugere_on = any(f.lower() == "vinicius" for f in funcs)  # ativa por padrão se houver Vinicius
-        registrar_comissao = st.checkbox("Registrar comissão na aba Despesas agora", value=sugere_on)
-
-        # data de referência do fiado por funcionário (se única)
-        subset["__DataAtend"] = pd.to_datetime(subset["Data"], format=DATA_FMT, errors="coerce").dt.date
-        ref_date_por_func = {}
-        for f in funcs:
-            datas_f = set(subset.loc[subset["Funcionário"] == f, "__DataAtend"].dropna().tolist())
-            ref_date_por_func[f] = list(datas_f)[0] if len(datas_f) == 1 else None
-
-        if registrar_comissao:
-            st.caption("Edite os valores sugeridos. A sugestão é 50% do subtotal por funcionário (apenas referência).")
-            for f in funcs:
-                subf = subset[subset["Funcionário"] == f]
-                subtotal_f = float(subf["Valor"].sum())
-
-                st.markdown(f"**Funcionário:** {f}")
-                c1, c2, c3, c4 = st.columns([1,1,1,2])
-                with c1:
-                    ref_dt = ref_date_por_func.get(f)
-                    data_base = ref_dt if ref_dt is not None else data_pag
-                    data_desp_f = st.date_input(f"Data da despesa ({f})", value=data_base, key=f"dt_{f}")
-                with c2:
-                    forma_desp_f = st.selectbox(f"Forma de Pagamento ({f})",
-                                                options=["Dinheiro","Pix","Cartão","Transferência","Outro"],
-                                                index=0, key=f"fp_{f}")
-                with c3:
-                    valor_sug = round(subtotal_f * 0.50, 2)
-                    valor_com_f = st.number_input(f"Valor comissão ({f}) — sugestão 50%",
-                                                  value=float(valor_sug), min_value=0.0, step=1.0, format="%.2f",
-                                                  key=f"vl_{f}")
-                with c4:
-                    desc_f = st.text_input(f"Descrição ({f})", value=f"Comissão {f}", key=f"ds_{f}")
-
-                bloco_comissao[f] = {
-                    "Data": data_desp_f.strftime(DATA_FMT),
-                    "Prestador": f,
-                    "Descrição": desc_f,
-                    "Valor": valor_com_f,
-                    "Forma de Pagamento": forma_desp_f,
-                }
+        # Quem está envolvido? (para roteamento de notificação no pagamento)
+        funcs_envio = (
+            subset["Funcionário"].dropna().astype(str).str.strip().str.lower().unique().tolist()
+        )
 
     disabled_btn = not (cliente_sel and id_selecionados and forma_pag)
     if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
-        ss = conectar_sheets()
-        ws_base = ss.worksheet(ABA_BASE)
-        dfb = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).dropna(how="all")
+        # Recarrega BASE crua (sem dropna) para garantir consistência antes de escrever
+        dfb, ws_base2 = read_base_raw(ss)
 
-        if "DataPagamento" not in dfb.columns:
-            dfb["DataPagamento"] = ""
-
+        # máscara para os IDs selecionados
         mask = dfb.get("IDLancFiado", "").isin(id_selecionados)
         if not mask.any():
             st.error("Nenhuma linha encontrada para os IDs selecionados.")
@@ -451,7 +443,17 @@ elif acao == "💰 Registrar pagamento":
             dfb.loc[mask, "VencimentoFiado"] = ""
             dfb.loc[mask, "DataPagamento"] = data_pag.strftime(DATA_FMT)
 
-            salvar_df(ABA_BASE, dfb)
+            # Reescreve a aba inteira com o DF COMPLETO (preserva tudo)
+            headers = ws_base2.row_values(1)
+            if not headers:
+                headers = list(dfb.columns)
+                ws_base2.append_row(headers)
+            for h in headers:
+                if h not in dfb.columns:
+                    dfb[h] = ""
+            dfb = dfb[[*headers, *[c for c in dfb.columns if c not in headers]]]
+            ws_base2.clear()
+            set_with_dataframe(ws_base2, dfb, include_index=False, include_column_header=True)
 
             append_row(
                 ABA_PAGT,
@@ -466,29 +468,6 @@ elif acao == "💰 Registrar pagamento":
                 ],
             )
 
-            # Lança despesas de comissão (se habilitado)
-            if registrar_comissao and bloco_comissao:
-                linhas = []
-                for func, dados in bloco_comissao.items():
-                    if func.strip().lower() == "jpaulo" and float(dados.get("Valor", 0) or 0) <= 0:
-                        continue
-                    linhas.append(dados)
-                if linhas:
-                    try:
-                        inserir_despesas_lote(linhas)
-                        st.success("Comissão lançada na aba **Despesas**.")
-                        # ---- NOTIFICAÇÃO: comissões
-                        try:
-                            linhas_txt = "\n".join(
-                                [f"- {l['Prestador']}: R$ {float(l['Valor']):.2f} em {l['Data']} ({l['Forma de Pagamento']})"
-                                 for l in linhas]
-                            )
-                            notificar("📣 *Comissões registradas em Despesas:*\n" + linhas_txt)
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        st.warning(f"Pagamento quitado, mas houve problema ao lançar comissão em Despesas: {e}")
-
             st.success(
                 f"Pagamento registrado para **{cliente_sel}** (competência). "
                 f"IDs quitados: {', '.join(id_selecionados)}. "
@@ -496,30 +475,85 @@ elif acao == "💰 Registrar pagamento":
             )
             st.cache_data.clear()
 
-            # ---- NOTIFICAÇÃO: pagamento registrado
+            # ---- NOTIFICAÇÃO: pagamento registrado (para cada funcionário envolvido) — com FOTO se houver
             try:
                 tot_fmt = f"R$ {total_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 ids_txt = ", ".join(id_selecionados)
-                msg = (
-                    "✅ *Fiado quitado (competência)*\n"
-                    f"👤 Cliente: *{cliente_sel}*\n"
-                    f"💳 Forma: *{forma_pag}*\n"
-                    f"💵 Total pago: *{tot_fmt}*\n"
+                msg_html = (
+                    "✅ <b>Fiado quitado (competência)</b>\n"
+                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                    f"💳 Forma: <b>{forma_pag}</b>\n"
+                    f"💵 Total pago: <b>{tot_fmt}</b>\n"
                     f"📅 Data pagto: {data_pag.strftime(DATA_FMT)}\n"
-                    f"🆔 IDs: `{ids_txt}`\n"
+                    f"🆔 IDs: <code>{ids_txt}</code>\n"
                     f"📝 Obs: {obs or '-'}"
                 )
-                notificar(msg)
+                destinos = set()
+                for f in funcs_envio:
+                    destinos.add(_chat_id_por_func(f.title()))  # 'vinicius' -> 'Vinicius'
+                if not destinos:
+                    destinos = { _get_chat_id_jp() }  # fallback: manda pra você
+                foto = FOTOS.get(_norm(cliente_sel))
+                for chat in destinos:
+                    if foto:
+                        tg_send_photo(foto, msg_html, chat_id=chat)
+                    else:
+                        tg_send(msg_html, chat_id=chat)
+            except Exception:
+                pass
+
+            # ---- CÓPIA PRIVADA PARA JPAULO: comissão sugerida + próxima terça — com FOTO se houver
+            try:
+                sub = subset_all.copy()
+                sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)
+
+                grup = sub.groupby("Funcionário", dropna=True)["Valor"].sum().reset_index()
+                itens_comissao = []
+                total_comissao = 0.0
+                for _, r in grup.iterrows():
+                    func = str(r["Funcionário"]).strip()
+                    if func.lower() == "jpaulo":
+                        continue  # você não recebe comissão aqui
+                    base = float(r["Valor"])
+                    comiss = round(base * 0.50, 2)
+                    total_comissao += comiss
+                    itens_comissao.append(
+                        f"• {func}: <b>R$ {comiss:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", ".")
+                    )
+
+                if itens_comissao:
+                    dt_pgto = proxima_terca(data_pag)  # se terça, usa a mesma; para forçar a seguinte, some +1 dia
+                    lista = "\n".join(itens_comissao)
+                    msg_jp = (
+                        "🧾 <b>Cópia para controle (comissão)</b>\n"
+                        f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                        f"🗂️ IDs: <code>{', '.join(id_selecionados)}</code>\n"
+                        f"📅 Pagamento em: <b>{data_pag.strftime(DATA_FMT)}</b>\n"
+                        f"📌 Pagar comissão na próxima terça: <b>{dt_pgto.strftime(DATA_FMT)}</b>\n"
+                        "------------------------------\n"
+                        "💸 <b>Comissões sugeridas (50%)</b>\n"
+                        f"{lista}\n"
+                        "------------------------------\n"
+                        f"💵 Total recebido: <b>R$ {total_pago:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", ".")
+                    )
+                    foto = FOTOS.get(_norm(cliente_sel))
+                    if foto:
+                        tg_send_photo(foto, msg_jp, chat_id=_get_chat_id_jp())
+                    else:
+                        tg_send(msg_jp, chat_id=_get_chat_id_jp())
             except Exception:
                 pass
 
 # ---------- 3) Em aberto & exportação ----------
 else:
     st.subheader("📋 Fiados em aberto (agrupados por ID)")
-    if df_base.empty:
+    ss = conectar_sheets()
+    df_base_full, _ = read_base_raw(ss)
+
+    if df_base_full.empty:
         st.info("Sem dados.")
     else:
-        em_aberto = df_base[df_base.get("StatusFiado","") == "Em aberto"].copy()
+        em_aberto = df_base_full[df_base_full.get("StatusFiado","") == "Em aberto"].copy()
         if em_aberto.empty:
             st.success("Nenhum fiado em aberto 🎉")
         else:
@@ -528,7 +562,7 @@ else:
                 filtro_cliente = st.text_input("Filtrar por cliente (opcional)", "")
                 if filtro_cliente.strip():
                     em_aberto = em_aberto[
-                        em_aberto["Cliente"].str.contains(filtro_cliente.strip(), case=False, na=False)
+                        em_aberto["Cliente"].astype(str).str.contains(filtro_cliente.strip(), case=False, na=False)
                     ]
             with colf2:
                 funcionarios_abertos = sorted(
