@@ -297,7 +297,7 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
 # =========================
 VALORES = {
     "Corte": 25.0, "Pezinho": 7.0, "Barba": 15.0, "Sobrancelha": 7.0,
-    "Luzes": 45.0, "Pintura": 35.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0,
+    "Luzes": 45.0, "Tintura": 20.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0,
 }
 def obter_valor_servico(servico):
     for k, v in VALORES.items():
