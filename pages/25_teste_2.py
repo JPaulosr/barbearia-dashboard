@@ -4,11 +4,16 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from datetime import datetime
-import pytz
-import json
-import unicodedata
-import requests
+import pytz, unicodedata, requests
 
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+ABA_DADOS = "Base de Dados"
+STATUS_ABA = "clientes_status"  # onde está Cliente + link da foto
+FOTO_COL_CANDIDATES = ["link_foto", "foto", "imagem", "url_foto", "foto_link", "link", "image"]
+
+TZ = "America/Sao_Paulo"
+REL_MULT = 1.5  # Pouco atrasado = dias <= média * 1.5
 
 # Colunas “oficiais” e FIADO
 COLS_OFICIAIS = [
@@ -17,26 +22,9 @@ COLS_OFICIAIS = [
 ]
 COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]
 
-# ----------------- Utils -----------------
-def _norm(s: str) -> str:
-    s = (s or "").strip().casefold()
-    s = unicodedata.normalize("NFD", s)
-    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-
-def classificar_relative(dias, media):
-    if media is None:
-        return ("⚪ Sem média", "Sem média")
-    if dias <= media:
-        return ("🟢 Em dia", "Em dia")
-    elif dias <= media * REL_MULT:
-        return ("🟠 Pouco atrasado", "Pouco atrasado")
-    else:
-        return ("🔴 Muito atrasado", "Muito atrasado")
-
-def now_br():
-    return datetime.now(pytz.timezone(TZ)).strftime("%d/%m/%Y %H:%M:%S")
-
-# -------------- Conexão Sheets -----------
+# =========================
+# CONEXÃO / CARREGAMENTO
+# =========================
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -58,12 +46,12 @@ def carregar_base():
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
 
-    # garante oficiais + fiado
+    # Garante colunas oficiais e de fiado (sem remover existentes)
     for coluna in [*COLS_OFICIAIS, *COLS_FIADO]:
         if coluna not in df.columns:
             df[coluna] = ""
 
-    # normaliza Período
+    # Normaliza Período
     norm = {"manha": "Manhã", "Manha": "Manhã", "manha ": "Manhã", "tarde": "Tarde", "noite": "Noite"}
     df["Período"] = df["Período"].astype(str).str.strip().replace(norm)
     df.loc[~df["Período"].isin(["Manhã", "Tarde", "Noite"]), "Período"] = ""
@@ -72,6 +60,9 @@ def carregar_base():
     return df, aba
 
 def salvar_base(df_final):
+    """
+    Salva preservando TODAS as colunas existentes na planilha.
+    """
     aba = conectar_sheets().worksheet(ABA_DADOS)
     headers_existentes = ler_cabecalho(aba)
     if not headers_existentes:
@@ -86,7 +77,14 @@ def salvar_base(df_final):
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
 
-# ---------- Fotos por cliente (status sheet) ----------
+# =========================
+# TELEGRAM + FOTO + STATUS
+# =========================
+def _norm(s: str) -> str:
+    s = (s or "").strip().casefold()
+    s = unicodedata.normalize("NFD", s)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+
 @st.cache_data(show_spinner=False)
 def carregar_fotos_mapa():
     try:
@@ -96,7 +94,6 @@ def carregar_fotos_mapa():
         ws = sh.worksheet(STATUS_ABA)
         df = get_as_dataframe(ws).fillna("")
         df.columns = [str(c).strip() for c in df.columns]
-        # acha colunas
         cols_lower = {c.lower(): c for c in df.columns}
         foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
         cli_col = next((cols_lower[c] for c in ["cliente", "nome", "nome_cliente"] if c in cols_lower), None)
@@ -111,32 +108,63 @@ def carregar_fotos_mapa():
 
 FOTOS = carregar_fotos_mapa()
 
-# --------- Telegram ----------
 def _has_telegram():
     return ("TELEGRAM_TOKEN" in st.secrets) and ("TELEGRAM_CHAT_ID" in st.secrets)
 
 def tg_send(text):
     if not _has_telegram():
         return
+    url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendMessage"
+    payload = {"chat_id": st.secrets["TELEGRAM_CHAT_ID"], "text": text,
+               "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
-        url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendMessage"
-        payload = {"chat_id": st.secrets["TELEGRAM_CHAT_ID"], "text": text,
-                   "parse_mode": "HTML", "disable_web_page_preview": True}
-        requests.post(url, json=payload, timeout=30)
+        requests.post(url, json=payload, timeout=20)
     except Exception as e:
-        st.warning(f"Falha ao enviar Telegram: {e}")
+        st.warning(f"Falha Telegram: {e}")
 
 def tg_send_photo(photo_url, caption):
     if not _has_telegram():
         return
+    url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendPhoto"
+    payload = {"chat_id": st.secrets["TELEGRAM_CHAT_ID"], "photo": photo_url,
+               "caption": caption, "parse_mode": "HTML"}
     try:
-        url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendPhoto"
-        payload = {"chat_id": st.secrets["TELEGRAM_CHAT_ID"], "photo": photo_url,
-                   "caption": caption, "parse_mode": "HTML"}
-        requests.post(url, data=payload, timeout=30)
+        requests.post(url, data=payload, timeout=20)
     except Exception as e:
-        st.warning(f"Falha ao enviar foto (Telegram): {e}")
+        st.warning(f"Falha foto Telegram: {e}")
         tg_send(caption)
+
+def classificar_relative(dias, media):
+    if media is None:
+        return ("⚪ Sem média", "Sem média")
+    if dias <= media:
+        return ("🟢 Em dia", "Em dia")
+    elif dias <= media * REL_MULT:
+        return ("🟠 Pouco atrasado", "Pouco atrasado")
+    else:
+        return ("🔴 Muito atrasado", "Muito atrasado")
+
+def calcular_metricas_cliente(df_all, cliente):
+    d = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
+    if d.empty:
+        return None, None, "Sem média", None
+    d["_dt"] = pd.to_datetime(d["Data"], format="%d/%m/%Y", errors="coerce")
+    d = d.dropna(subset=["_dt"])
+    if d.empty:
+        return None, None, "Sem média", None
+    dias_unicos = sorted(set(pd.to_datetime(d["_dt"]).dt.date.tolist()))
+    ultima = pd.to_datetime(dias_unicos[-1])
+    hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
+    dias_since = (hoje - ultima).days
+    media = None
+    if len(dias_unicos) >= 2:
+        dias_ts = [pd.to_datetime(x) for x in dias_unicos]
+        diffs = [(dias_ts[i] - dias_ts[i-1]).days for i in range(1, len(dias_ts))]
+        diffs_pos = [x for x in diffs if x > 0]
+        if diffs_pos:
+            media = sum(diffs_pos)/len(diffs_pos)
+    _, status_label = classificar_relative(dias_since, media)
+    return ultima, media, status_label, dias_since
 
 def make_card_caption(nome, status_label, ultima_dt, media, dias_desde_ultima):
     ultima_str = pd.to_datetime(ultima_dt).strftime("%d/%m/%Y") if pd.notnull(ultima_dt) else "-"
@@ -152,62 +180,23 @@ def make_card_caption(nome, status_label, ultima_dt, media, dias_desde_ultima):
         f"⏳ Distância da última: <b>{dias_str} dias</b>"
     )
 
-def calcular_metricas_cliente(df_all, cliente):
-    # usa 1 visita por dia para média de intervalo
-    d = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
-    if d.empty:
-        return None, None, "Sem média"
-    # parse datas
-    d["_dt"] = pd.to_datetime(d["Data"], format="%d/%m/%Y", errors="coerce")
-    d = d.dropna(subset=["_dt"])
-    if d.empty:
-        return None, None, "Sem média"
-    dias_unicos = sorted(set(pd.to_datetime(d["_dt"]).dt.date.tolist()))
-    ultima = pd.to_datetime(dias_unicos[-1])
-    hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
-    dias_since = (hoje - ultima).days
-    media = None
-    if len(dias_unicos) >= 2:
-        dias_ts = [pd.to_datetime(x) for x in dias_unicos]
-        diffs = [(dias_ts[i] - dias_ts[i-1]).days for i in range(1, len(dias_ts))]
-        diffs_pos = [x for x in diffs if x > 0]
-        if diffs_pos:
-            media = sum(diffs_pos)/len(diffs_pos)
-    _, status_label = classificar_relative(dias_since, media)
-    return ultima, media, status_label
-
-def enviar_card_vinicuis(df_all, cliente):
-    ultima, media, status_label = calcular_metricas_cliente(df_all, cliente)
-    caption = make_card_caption(cliente, status_label, ultima, media, (None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days))
+def enviar_card_vinicius(df_all, cliente):
+    ultima, media, status_label, dias_since = calcular_metricas_cliente(df_all, cliente)
+    caption = make_card_caption(cliente, status_label, ultima, media, dias_since)
     foto = FOTOS.get(_norm(cliente))
     if foto:
         tg_send_photo(foto, caption)
     else:
         tg_send(caption)
 
-# -------- Valores padrão de serviço --------
-valores_servicos = {
-    "Corte": 25.0,
-    "Pezinho": 7.0,
-    "Barba": 15.0,
-    "Sobrancelha": 7.0,
-    "Luzes": 45.0,
-    "Pintura": 35.0,
-    "Alisamento": 40.0,
-    "Gel": 10.0,
-    "Pomada": 15.0,
-}
-
+# =========================
+# LÓGICA DE DADOS
+# =========================
 def obter_valor_servico(servico):
     for chave in valores_servicos.keys():
         if chave.lower() == servico.lower():
             return valores_servicos[chave]
     return 0.0
-
-def _preencher_fiado_vazio(linha: dict):
-    for c in COLS_FIADO:
-        linha.setdefault(c, "")
-    return linha
 
 def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
@@ -220,13 +209,32 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
     ]
     return not existe.empty
 
-# ------------------- UI -------------------
+def _preencher_fiado_vazio(linha: dict):
+    for c in COLS_FIADO:
+        linha.setdefault(c, "")
+    return linha
+
+# === VALORES PADRÃO DE SERVIÇO ===
+valores_servicos = {
+    "Corte": 25.0,
+    "Pezinho": 7.0,
+    "Barba": 15.0,
+    "Sobrancelha": 7.0,
+    "Luzes": 45.0,
+    "Pintura": 35.0,
+    "Alisamento": 40.0,
+    "Gel": 10.0,
+    "Pomada": 15.0,
+}
+
+# =========================
+# INTERFACE
+# =========================
 st.title("📅 Adicionar Atendimento")
 
 df_existente, _ = carregar_base()
-# parse para listas sugestivas
-df_existente["_dt"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
-df_2025 = df_existente[df_existente["_dt"].dt.year == 2025]
+df_existente["Data_parse"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
+df_2025 = df_existente[df_existente["Data_parse"].dt.year == 2025]
 
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
@@ -234,10 +242,10 @@ servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
 contas_existentes = sorted(df_2025["Conta"].dropna().unique())
 combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
-# ------------ Toggle modo --------------
+# Toggle: um por vez x lote
 modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
 
-# campos comuns
+# === Campos comuns ===
 col1, col2 = st.columns(2)
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
@@ -249,8 +257,10 @@ with col2:
 fase = "Dono + funcionário"
 periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"])
 
+# =========================
+# MODO: UM POR VEZ
+# =========================
 if not modo_lote:
-    # ----------- MODO UM POR VEZ -----------
     colA, colB = st.columns(2)
     with colA:
         cliente = st.selectbox("Nome do Cliente", clientes_existentes)
@@ -258,14 +268,16 @@ if not modo_lote:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
     cliente = novo_nome if novo_nome else cliente
 
-    # sugestão últimos
+    # Autopreenchimento com último registro do cliente
     ultimo = df_existente[df_existente["Cliente"] == cliente]
-    ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
+    ultimo = ultimo.sort_values("Data_parse", ascending=False).iloc[0] if not ultimo.empty else None
     if ultimo is not None:
-        conta = st.selectbox("Forma de Pagamento (última primeiro)", list(dict.fromkeys([ultimo["Conta"]] + [conta] + contas_existentes)), index=0)
-        combo = st.selectbox("Combo (último primeiro)", [""] + list(dict.fromkeys([ultimo["Combo"]] + [combo] + combos_existentes)))
+        conta = st.selectbox("Forma de Pagamento (última primeiro)",
+                             list(dict.fromkeys([ultimo["Conta"]] + [conta] + contas_existentes)), index=0)
+        combo = st.selectbox("Combo (último primeiro)",
+                             [""] + list(dict.fromkeys([ultimo["Combo"]] + [combo] + combos_existentes)))
 
-    # controles
+    # Estado de sessão
     if "combo_salvo" not in st.session_state:
         st.session_state.combo_salvo = False
     if "simples_salvo" not in st.session_state:
@@ -275,15 +287,17 @@ if not modo_lote:
         st.session_state.simples_salvo = False
         st.rerun()
 
-    # salvar
+    # --- Salvar ---
     if combo:
         st.subheader("💰 Edite os valores do combo antes de salvar:")
         valores_customizados = {}
         for servico in combo.split("+"):
             servico_formatado = servico.strip()
             valor_padrao = obter_valor_servico(servico_formatado)
-            valor = st.number_input(f"{servico_formatado} (padrão: R$ {valor_padrao})",
-                                    value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}")
+            valor = st.number_input(
+                f"{servico_formatado} (padrão: R$ {valor_padrao})",
+                value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}"
+            )
             valores_customizados[servico_formatado] = valor
 
         if not st.session_state.combo_salvo:
@@ -292,11 +306,9 @@ if not modo_lote:
                 if duplicado:
                     st.warning("⚠️ Combo já registrado para este cliente e data.")
                 else:
-                    # salva
                     df_all, _ = carregar_base()
-                    servicos = combo.split("+")
                     novas = []
-                    for s in servicos:
+                    for s in combo.split("+"):
                         s2 = s.strip()
                         linha = {
                             "Data": data, "Serviço": s2,
@@ -310,7 +322,7 @@ if not modo_lote:
                     st.session_state.combo_salvo = True
                     st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
                     if funcionario == "Vinicius":
-                        enviar_card_vinicuis(df_final, cliente)
+                        enviar_card_vinicius(df_final, cliente)
         else:
             if st.button("➕ Novo Atendimento"):
                 st.session_state.combo_salvo = False
@@ -337,14 +349,16 @@ if not modo_lote:
                     st.session_state.simples_salvo = True
                     st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
                     if funcionario == "Vinicius":
-                        enviar_card_vinicuis(df_final, cliente)
+                        enviar_card_vinicius(df_final, cliente)
         else:
             if st.button("➕ Novo Atendimento"):
                 st.session_state.simples_salvo = False
                 st.rerun()
 
+# =========================
+# MODO: LOTE
+# =========================
 else:
-    # ----------- MODO LOTE -----------
     st.info("Selecione vários clientes e salve todos de uma vez. O mesmo serviço/combo e dados serão aplicados.")
     clientes_multi = st.multiselect("Clientes existentes", clientes_existentes)
     novos_nomes_raw = st.text_area("Ou cole novos nomes (um por linha)", value="")
@@ -358,11 +372,11 @@ else:
         st.subheader("💰 Edite os valores do combo (aplicados a todos):")
         valores_customizados = {}
         for servico in combo.split("+"):
-            servico_formatado = servico.strip()
-            valor_padrao = obter_valor_servico(servico_formatado)
-            valor = st.number_input(f"{servico_formatado} (padrão: R$ {valor_padrao})",
-                                    value=valor_padrao, step=1.0, key=f"lote_{servico_formatado}")
-            valores_customizados[servico_formatado] = valor
+            s2 = servico.strip()
+            valor_padrao = obter_valor_servico(s2)
+            valor = st.number_input(f"{s2} (padrão: R$ {valor_padrao})",
+                                    value=valor_padrao, step=1.0, key=f"lote_{s2}")
+            valores_customizados[s2] = valor
 
         if st.button("✅ Salvar COMBO para todos"):
             if not lista_final:
@@ -371,7 +385,6 @@ else:
                 df_all, _ = carregar_base()
                 novas = []
                 for cli in lista_final:
-                    # não bloqueia por duplicidade em lote; avisa
                     dup = any(ja_existe_atendimento(cli, data, s.strip(), combo) for s in combo.split("+"))
                     if dup:
                         st.warning(f"⚠️ Já existia combo para {cli} em {data}; pulando.")
@@ -391,7 +404,7 @@ else:
                     st.success(f"✅ {len(novas)} linhas inseridas para {len(lista_final)} cliente(s).")
                     if enviar_telegram_vinic and funcionario == "Vinicius":
                         for cli in lista_final:
-                            enviar_card_vinicuis(df_final, cli)
+                            enviar_card_vinicius(df_final, cli)
     else:
         servico_lote = st.selectbox("Serviço (aplicado a todos)", servicos_existentes)
         valor_lote = st.number_input("Valor", value=obter_valor_servico(servico_lote), step=1.0)
@@ -418,4 +431,4 @@ else:
                     st.success(f"✅ {len(novas)} linhas inseridas para {len(lista_final)} cliente(s).")
                     if enviar_telegram_vinic and funcionario == "Vinicius":
                         for cli in lista_final:
-                            enviar_card_vinicuis(df_final, cli)
+                            enviar_card_vinicius(df_final, cli)
