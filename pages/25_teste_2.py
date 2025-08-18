@@ -135,12 +135,11 @@ FOTOS = carregar_fotos_mapa()
 # Telegram (roteado por funcionário)
 # =========================================================
 def _has_telegram():
-    # Só considera configurado se TODAS as chaves existirem
-    return all(k in st.secrets for k in [
-        "TELEGRAM_TOKEN",
-        "TELEGRAM_CHAT_ID_JPAULO",
-        "TELEGRAM_CHAT_ID_VINICIUS"
-    ])
+    return bool(
+        st.secrets.get("TELEGRAM_TOKEN")
+        and st.secrets.get("TELEGRAM_CHAT_ID_JPAULO")
+        and st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS")
+    )
 
 def _chat_id_default():
     return st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", "")
