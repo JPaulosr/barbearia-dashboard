@@ -186,10 +186,6 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
 # CARD – resumo do atendimento e histórico
 # =========================
 def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
-    """
-    Retorna (label_servico, valor_total, is_combo, lista_servicos, periodo_label)
-    procurando todos os registros do cliente NA data informada.
-    """
     d = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
@@ -205,7 +201,6 @@ def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     else:
         label = "-"
 
-    # Período: pega o mais frequente do dia (normalmente todos iguais)
     periodo_vals = [p for p in d["Período"].astype(str).str.strip().tolist() if p]
     periodo_label = max(set(periodo_vals), key=periodo_vals.count) if periodo_vals else "-"
 
@@ -216,12 +211,6 @@ def _ano_from_date_str(data_str: str) -> int | None:
     return None if pd.isna(dt) else int(dt.year)
 
 def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> tuple[str, str]:
-    """
-    Retorna (sec_hist_ano_total, sec_por_servico_e_func), prontos para colar no caption.
-    - Total por ano (somatório de Valor).
-    - Por serviço: 'Serviço: Nx • R$ Y,YY'
-    - Frequência por funcionário: visitas/ano por JPaulo/Vinicius (conta dias únicos)
-    """
     d = df_all.copy()
     d = d[d["Cliente"].astype(str).str.strip() == cliente].copy()
     d["_dt"] = pd.to_datetime(d["Data"], format="%d/%m/%Y", errors="coerce")
@@ -234,13 +223,12 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
 
     d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
 
-    # ---------- Total do ano ----------
     total_ano = float(d["Valor"].sum())
     sec_hist = (
         "📚 <b>Histórico por ano</b>\n"
-        f"{ano}: <b>R$ {total_ano:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", "."))
+        f"{ano}: <b>R$ {total_ano:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", ".")
+    )
 
-    # ---------- Por serviço ----------
     grp = (
         d.dropna(subset=["Serviço"])
          .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
@@ -252,11 +240,12 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     for _, r in grp.iterrows():
         linhas_serv.append(
             f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>R$ {float(r['total']):,.2f}</b>"
-            .replace(",", "X").replace(".", ",").replace("X", "."))
+            .replace(",", "X").replace(".", ",").replace("X", ".")
+        )
     sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
 
-    # ---------- Frequência por funcionário (dias únicos) ----------
-    freq = Counter()
+    from collections import Counter as _C
+    freq = _C()
     for dia, bloco in d.groupby(d["_dt"].dt.date):
         func_most = (bloco["Funcionário"].astype(str).str.strip()
                                    .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
@@ -272,37 +261,30 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
 
 def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
                          append_sections: list[str] | None = None):
-    # -------- histórico por DATA (não por linha) --------
     d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
     d_hist["_dt"] = pd.to_datetime(d_hist["Data"], format="%d/%m/%Y", errors="coerce")
     d_hist = d_hist.dropna(subset=["_dt"]).sort_values("_dt")
 
-    # total por dia único
     unique_days = sorted(set(d_hist["_dt"].dt.date.tolist()))
     total_atend = len(unique_days)
 
-    # data atual
     dt_atual = pd.to_datetime(data_str, format="%d/%m/%Y", errors="coerce")
     dia_atual = None if pd.isna(dt_atual) else dt_atual.date()
 
-    # última data ANTERIOR ao atendimento atual
     prev_days = [d for d in unique_days if (dia_atual is None or d < dia_atual)]
     prev_date = prev_days[-1] if prev_days else None
 
-    # último atendente
     if prev_date is not None:
         ultimo_reg = d_hist[d_hist["_dt"].dt.date == prev_date].iloc[-1]
         ultimo_func = str(ultimo_reg.get("Funcionário", "-"))
     else:
         ultimo_func = "-"
 
-    # distância da última
     if prev_date is not None and dia_atual is not None:
         dias_str = f"{(dia_atual - prev_date).days} dias"
     else:
         dias_str = "-"
 
-    # média entre visitas (datas únicas)
     if len(unique_days) >= 2:
         ts = [pd.to_datetime(x) for x in unique_days]
         diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
@@ -335,14 +317,11 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
     """
-    data_str: 'dd/mm/aaaa'
-    servico/valor/combo são opcionais. Se não vierem, o resumo é calculado pelo df_all.
-    Para JPaulo, acrescenta:
-      - Histórico por ano (total)
-      - <ano>: por serviço (qtd × valor)
-      - Frequência por funcionário (visitas no ano)
+    ENVIO:
+      - Funcionário = JPaulo -> envia UMA mensagem para o JP (com apêndices)
+      - Funcionário = Vinicius -> envia para o canal do Vinicius (sem apêndices)
+                               -> e DUPLICA para o JP (com apêndices)
     """
-    # Monta rótulo/valor/periodo
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
@@ -352,24 +331,38 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         valor_total = float(valor)
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
-    # Seções extras apenas para JPaulo
-    extra_sections = []
-    ano = _ano_from_date_str(data_str)
-    if funcionario == "JPaulo" and ano is not None:
-        sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
-        extra_sections = [sec_hist, sec_serv]
-
-    caption = make_card_caption_v2(
-        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
-        append_sections=extra_sections
-    )
-
     foto = FOTOS.get(_norm(cliente))
-    chat_id = _chat_id_por_func(funcionario)
-    if foto:
-        tg_send_photo(foto, caption, chat_id=chat_id)
-    else:
-        tg_send(caption, chat_id=chat_id)
+    ano = _ano_from_date_str(data_str)
+    extras = []
+    if ano is not None:
+        sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
+        extras = [sec_hist, sec_serv]
+
+    caption_base = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label)
+    caption_jp   = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras)
+
+    if funcionario == "JPaulo":
+        # Envia apenas UMA mensagem para o JP com apêndices
+        chat_jp = _get_chat_id_jp()
+        if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:    tg_send(caption_jp, chat_id=chat_jp)
+        return
+
+    # funcionário Vinicius -> envia para canal dele (base) e para JP (com apêndices)
+    if funcionario == "Vinicius":
+        chat_v = _get_chat_id_vini()
+        if foto: tg_send_photo(foto, caption_base, chat_id=chat_v)
+        else:    tg_send(caption_base, chat_id=chat_v)
+
+        chat_jp = _get_chat_id_jp()
+        if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:    tg_send(caption_jp, chat_id=chat_jp)
+        return
+
+    # fallback (outros nomes, se algum dia existir)
+    destino = _chat_id_por_func(funcionario)
+    if foto: tg_send_photo(foto, caption_base, chat_id=destino)
+    else:    tg_send(caption_base, chat_id=destino)
 
 # =========================
 # VALORES DE SERVIÇO
@@ -560,13 +553,19 @@ else:
 
             tipo_at = st.radio(f"Tipo de atendimento para {cli}", ["Simples", "Combo"], horizontal=True, key=f"tipo_{cli}")
 
-            st.selectbox(f"Forma de Pagamento de {cli}",
-                         list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank"])),
-                         key=f"conta_{cli}")
-            st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
-                         index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}")
-            st.selectbox(f"Funcionário de {cli}", ["JPaulo", "Vinicius"],
-                         index=(0 if sug_func == "JPaulo" else 1), key=f"func_{cli}")
+            st.selectbox(
+                f"Forma de Pagamento de {cli}",
+                list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank"])),
+                key=f"conta_{cli}"
+            )
+            st.selectbox(
+                f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
+                index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}"
+            )
+            st.selectbox(
+                f"Funcionário de {cli}", ["JPaulo", "Vinicius"],
+                index=(0 if sug_func == "JPaulo" else 1), key=f"func_{cli}"
+            )
 
             if tipo_at == "Combo":
                 st.selectbox(f"Combo para {cli} (formato corte+barba)", [""] + combos_existentes, key=f"combo_{cli}")
@@ -574,14 +573,18 @@ else:
                 if combo_cli:
                     for s in combo_cli.split("+"):
                         s2 = s.strip()
-                        st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
-                                        value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
+                        st.number_input(
+                            f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
+                            value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}"
+                        )
             else:
                 st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
                 serv_cli = st.session_state.get(f"servico_{cli}", None)
-                st.number_input(f"{cli} - Valor do serviço",
-                                value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
-                                step=1.0, key=f"valor_{cli}_simples")
+                st.number_input(
+                    f"{cli} - Valor do serviço",
+                    value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
+                    step=1.0, key=f"valor_{cli}_simples"
+                )
 
     if st.button("💾 Salvar TODOS atendimentos"):
         if not lista_final:
