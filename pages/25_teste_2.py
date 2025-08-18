@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 12_Comissoes_Vinicius.py — Comissão consolidada (um bloco só, inclui fiados a receber)
+# 12_Comissoes_Vinicius.py — Comissão (3 blocos): Não fiado | Fiados liberados | Fiado a receber
 
 import streamlit as st
 import pandas as pd
@@ -28,9 +28,9 @@ COLS_DESPESAS_FIX = ["Data","Prestador","Descrição","Valor","Me Pag:"]
 PERCENTUAL_PADRAO = 50.0
 
 VALOR_TABELA = {
-    "Corte": 25.00,"Barba": 15.00,"Sobrancelha": 7.00,
-    "Luzes": 45.00,"Tintura": 20.00,"Alisamento": 40.00,
-    "Gel": 10.00,"Pomada": 15.00,
+    "Corte": 25.0, "Barba": 15.0, "Sobrancelha": 7.0,
+    "Luzes": 45.0, "Tintura": 20.0, "Alisamento": 40.0,
+    "Gel": 10.0, "Pomada": 15.0,
 }
 
 # =============================
@@ -96,72 +96,212 @@ def _money_to_float_series(s: pd.Series) -> pd.Series:
 # UI
 # =============================
 st.set_page_config(layout="wide")
-st.title("💈 Comissão — Vinícius (inclui fiados pendentes)")
+st.title("💈 Comissão — Vinícius")
 
 base = _read_df(ABA_DADOS)
 base = garantir_colunas(base, COLS_OFICIAIS).copy()
 
-# Inputs
-colA, colB = st.columns([1,1])
+# Inputs principais
+colA, colB, colC = st.columns([1,1,1])
 with colA:
     hoje = br_now()
     sugestao_terca = hoje if hoje.weekday()==1 else hoje + timedelta(days=(1 - hoje.weekday()) % 7 or 7)
     terca_pagto = datetime.combine(st.date_input("🗓️ Terça do pagamento", value=sugestao_terca.date()), datetime.min.time())
 with colB:
-    perc_padrao = st.number_input("Percentual padrão da comissão (%)", value=PERCENTUAL_PADRAO, step=1.0)
+    perc_padrao = st.number_input("Percentual padrão (%)", value=PERCENTUAL_PADRAO, step=1.0)
+with colC:
+    descricao_padrao = st.text_input("Descrição (DESPESAS)", value="Comissão Vinícius")
 
-descricao_padrao = st.text_input("Descrição (para DESPESAS)", value="Comissão Vinícius")
-usar_tabela_cartao = st.checkbox("Usar TABELA quando cartão", value=True)
-usar_tabela_quando_valor_zero = st.checkbox("Usar TABELA quando Valor 0/vazio", value=True)
+# Regras de valor
+colD, colE = st.columns([1,1])
+with colD:
+    usar_tabela_quando_valor_zero = st.checkbox("Usar TABELA quando Valor 0/vazio", value=True)
+    usar_tabela_cartao = st.checkbox("Usar TABELA quando cartão", value=True)
+with colE:
+    ajustar_quebrados_para_tabela = st.checkbox("Ajustar valores 'quebrados' para TABELA (se perto)", value=True)
+    tolerancia_pct = st.number_input("Tolerância para TABELA (%)", value=25.0, min_value=0.0, max_value=100.0, step=5.0)
+tolerancia_rel = float(tolerancia_pct)/100.0
+
+# Pagamento (único ou fatiado por contas)
+dividir_pagamento = st.checkbox("Dividir pagamento em múltiplas contas (por dia)", value=False)
+if not dividir_pagamento:
+    meio_pag_unico = st.selectbox("Meio de pagamento (DESPESAS)", ["Dinheiro","Pix","Cartão","Transferência","CNPJ"], index=0)
+else:
+    st.caption("As porcentagens devem somar 100%.")
+    split_default = pd.DataFrame({"Me Pag:": ["Dinheiro","CNPJ"], "%": [50.0, 50.0]})
+    split_df = st.data_editor(split_default, key="editor_split", num_rows="dynamic", use_container_width=True)
+    soma_pct = float(pd.to_numeric(split_df.get("%", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum())
+    split_invalido = abs(soma_pct - 100.0) > 0.001
+
+reprocessar_terca = st.checkbox("Reprocessar esta terça (regravar)", value=False)
 
 # =============================
-# FILTRAGEM
+# FILTRO DA SEMANA
 # =============================
 dfv = base[base["Funcionário"].astype(str).str.strip()=="Vinicius"].copy()
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
 
 ini, fim = janela_terca_a_segunda(terca_pagto)
-st.info(f"Janela desta folha: **{to_br_date(ini)} a {to_br_date(fim)}** (terça→segunda)")
-
 mask_semana = (dfv["_dt_serv"].notna()) & (dfv["_dt_serv"]>=ini) & (dfv["_dt_serv"]<=fim)
-todos_df = dfv[mask_semana].copy()
 
-# Coluna "Fiado?"
-todos_df["Fiado?"] = todos_df["StatusFiado"].astype(str).str.strip().apply(lambda x: "Sim" if x.lower() not in ("","nao") else "Não")
+# Não fiado (sem status ou 'nao')
+mask_nao_fiado = (dfv["StatusFiado"].astype(str).str.strip()=="") | (dfv["StatusFiado"].astype(str).str.strip().str.lower()=="nao")
+semana_df = dfv[mask_semana & mask_nao_fiado].copy()
+
+# Fiado (todos)
+mask_fiado_all = ~mask_nao_fiado
+fiado_df = dfv[mask_semana & mask_fiado_all].copy()
+
+# Fiados liberados (pagos até a terça)
+fiado_df["_dt_pagto"] = fiado_df["DataPagamento"].apply(parse_br_date)
+fiados_liberados = fiado_df[(fiado_df["_dt_pagto"].notna()) & (fiado_df["_dt_pagto"]<=terca_pagto)].copy()
+
+# Fiado a receber (pendentes)
+fiados_pendentes = fiado_df[(fiado_df["_dt_pagto"].isna()) | (fiado_df["_dt_pagto"]>terca_pagto)].copy()
 
 # =============================
-# CÁLCULO DE COMISSÃO
+# CACHE DE PAGOS JÁ LANÇADOS
 # =============================
-col_val = "Valor"
-todos_df["Valor_num"] = _money_to_float_series(todos_df[col_val])
+cache = _read_df(ABA_COMISSOES_CACHE)
+cache_cols = ["RefID","PagoEm","TerçaPagamento","ValorComissao","Competencia","Observacao"]
+cache = garantir_colunas(cache, cache_cols)
+terca_str = to_br_date(terca_pagto)
+ja_pagos = set(cache["RefID"].astype(str).tolist()) if not reprocessar_terca else set(cache[cache["TerçaPagamento"]!=terca_str]["RefID"].astype(str).tolist())
 
-def _base_valor(row):
-    serv = str(row.get("Serviço", "")).strip()
+# =============================
+# CÁLCULO COMISSÃO (funções)
+# =============================
+def _valor_num(df: pd.DataFrame) -> pd.Series:
+    col_val = "Valor"
+    return _money_to_float_series(df[col_val]) if col_val in df.columns else pd.Series([0.0]*len(df))
+
+def _base_valor_row(row) -> float:
+    serv = str(row.get("Serviço","")).strip()
     val  = float(row.get("Valor_num", 0.0))
-    if val > 0: return val
+    # 1) Se anotado > 0, prioriza anotado…
+    if val > 0:
+        # …mas se for "quebrado" e perto da tabela, encaixa na TABELA (se habilitado)
+        if ajustar_quebrados_para_tabela and (abs(val - int(val)) > 1e-9) and serv in VALOR_TABELA:
+            tab = float(VALOR_TABELA[serv])
+            if tab > 0 and abs(val - tab)/tab <= tolerancia_rel:
+                return tab
+        return val
+    # 2) Fallbacks de TABELA
     if usar_tabela_quando_valor_zero and serv in VALOR_TABELA:
         return float(VALOR_TABELA[serv])
-    if usar_tabela_cartao and is_cartao(row.get("Conta", "")):
+    if usar_tabela_cartao and is_cartao(row.get("Conta","")):
         return float(VALOR_TABELA.get(serv, val))
+    # 3) Sem nada
     return val
 
-todos_df["Valor_base_comissao"] = todos_df.apply(_base_valor, axis=1)
-todos_df["Competência"] = todos_df["Data"].apply(competencia_from_data_str)
-todos_df["% Comissão"] = perc_padrao
-todos_df["Comissão (R$)"] = (todos_df["Valor_base_comissao"] * todos_df["% Comissão"] / 100).round(2)
+def _preparar(df_in: pd.DataFrame, titulo: str, key_prefix: str):
+    if df_in is None or df_in.empty:
+        st.warning(f"Sem itens em **{titulo}**.")
+        return pd.DataFrame(), 0.0
+    df = df_in.copy()
+    df["RefID"] = df.apply(make_refid, axis=1)
+    df = df[~df["RefID"].isin(ja_pagos)]
+    if df.empty and ("Fiado" not in titulo):
+        st.info(f"Todos os itens de **{titulo}** já foram pagos.")
+        return pd.DataFrame(), 0.0
+
+    df["Valor_num"] = _valor_num(df)
+    df["Valor_base_comissao"] = df.apply(_base_valor_row, axis=1)
+    df["Competência"] = df["Data"].apply(competencia_from_data_str)
+    df["% Comissão"] = float(perc_padrao)
+    df["Comissão (R$)"] = (df["Valor_base_comissao"] * df["% Comissão"] / 100.0).round(2)
+
+    st.subheader(titulo)
+    show_cols = ["Data","Cliente","Serviço","Valor_base_comissao","% Comissão","Comissão (R$)"]
+    st.dataframe(df[show_cols], use_container_width=True)
+    total = float(df["Comissão (R$)"].sum())
+    st.success(f"Total em **{titulo}**: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
+    return df, total
 
 # =============================
-# MOSTRAR GRID ÚNICO
+# BLOCOS
 # =============================
-st.subheader("Comissão desta semana (inclui fiados)")
-st.dataframe(
-    todos_df[["Data","Cliente","Serviço","Fiado?","Valor_base_comissao","% Comissão","Comissão (R$)"]],
-    use_container_width=True
+semana_grid, total_semana = _preparar(semana_df, "Semana (terça→segunda) — NÃO FIADO", "semana")
+fiados_grid, total_fiados = _preparar(fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_ok")
+pendentes_grid, total_pend = _preparar(fiados_pendentes, "Fiado a receber (pendentes)", "fiados_pendentes")
+
+st.header(
+    f"💵 Totais — Não fiado: R$ {total_semana:,.2f} | Fiados liberados: R$ {total_fiados:,.2f} | "
+    f"Fiado a receber: R$ {total_pend:,.2f}"
+    .replace(",", "X").replace(".", ",").replace("X",".")
 )
 
-total_geral = float(todos_df["Comissão (R$)"].sum())
-total_fiados = float(todos_df.loc[todos_df["Fiado?"]=="Sim","Comissão (R$)"].sum())
+# =============================
+# SALVAR (apenas o que é para pagar hoje)
+# - Grava cache e DESPESAS para: NÃO FIADO + FIADOS LIBERADOS
+# - NÃO grava fiado a receber (apenas painel)
+# =============================
+btn_disabled = dividir_pagamento and ('split_invalido' in locals() and split_invalido)
+if st.button("✅ Registrar comissão desta terça", disabled=btn_disabled):
+    if ((semana_grid is None or semana_grid.empty) and (fiados_grid is None or fiados_grid.empty)):
+        st.warning("Não há itens para pagar hoje (NÃO FIADO e/ou FIADOS LIBERADOS vazios).")
+    else:
+        # 1) Atualizar cache
+        novos_cache = []
+        for df_part in [semana_grid, fiados_grid]:
+            if df_part is None or df_part.empty: continue
+            for _, r in df_part.iterrows():
+                novos_cache.append({
+                    "RefID": r["RefID"],
+                    "PagoEm": to_br_date(br_now()),
+                    "TerçaPagamento": to_br_date(terca_pagto),
+                    "ValorComissao": f'{float(r["Comissão (R$)"]):.2f}'.replace(".", ","),
+                    "Competencia": r.get("Competência",""),
+                    "Observacao": f'{r.get("Cliente","")} | {r.get("Serviço","")} | {r.get("Data","")}',
+                })
 
-st.success(f"💵 Total geral: R$ {total_geral:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
-st.info(f"📌 Dentro desse total há R$ {total_fiados:,.2f} de fiados (a pagar quando receber)."
-        .replace(",", "X").replace(".", ",").replace("X","."))
+        cache_df = _read_df(ABA_COMISSOES_CACHE)
+        cache_df = garantir_colunas(cache_df, cache_cols)
+        if reprocessar_terca:
+            cache_df = cache_df[cache_df["TerçaPagamento"] != to_br_date(terca_pagto)]
+        _write_df(ABA_COMISSOES_CACHE, pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True))
+
+        # 2) Lançar em DESPESAS (1 linha por dia), só para semana + fiados liberados
+        despesas_df = _read_df(ABA_DESPESAS)
+        despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
+
+        pagaveis = []
+        for df_part in [semana_grid, fiados_grid]:
+            if df_part is None or df_part.empty: continue
+            pagaveis.append(df_part[["Data","Competência","Comissão (R$)"]].copy().rename(columns={"Comissão (R$)":"ComissaoValor"}))
+        if pagaveis:
+            pagos = pd.concat(pagaveis, ignore_index=True)
+            pagos["_dt"] = pagos["Data"].apply(parse_br_date)
+            pagos = pagos[pagos["_dt"].notna()]
+            por_dia = pagos.groupby(["Data","Competência"])["ComissaoValor"].sum().reset_index()
+
+            linhas = []
+            if not dividir_pagamento:
+                for _, row in por_dia.iterrows():
+                    linhas.append({
+                        "Data": str(row["Data"]).strip(),
+                        "Prestador": "Vinicius",
+                        "Descrição": f"{descricao_padrao} — Comp {str(row['Competência']).strip()} — Pago em {to_br_date(terca_pagto)}",
+                        "Valor": f'R$ {float(row["ComissaoValor"]):.2f}'.replace(".", ","),
+                        "Me Pag:": meio_pag_unico
+                    })
+            else:
+                soma_pct = float(pd.to_numeric(split_df.get("%", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum() or 100.0)
+                for _, row in por_dia.iterrows():
+                    val_total = float(row["ComissaoValor"])
+                    for _, r2 in split_df.iterrows():
+                        conta = str(r2.get("Me Pag:", "")).strip()
+                        pct = float(pd.to_numeric(r2.get("%",0.0), errors="coerce") or 0.0)
+                        if not conta or pct<=0: continue
+                        val = round(val_total * pct / soma_pct, 2)
+                        linhas.append({
+                            "Data": str(row["Data"]).strip(),
+                            "Prestador": "Vinicius",
+                            "Descrição": f"{descricao_padrao} — Comp {str(row['Competência']).strip()} — Pago em {to_br_date(terca_pagto)} — {pct:.1f}%",
+                            "Valor": f'R$ {val:.2f}'.replace(".", ","),
+                            "Me Pag:": conta
+                        })
+
+            _write_df(ABA_DESPESAS, pd.concat([despesas_df, pd.DataFrame(linhas)], ignore_index=True))
+        st.success("🎉 Comissão registrada (NÃO FIADO + FIADOS LIBERADOS). Fiado a receber permanece no painel para controle futuro.")
+        st.balloons()
