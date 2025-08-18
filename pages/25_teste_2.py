@@ -186,8 +186,8 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
 # =========================
 def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     """
-    Retorna (label_servico, valor_total, is_combo, lista_servicos)
-    pesquisando registros do cliente na data informada.
+    Retorna (label_servico, valor_total, is_combo, lista_servicos, periodo_label)
+    procurando todos os registros do cliente NA data informada.
     """
     d = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
@@ -204,23 +204,14 @@ def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     else:
         label = "-"
 
-    return label, valor_total, is_combo, servicos
+    # Período: pega o mais frequente do dia (normalmente todos iguais)
+    periodo_vals = [p for p in d["Período"].astype(str).str.strip().tolist() if p]
+    periodo_label = max(set(periodo_vals), key=periodo_vals.count) if periodo_vals else "-"
 
-def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total):
-    # -------- métricas de frequência (já usam datas únicas) --------
-    ultima, media, _ = calcular_metricas_cliente(df_all, cliente)
-    if ultima is not None:
-        hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
-        diff_days = (hoje - ultima).days
-        if diff_days < 0:
-            dias_str = f"em {abs(diff_days)} dias"       # atendimento futuro
-        elif diff_days == 0:
-            dias_str = "hoje"
-        else:
-            dias_str = f"{diff_days} dias"
-    else:
-        dias_str = "-"
+    return label, valor_total, is_combo, servicos, periodo_label
 
+
+def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label):
     # -------- histórico por DATA (não por linha) --------
     d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
     d_hist["_dt"] = pd.to_datetime(d_hist["Data"], format="%d/%m/%Y", errors="coerce")
@@ -230,10 +221,35 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     unique_days = sorted(set(d_hist["_dt"].dt.date.tolist()))
     total_atend = len(unique_days)
 
-    # último atendente considerando o registro mais recente
-    ultimo_func = d_hist.iloc[-1]["Funcionário"] if total_atend > 0 else "-"
+    # data atual
+    dt_atual = pd.to_datetime(data_str, format="%d/%m/%Y", errors="coerce")
+    dia_atual = None if pd.isna(dt_atual) else dt_atual.date()
 
-    # -------- formatações --------
+    # última data ANTERIOR ao atendimento atual
+    prev_days = [d for d in unique_days if (dia_atual is None or d < dia_atual)]
+    prev_date = prev_days[-1] if prev_days else None
+
+    # último atendente = quem atendeu na data anterior (se houver)
+    if prev_date is not None:
+        ultimo_reg = d_hist[d_hist["_dt"].dt.date == prev_date].iloc[-1]
+        ultimo_func = str(ultimo_reg.get("Funcionário", "-"))
+    else:
+        ultimo_func = "-"
+
+    # distância da última = dias entre dt_atual e prev_date (se houver)
+    if prev_date is not None and dia_atual is not None:
+        dias_str = f"{(dia_atual - prev_date).days} dias"
+    else:
+        dias_str = "-"
+
+    # média de intervalo entre visitas (já correta: diffs entre datas únicas)
+    if len(unique_days) >= 2:
+        ts = [pd.to_datetime(x) for x in unique_days]
+        diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
+        media = sum(diffs) / len(diffs) if diffs else None
+    else:
+        media = None
+
     media_str = "-" if media is None else f"{media:.1f} dias".replace(".", ",")
     valor_str = f"R$ {valor_total:.2f}".replace(".", ",")
 
@@ -241,6 +257,7 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
         "📌 <b>Atendimento registrado</b>\n"
         f"👤 Cliente: <b>{cliente}</b>\n"
         f"🗓️ Data: <b>{data_str}</b>\n"
+        f"🕒 Período: <b>{periodo_label}</b>\n"
         f"✂️ Serviço: <b>{servico_label}</b>\n"
         f"💰 Valor: <b>{valor_str}</b>\n"
         f"👨‍🔧 Atendido por: <b>{funcionario}</b>\n\n"
@@ -251,24 +268,6 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
         f"👨‍🔧 Último atendente: <b>{ultimo_func}</b>"
     )
 
-def calcular_metricas_cliente(df_all, cliente):
-    d = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
-    if d.empty: return None, None, "Sem média"
-    d["_dt"] = pd.to_datetime(d["Data"], format="%d/%m/%Y", errors="coerce")
-    d = d.dropna(subset=["_dt"])
-    if d.empty: return None, None, "Sem média"
-    dias = sorted(set(pd.to_datetime(d["_dt"]).dt.date.tolist()))
-    ultima = pd.to_datetime(dias[-1])
-    hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
-    dias_since = (hoje - ultima).days
-    media = None
-    if len(dias) >= 2:
-        ts = [pd.to_datetime(x) for x in dias]
-        diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
-        diffs = [x for x in diffs if x > 0]
-        if diffs: media = sum(diffs) / len(diffs)
-    _, status_label = classificar_relative(dias_since, media)
-    return ultima, media, status_label
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
     """
@@ -276,14 +275,16 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
     servico/valor/combo são opcionais. Se não vierem, o resumo é calculado pelo df_all.
     """
     if servico is None or valor is None:
-        servico_label, valor_total, _, _ = _resumo_do_dia(df_all, cliente, data_str)
+        servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
         is_combo = bool(combo and str(combo).strip())
         servico_label = (f"{servico} (Combo)" if is_combo and "+" in str(servico)
                          else f"{servico} (Simples)" if not is_combo else f"{servico} (Combo)")
         valor_total = float(valor)
+        # tenta ler o período direto do DF para o dia, se existir
+        _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
-    caption = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total)
+    caption = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label)
     foto = FOTOS.get(_norm(cliente))
     chat_id = _chat_id_por_func(funcionario)
     if foto:
