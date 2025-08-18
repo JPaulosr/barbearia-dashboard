@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Comissão (3 blocos): Não fiado | Fiados liberados | Fiado a receber
-# - IDs únicos (key=) para evitar StreamlitDuplicateElementId
-# - Arredondamento inteligente para TABELA com tolerâncias separadas (abaixo/acima)
-# - Edição manual de % comissão por linha (override)
-# - Leitura robusta da coluna de Valor (R$, vírgula, ponto, cabeçalho variável, DF/Series/lista)
+# - IDs únicos (key=)
+# - Arredondamento inteligente (tolerância abaixo/acima)
+# - Override de % comissão por linha
+# - Leitura de VALOR robusta (R$, vírgula, ponto, DF/Series/lista) e sem “zerar”
+# - Filtros de texto insensíveis a acento (Funcionário, etc.)
 
 import streamlit as st
 import pandas as pd
@@ -17,6 +18,7 @@ from typing import Union
 # =============================
 # CONFIG
 # =============================
+st.set_page_config(layout="wide")
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
 ABA_COMISSOES_CACHE = "comissoes_cache"
@@ -120,29 +122,29 @@ def is_cartao(conta:str)->bool:
     c = (conta or "").strip().lower()
     return bool(re.search(r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos)", c))
 
-# ===== NORMALIZAÇÃO DE CABEÇALHO / VALOR =====
-VAL_COL_CANDS = ["Valor","Valor (R$)","Valor Liquido","Valor Recebido","Valor_liquido","Valor_total"]
+def fold_text(s: str) -> str:
+    """lower + remove acentos/espaços extras"""
+    s = unicodedata.normalize("NFKC", str(s)).replace("\xa0"," ")
+    s = unicodedata.normalize("NFKD", s).encode("ASCII","ignore").decode("ASCII")
+    return s.strip().lower()
 
-def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
-    def norm(s):
-        s = unicodedata.normalize("NFKC", str(s)).replace("\xa0", " ")
-        s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("ASCII")
-        return s.strip()
-    df = df.copy()
-    df.columns = [norm(c) for c in df.columns]
-    if df.columns.duplicated().any():
-        df = df.loc[:, ~df.columns.duplicated(keep="first")]
-    return df
+# ===== VALOR =====
+VAL_COL_CANDS = ["Valor","Valor (R$)","Valor Liquido","Valor Líquido","Valor Recebido","Valor_liquido","Valor_total"]
 
 def find_val_col(df: pd.DataFrame) -> str | None:
-    cols_norm = {c.lower().replace(" ", ""): c for c in df.columns}
+    # procura por chave insensível a acento e espaços
+    mapper = {}
+    for c in df.columns:
+        k = fold_text(c).replace(" ", "").replace("_","")
+        mapper[k] = c
     for raw in VAL_COL_CANDS:
-        key = raw.lower().replace(" ", "")
-        if key in cols_norm:
-            return cols_norm[key]
-    for k, v in cols_norm.items():  # fallback
+        key = fold_text(raw).replace(" ", "").replace("_","")
+        if key in mapper:
+            return mapper[key]
+    # fallback genérico: contém "valor"
+    for k, c in mapper.items():
         if "valor" in k:
-            return v
+            return c
     return None
 
 def _series_from_any(s, length_hint:int=0) -> pd.Series:
@@ -158,7 +160,7 @@ def _series_from_any(s, length_hint:int=0) -> pd.Series:
         return pd.Series([s]*length_hint)
 
 def _money_to_float_series(s) -> pd.Series:
-    """Converte Series/DF/lista/escalar em float preservando decimais (ponto ou vírgula)."""
+    """Converte Series/DF/lista/escalar em float preservando decimais (ponto/vírgula)."""
     s = _series_from_any(s)
     if s is None or len(s) == 0:
         return pd.Series(dtype=float)
@@ -171,18 +173,15 @@ def _money_to_float_series(s) -> pd.Series:
     def conv(txt: str) -> float:
         if not txt:
             return 0.0
-        # se tem , e . decide o decimal pelo último símbolo
         if "," in txt and "." in txt:
+            # separador decimal = o símbolo mais à direita
             if txt.rfind(",") > txt.rfind("."):
-                # 1.234,56 -> 1234.56
-                txt = txt.replace(".", "").replace(",", ".")
+                txt = txt.replace(".", "").replace(",", ".")  # 1.234,56 -> 1234.56
             else:
-                # 1,234.56 -> 1234.56
-                txt = txt.replace(",", "")
+                txt = txt.replace(",", "")                    # 1,234.56 -> 1234.56
         elif "," in txt:
-            txt = txt.replace(",", ".")  # 25,5 -> 25.5
-        else:
-            txt = txt  # 25.50 -> 25.50
+            txt = txt.replace(",", ".")                       # 25,5 -> 25.5
+        # else: "25.50" permanece
         try:
             return float(txt)
         except:
@@ -193,12 +192,10 @@ def _money_to_float_series(s) -> pd.Series:
 # =============================
 # UI
 # =============================
-st.set_page_config(layout="wide")
 st.title("💈 Comissão — Vinícius")
 
 base = _read_df(ABA_DADOS)
-base = normalize_headers(base)
-base = garantir_colunas(base, COLS_OFICIAIS).copy()
+base = garantir_colunas(base, COLS_OFICIAIS).copy()  # não mexe no nome das colunas!
 
 # ========== Inputs ==========
 colA, colB, colC = st.columns([1,1,1])
@@ -236,7 +233,21 @@ else:
 reprocessar_terca = st.checkbox("Reprocessar esta terça (regravar)", value=False, key="chk_reprocessar")
 
 # ========= Lógica de semana =========
-dfv = base[base["Funcionário"].astype(str).str.strip().str.lower()=="vinicius"].copy()
+# filtro do funcionário insensível a acento
+if "Funcionário" in base.columns:
+    func_col = "Funcionário"
+elif "Funcionario" in base.columns:
+    func_col = "Funcionario"
+else:
+    st.error("Coluna 'Funcionário' não encontrada na Base de Dados.")
+    func_col = None
+
+if func_col:
+    mask_func = base[func_col].astype(str).map(fold_text) == "vinicius"
+    dfv = base[mask_func].copy()
+else:
+    dfv = base.copy()  # evita crash; mas sem filtro
+
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
 
 ini, fim = janela_terca_a_segunda(terca_pagto)
@@ -265,38 +276,32 @@ else:
 
 # ========= Cálculos =========
 def _valor_num(df: pd.DataFrame) -> pd.Series:
-    df_loc = normalize_headers(df)
-    col_val = find_val_col(df_loc)  # detecta automaticamente
+    col_val = find_val_col(df)
     if not col_val:
-        # avisa e retorna zeros (evita “zerar silencioso”)
-        st.warning("⚠️ Coluna de valor não encontrada. Procurando por: Valor, Valor (R$), Valor Liquido, Valor Recebido…")
-        return pd.Series([0.0]*len(df_loc), dtype=float)
-    col = df_loc.loc[:, [col_val]]
-    return _money_to_float_series(col)
+        st.warning("⚠️ Coluna de valor não encontrada. Procurei por: Valor, Valor (R$), Valor Líquido, Valor Recebido…")
+        return pd.Series([0.0]*len(df), dtype=float)
+    return _money_to_float_series(df.loc[:, [col_val]])
 
 def _base_valor_row(row) -> float:
     serv = str(row.get("Serviço","")).strip()
     val  = float(row.get("Valor_num", 0.0))
-
-    # 1) Se já tem valor anotado, usa o valor real.
+    # 1) Já tem valor anotado → usa, arredondando para tabela só se “quebrado” e próximo
     if val > 0:
         if ajustar_quebrados_para_tabela and serv in VALOR_TABELA:
             tab = float(VALOR_TABELA[serv])
             if tab > 0:
                 diff = val - tab
                 rel = abs(diff) / tab
-                if diff < 0 and rel <= (tol_baixo/100.0):   # abaixo e próximo -> sobe p/ tabela
+                if diff < 0 and rel <= (tol_baixo/100.0):   # abaixo e perto → sobe pra tabela
                     return tab
-                if diff > 0 and rel <= (tol_cima/100.0):    # acima e próximo -> desce p/ tabela
+                if diff > 0 and rel <= (tol_cima/100.0):    # acima e perto → desce pra tabela
                     return tab
         return val
-
     # 2) Fallbacks (só quando Valor==0)
     if usar_tabela_quando_valor_zero and serv in VALOR_TABELA:
         return float(VALOR_TABELA[serv])
     if usar_tabela_cartao and is_cartao(row.get("Conta","")) and serv in VALOR_TABELA:
         return float(VALOR_TABELA[serv])
-
     return val
 
 def _preparar(df_in: pd.DataFrame, titulo: str, key_prefix: str):
