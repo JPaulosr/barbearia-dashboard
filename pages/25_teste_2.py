@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # 12_Fiado.py — Fiado + Telegram (foto + card), por funcionário + cópia p/ JP
 # - NUNCA limpa a base ao lançar fiado: usa append_rows
-# - Quitar por COMPETÊNCIA com atualização segura (sem dropna)
+# - Quitar por COMPETÊNCIA com atualização segura (sem dropna que apaga coisas)
 # - Notificações com FOTO (se existir) e card HTML
 # - Roteamento: Vinícius → canal; JPaulo → privado
 # - Cópia privada p/ JP ao quitar: comissões sugeridas + próxima terça p/ pagar
@@ -93,9 +93,10 @@ def _norm(s: str) -> str:
     return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
 
 @st.cache_data(show_spinner=False)
-def carregar_fotos_mapa(conectar_fn):
+def carregar_fotos_mapa():
+    """NÃO recebe função; cria conexão internamente para evitar UnhashableParamError."""
     try:
-        sh = conectar_fn()
+        sh = conectar_sheets()
         if STATUS_ABA not in [w.title for w in sh.worksheets()]:
             return {}
         ws = sh.worksheet(STATUS_ABA)
@@ -103,13 +104,14 @@ def carregar_fotos_mapa(conectar_fn):
         df.columns = [str(c).strip() for c in df.columns]
         cols_lower = {c.lower(): c for c in df.columns}
         foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
-        cli_col = next((cols_lower[c] for c in ["cliente", "nome", "nome_cliente"] if c in cols_lower), None)
+        cli_col  = next((cols_lower[c] for c in ["cliente","nome","nome_cliente"] if c in cols_lower), None)
         if not (foto_col and cli_col):
             return {}
         tmp = df[[cli_col, foto_col]].copy()
         tmp.columns = ["Cliente", "Foto"]
         tmp["k"] = tmp["Cliente"].astype(str).map(_norm)
-        return {r["k"]: str(r["Foto"]).strip() for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
+        return {r["k"]: str(r["Foto"]).strip()
+                for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
     except Exception:
         return {}
 
@@ -161,7 +163,6 @@ def garantir_aba(ss, nome, cols):
         ws = ss.add_worksheet(title=nome, rows=200, cols=max(10, len(cols)))
         ws.append_row(cols)
         return ws
-    # garante header na primeira linha
     existing = ws.row_values(1)
     if not existing:
         ws.append_row(cols)
@@ -171,12 +172,10 @@ def read_base_raw(ss):
     """Lê a 'Base de Dados' SEM dropna, preservando todas as linhas/colunas."""
     ws = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)  # NÃO usar dropna aqui
-    # normaliza colunas
     df.columns = [str(c).strip() for c in df.columns]
     for c in BASE_COLS_ALL:
         if c not in df.columns:
             df[c] = ""
-    # garante ordem e preserva colunas extras ao final
     df = df[[*BASE_COLS_ALL, *[c for c in df.columns if c not in BASE_COLS_ALL]]]
     return df, ws
 
@@ -197,7 +196,6 @@ def append_rows_base(ws, novas_dicts):
 def carregar_listas():
     ss = conectar_sheets()
     ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
-    # Para montar listas de selects, podemos filtrar vazios
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
     df_list.columns = [str(c).strip() for c in df_list.columns]
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
@@ -239,7 +237,7 @@ def ultima_forma_pagto_cliente(df_base, cliente):
 
 # ===== Caches
 clientes, combos_exist, servs_exist, contas_exist = carregar_listas()
-FOTOS = carregar_fotos_mapa(conectar_sheets)  # {norm(cliente) -> url}
+FOTOS = carregar_fotos_mapa()  # <<< sem passar função (evita UnhashableParamError)
 
 st.sidebar.header("Ações")
 acao = st.sidebar.radio("Escolha:", ["➕ Lançar fiado","💰 Registrar pagamento","📋 Em aberto & exportação"])
@@ -439,25 +437,22 @@ elif acao == "💰 Registrar pagamento":
             subset_all["Valor"] = pd.to_numeric(subset_all["Valor"], errors="coerce").fillna(0)
             total_pago = float(subset_all["Valor"].sum())
 
-            # Atualiza no lugar (COMPETÊNCIA) — sem limpar a planilha; vamos reescrever integralmente o DF, preservando todas as linhas
+            # Atualiza no lugar (COMPETÊNCIA)
             dfb.loc[mask, "Conta"] = forma_pag
             dfb.loc[mask, "StatusFiado"] = "Pago"
             dfb.loc[mask, "VencimentoFiado"] = ""
             dfb.loc[mask, "DataPagamento"] = data_pag.strftime(DATA_FMT)
 
-            # Reescreve a aba inteira, mas com o DF completo (sem perder nada)
-            # (mantém as colunas existentes e extras)
+            # Reescreve a aba inteira com o DF COMPLETO (preserva tudo)
             headers = ws_base2.row_values(1)
             if not headers:
                 headers = list(dfb.columns)
                 ws_base2.append_row(headers)
-            # garante que todas as colunas do header existam no dfb
             for h in headers:
                 if h not in dfb.columns:
                     dfb[h] = ""
-            # reordena para o header e acrescenta colunas extras ao final
             dfb = dfb[[*headers, *[c for c in dfb.columns if c not in headers]]]
-            ws_base2.clear()  # agora sim limpamos, mas para reescrever o DF COMPLETO, não parcial
+            ws_base2.clear()
             set_with_dataframe(ws_base2, dfb, include_index=False, include_column_header=True)
 
             append_row(
@@ -480,7 +475,7 @@ elif acao == "💰 Registrar pagamento":
             )
             st.cache_data.clear()
 
-            # ---- NOTIFICAÇÃO: pagamento registrado (para cada funcionário envolvido)
+            # ---- NOTIFICAÇÃO: pagamento registrado (para cada funcionário envolvido) — com FOTO se houver
             try:
                 tot_fmt = f"R$ {total_pago:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 ids_txt = ", ".join(id_selecionados)
@@ -507,7 +502,7 @@ elif acao == "💰 Registrar pagamento":
             except Exception:
                 pass
 
-            # ---- CÓPIA PRIVADA PARA JPAULO: comissão sugerida + próxima terça
+            # ---- CÓPIA PRIVADA PARA JPAULO: comissão sugerida + próxima terça — com FOTO se houver
             try:
                 sub = subset_all.copy()
                 sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)
