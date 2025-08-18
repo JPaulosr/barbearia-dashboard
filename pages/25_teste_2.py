@@ -5,8 +5,8 @@
 # - Notificações com FOTO (se existir) e card HTML
 # - Roteamento: Vinícius → canal; JPaulo → privado
 # - Cópia privada p/ JP ao quitar: comissões sugeridas + próxima terça p/ pagar
-# - (NOVO) Cards incluem “🧰 Serviço(s)” em novo fiado e quitação
-# - (NOVO) Cópia p/ JP inclui “Histórico por ano” e “Ano corrente: por serviço (qtd × total)”
+# - Cards incluem “🧰 Serviço(s)” (combo se houver; senão serviços) — sem ID
+# - Cópia p/ JP inclui “Histórico por ano” e “Ano corrente: por serviço (qtd × total)”
 
 import streamlit as st
 import pandas as pd
@@ -127,6 +127,32 @@ def proxima_terca(d: date) -> date:
     delta = (1 - wd) % 7
     return d + timedelta(days=delta)
 
+# --- Texto: serviços sem ID (por ID selecionado) ---
+def servicos_compactos_por_ids(df_rows: pd.DataFrame) -> str:
+    """
+    Retorna apenas os serviços por ID, sem prefixar com o ID.
+    - Se o ID tiver Combo, usa o Combo.
+    - Senão, junta os serviços distintos do ID com '+'.
+    - Se houver vários IDs, junta cada bloco com ' | '.
+    """
+    if df_rows.empty:
+        return "-"
+    partes = []
+    for _, grp in df_rows.groupby("IDLancFiado"):
+        combo_vals = grp["Combo"].dropna().astype(str).str.strip()
+        combo_vals = combo_vals[combo_vals != ""]
+        if not combo_vals.empty:
+            partes.append(combo_vals.iloc[0])
+        else:
+            servs = sorted(set(grp["Serviço"].dropna().astype(str).str.strip().tolist()))
+            partes.append("+".join(servs) if servs else "-")
+    partes = [p for p in partes if p]
+    vistos = []
+    for p in partes:
+        if p not in vistos:
+            vistos.append(p)
+    return " | ".join(vistos) if vistos else "-"
+
 # --- Histórico por ano (quanto o cliente gastou no salão) ---
 def historico_cliente_por_ano(df_base: pd.DataFrame, cliente: str) -> dict[int, float]:
     """Retorna {ano: total_gasto_no_ano} para o cliente (soma 'Valor' da Base)."""
@@ -177,7 +203,6 @@ def breakdown_por_servico_no_ano(df_base: pd.DataFrame, cliente: str, ano: int,
 
     top["Qtd"] = top["Qtd"].astype(int)
     top["Total"] = top["Total"].astype(float).round(2)
-    top.rename(columns={"Serviço":"Serviço","Qtd":"Qtd","Total":"Total"}, inplace=True)
     return top, total_qtd, total_val, outros_qtd, outros_val
 
 def _fmt_brl(v: float) -> str:
@@ -210,27 +235,6 @@ def update_fiados_pagamento(ws, df_base: pd.DataFrame, mask, forma_pag: str, dat
 
     if data_updates:
         ws.batch_update(data_updates, value_input_option="USER_ENTERED")
-
-def label_servicos_para_ids(df_rows: pd.DataFrame) -> str:
-    """
-    Monta um texto de serviços para os IDs selecionados.
-    Regra: se tiver Combo no ID, usa o Combo; senão, junta os serviços distintos com '+'.
-    Saída: 'L-202...: corte+barba | L-202...: corte'
-    """
-    if df_rows.empty:
-        return "-"
-    out = []
-    for idl, grp in df_rows.groupby("IDLancFiado"):
-        combo_vals = grp["Combo"].dropna().astype(str).str.strip()
-        combo_vals = combo_vals[combo_vals != ""]
-        combo = combo_vals.iloc[0] if not combo_vals.empty else ""
-        if combo:
-            sv = combo
-        else:
-            servs = sorted(set(grp["Serviço"].dropna().astype(str).str.strip().tolist()))
-            sv = "+".join(servs) if servs else "-"
-        out.append(f"{idl}: {sv}")
-    return " | ".join(out)
 
 # =========================
 # APP / SHEETS
@@ -279,7 +283,7 @@ def garantir_aba(ss, nome, cols):
 def read_base_raw(ss):
     """Lê a 'Base de Dados' SEM dropna, preservando todas as linhas/colunas."""
     ws = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
-    df = get_as_dataframe(ws, evaluate_formulas=True, header=0)  # NÃO usar dropna aqui
+    df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
     df.columns = [str(c).strip() for c in df.columns]
     for c in BASE_COLS_ALL:
         if c not in df.columns:
@@ -415,7 +419,7 @@ if acao == "➕ Lançar fiado":
             # ---- NOTIFICAÇÃO: novo fiado (com SERVIÇO) + JP com histórico e breakdown ----
             try:
                 total_fmt = _fmt_brl(total)
-                servicos_txt = (combo_str.strip() if combo_str and combo_str.strip() else ("+".join(servicos) if servicos else "-"))
+                servicos_txt = combo_str.strip() if (combo_str and combo_str.strip()) else ("+".join(servicos) if servicos else "-")
 
                 msg_html = (
                     "🧾 <b>Novo fiado criado</b>\n"
@@ -443,9 +447,7 @@ if acao == "➕ Lançar fiado":
                     hist = historico_cliente_por_ano(df_priv, cliente)
                     if hist:
                         anos_ord = sorted(hist.keys(), reverse=True)
-                        linhas_hist = "\n".join(
-                            f"• {ano}: <b>{_fmt_brl(hist[ano])}</b>" for ano in anos_ord
-                        )
+                        linhas_hist = "\n".join(f"• {ano}: <b>{_fmt_brl(hist[ano])}</b>" for ano in anos_ord)
                         bloco_hist = "\n------------------------------\n📚 <b>Histórico por ano</b>\n" + linhas_hist
                     else:
                         bloco_hist = "\n------------------------------\n📚 <b>Histórico por ano</b>\n• (sem registros)"
@@ -611,7 +613,7 @@ elif acao == "💰 Registrar pagamento":
             try:
                 tot_fmt = _fmt_brl(total_pago)
                 ids_txt = ", ".join(id_selecionados)
-                servicos_txt = label_servicos_para_ids(subset_all)
+                servicos_txt = servicos_compactos_por_ids(subset_all)
 
                 msg_html = (
                     "✅ <b>Fiado quitado (competência)</b>\n"
@@ -620,7 +622,7 @@ elif acao == "💰 Registrar pagamento":
                     f"💳 Forma: <b>{forma_pag}</b>\n"
                     f"💵 Total pago: <b>{tot_fmt}</b>\n"
                     f"📅 Data pagto: {data_pag_str}\n"
-                    f"🆔 IDs: <code>{ids_txt}</code>\n"
+                    f"🗂️ IDs: <code>{ids_txt}</code>\n"
                     f"📝 Obs: {obs or '-'}"
                 )
 
@@ -664,9 +666,7 @@ elif acao == "💰 Registrar pagamento":
                 hist = historico_cliente_por_ano(df_priv, cliente_sel)
                 if hist:
                     anos_ord = sorted(hist.keys(), reverse=True)
-                    linhas_hist = "\n".join(
-                        f"• {ano}: <b>{_fmt_brl(hist[ano])}</b>" for ano in anos_ord
-                    )
+                    linhas_hist = "\n".join(f"• {ano}: <b>{_fmt_brl(hist[ano])}</b>" for ano in anos_ord)
                     bloco_hist = "\n------------------------------\n📚 <b>Histórico por ano</b>\n" + linhas_hist
                 else:
                     bloco_hist = "\n------------------------------\n📚 <b>Histórico por ano</b>\n• (sem registros)"
@@ -687,7 +687,7 @@ elif acao == "💰 Registrar pagamento":
                 else:
                     bloco_srv = f"\n------------------------------\n🔎 <b>{ano_corrente}: por serviço</b>\n• (sem registros)"
 
-                servicos_txt = label_servicos_para_ids(subset_all)
+                servicos_txt = servicos_compactos_por_ids(subset_all)
                 tot_fmt = _fmt_brl(total_pago)
                 ids_txt = ", ".join(id_selecionados)
 
