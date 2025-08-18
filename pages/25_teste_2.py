@@ -1,47 +1,79 @@
-import streamlit as st
+# 11_Adicionar_Atendimento.py
+# Página Streamlit para cadastrar atendimentos (simples e em lote)
+# + utilitários de notificação/Telegram + leitura da planilha
+
+import os
+import json
+import unicodedata
+from datetime import datetime
+
+import pytz
+import requests
 import pandas as pd
+import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from datetime import datetime
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
-import requests
-import textwrap
 
-# === CONFIGURAÇÃO GOOGLE SHEETS ===
+# =========================================================
+# Compatibilidade de cache (Streamlit novo e antigo)
+# =========================================================
+if hasattr(st, "cache_data"):
+    cache_data = st.cache_data
+    cache_resource = st.cache_resource
+else:
+    # Fallback para versões antigas do Streamlit (<1.18)
+    cache_data = st.cache
+    cache_resource = st.cache
+
+# =========================================================
+# CONFIG
+# =========================================================
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"
+STATUS_ABA = "clientes_status"  # onde está Cliente + link da foto
+FOTO_COL_CANDIDATES = ["link_foto", "foto", "imagem", "url_foto", "foto_link", "link", "image"]
+
+TZ = "America/Sao_Paulo"
+REL_MULT = 1.5  # classificação relativa: pouco = <= média*1.5, muito acima disso
 
 # Colunas “oficiais” e colunas de FIADO que devemos preservar
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
     "Funcionário", "Fase", "Tipo", "Período"
 ]
-COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]  # incluo DataPagamento p/ competência
+COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]
 
-# === VALORES PADRÃO DE SERVIÇO ===
-valores_servicos = {
-    "Corte": 25.0,
-    "Pezinho": 7.0,
-    "Barba": 15.0,
-    "Sobrancelha": 7.0,
-    "Luzes": 45.0,
-    "Pintura": 35.0,
-    "Alisamento": 40.0,
-    "Gel": 10.0,
-    "Pomada": 15.0,
-}
+# =========================================================
+# Utils
+# =========================================================
+def _norm(s: str) -> str:
+    s = (s or "").strip().casefold()
+    s = unicodedata.normalize("NFD", s)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
 
-LOGO_PADRAO = st.secrets.get("LOGO_PADRAO", "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png")
+def classificar_relative(dias, media):
+    if media is None:
+        return ("⚪ Sem média", "Sem média")
+    if dias <= media:
+        return ("🟢 Em dia", "Em dia")
+    elif dias <= media * REL_MULT:
+        return ("🟠 Pouco atrasado", "Pouco atrasado")
+    else:
+        return ("🔴 Muito atrasado", "Muito atrasado")
 
-# ====== CONEXÃO ======
-@st.cache_resource
+def now_br():
+    return datetime.now(pytz.timezone(TZ)).strftime("%d/%m/%Y %H:%M:%S")
+
+# =========================================================
+# Conexão com Google Sheets
+# =========================================================
+@cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
     escopo = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive.readonly"
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
     ]
     credenciais = Credentials.from_service_account_info(info, scopes=escopo)
     cliente = gspread.authorize(credenciais)
@@ -55,54 +87,176 @@ def ler_cabecalho(aba):
     except Exception:
         return []
 
-@st.cache_data(ttl=120)
 def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(col).strip() for col in df.columns]
 
-    # >>> Garante colunas oficiais e de fiado (sem remover as que já existem)
+    # garante oficiais + fiado
     for coluna in [*COLS_OFICIAIS, *COLS_FIADO]:
         if coluna not in df.columns:
             df[coluna] = ""
 
-    # Normaliza Período
+    # normaliza Período
     norm = {"manha": "Manhã", "Manha": "Manhã", "manha ": "Manhã", "tarde": "Tarde", "noite": "Noite"}
-    if "Período" in df.columns:
-        df["Período"] = df["Período"].astype(str).str.strip().replace(norm)
-        df.loc[~df["Período"].isin(["Manhã", "Tarde", "Noite"]), "Período"] = ""
+    df["Período"] = df["Período"].astype(str).str.strip().replace(norm)
+    df.loc[~df["Período"].isin(["Manhã", "Tarde", "Noite"]), "Período"] = ""
 
-    if "Combo" in df.columns:
-        df["Combo"] = df["Combo"].fillna("")
-
+    df["Combo"] = df["Combo"].fillna("")
     return df, aba
 
-def salvar_base(df_final):
+def salvar_base(df_final: pd.DataFrame):
     aba = conectar_sheets().worksheet(ABA_DADOS)
     headers_existentes = ler_cabecalho(aba)
-
-    # Se a planilha estiver vazia (sem cabeçalho), cria um com oficiais + fiado
     if not headers_existentes:
         headers_existentes = [*COLS_OFICIAIS, *COLS_FIADO]
 
-    # Garante todas as colunas do cabeçalho + oficiais + fiado
     colunas_alvo = list(dict.fromkeys([*headers_existentes, *COLS_OFICIAIS, *COLS_FIADO]))
     for col in colunas_alvo:
         if col not in df_final.columns:
             df_final[col] = ""
 
-    # Reordena pelas colunas alvo (preserva as extras que já existiam)
     df_final = df_final[colunas_alvo]
-
-    # Escreve
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
+
+# =========================================================
+# Fotos por cliente (status sheet)
+# =========================================================
+@cache_data(show_spinner=False)
+def carregar_fotos_mapa():
+    try:
+        sh = conectar_sheets()
+        if STATUS_ABA not in [w.title for w in sh.worksheets()]:
+            return {}
+        ws = sh.worksheet(STATUS_ABA)
+        df = get_as_dataframe(ws).fillna("")
+        df.columns = [str(c).strip() for c in df.columns]
+        # acha colunas
+        cols_lower = {c.lower(): c for c in df.columns}
+        foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
+        cli_col = next((cols_lower[c] for c in ["cliente", "nome", "nome_cliente"] if c in cols_lower), None)
+        if not (foto_col and cli_col):
+            return {}
+        tmp = df[[cli_col, foto_col]].copy()
+        tmp.columns = ["Cliente", "Foto"]
+        tmp["k"] = tmp["Cliente"].astype(str).map(_norm)
+        return {r["k"]: str(r["Foto"]).strip() for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
+    except Exception:
+        return {}
+
+FOTOS = carregar_fotos_mapa()
+
+# =========================================================
+# Telegram
+# =========================================================
+def _has_telegram():
+    return ("TELEGRAM_TOKEN" in st.secrets) and ("TELEGRAM_CHAT_ID" in st.secrets)
+
+def tg_send(text):
+    if not _has_telegram():
+        return
+    try:
+        url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendMessage"
+        payload = {
+            "chat_id": st.secrets["TELEGRAM_CHAT_ID"],
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        requests.post(url, json=payload, timeout=30)
+    except Exception as e:
+        st.warning(f"Falha ao enviar Telegram: {e}")
+
+def tg_send_photo(photo_url, caption):
+    if not _has_telegram():
+        return
+    try:
+        url = f"https://api.telegram.org/bot{st.secrets['TELEGRAM_TOKEN']}/sendPhoto"
+        payload = {
+            "chat_id": st.secrets["TELEGRAM_CHAT_ID"],
+            "photo": photo_url,
+            "caption": caption,
+            "parse_mode": "HTML",
+        }
+        requests.post(url, data=payload, timeout=30)
+    except Exception as e:
+        st.warning(f"Falha ao enviar foto (Telegram): {e}")
+        tg_send(caption)
+
+def make_card_caption(nome, status_label, ultima_dt, media, dias_desde_ultima):
+    ultima_str = pd.to_datetime(ultima_dt).strftime("%d/%m/%Y") if pd.notnull(ultima_dt) else "-"
+    media_str = "-" if media is None else f"{media:.1f}".replace(".", ",")
+    dias_str = "-" if dias_desde_ultima is None else str(int(dias_desde_ultima))
+    emoji = {"Em dia":"🟢", "Pouco atrasado":"🟠", "Muito atrasado":"🔴"}.get(status_label, "")
+    return (
+        "📌 <b>Atendimento registrado</b>\n"
+        f"👤 Cliente: <b>{nome}</b>\n"
+        f"{emoji} Status: <b>{status_label}</b>\n"
+        f"🗓️ Data: <b>{ultima_str}</b>\n"
+        f"🔁 Média: <b>{media_str} dias</b>\n"
+        f"⏳ Distância da última: <b>{dias_str} dias</b>"
+    )
+
+def calcular_metricas_cliente(df_all, cliente):
+    # usa 1 visita por dia para média de intervalo
+    d = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
+    if d.empty:
+        return None, None, "Sem média"
+    # parse datas
+    d["_dt"] = pd.to_datetime(d["Data"], format="%d/%m/%Y", errors="coerce")
+    d = d.dropna(subset=["_dt"])
+    if d.empty:
+        return None, None, "Sem média"
+    dias_unicos = sorted(set(pd.to_datetime(d["_dt"]).dt.date.tolist()))
+    ultima = pd.to_datetime(dias_unicos[-1])
+    hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
+    dias_since = (hoje - ultima).days
+    media = None
+    if len(dias_unicos) >= 2:
+        dias_ts = [pd.to_datetime(x) for x in dias_unicos]
+        diffs = [(dias_ts[i] - dias_ts[i-1]).days for i in range(1, len(dias_ts))]
+        diffs_pos = [x for x in diffs if x > 0]
+        if diffs_pos:
+            media = sum(diffs_pos)/len(diffs_pos)
+    _, status_label = classificar_relative(dias_since, media)
+    return ultima, media, status_label
+
+def enviar_card_vinicius(df_all, cliente):
+    ultima, media, status_label = calcular_metricas_cliente(df_all, cliente)
+    dias = None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days
+    caption = make_card_caption(cliente, status_label, ultima, media, dias)
+    foto = FOTOS.get(_norm(cliente))
+    if foto:
+        tg_send_photo(foto, caption)
+    else:
+        tg_send(caption)
+
+# =========================================================
+# Valores padrão de serviço
+# =========================================================
+valores_servicos = {
+    "Corte": 25.0,
+    "Pezinho": 7.0,
+    "Barba": 15.0,
+    "Sobrancelha": 7.0,
+    "Luzes": 45.0,
+    "Pintura": 35.0,
+    "Alisamento": 40.0,
+    "Gel": 10.0,
+    "Pomada": 15.0,
+}
 
 def obter_valor_servico(servico):
     for chave in valores_servicos.keys():
         if chave.lower() == servico.lower():
-            return float(valores_servicos[chave])
+            return valores_servicos[chave]
     return 0.0
+
+def _preencher_fiado_vazio(linha: dict):
+    for c in COLS_FIADO:
+        linha.setdefault(c, "")
+    return linha
 
 def ja_existe_atendimento(cliente, data, servico, combo=""):
     df, _ = carregar_base()
@@ -115,307 +269,210 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
     ]
     return not existe.empty
 
-def _preencher_fiado_vazio(linha: dict):
-    for c in COLS_FIADO:
-        linha.setdefault(c, "")
-    return linha
-
-# ====== INSTAGRAM ======
-def _baixar_logo(url: str) -> Image.Image:
-    try:
-        r = requests.get(url, timeout=6)
-        r.raise_for_status()
-        return Image.open(BytesIO(r.content)).convert("RGBA")
-    except Exception:
-        # fallback: logo vazio
-        img = Image.new("RGBA", (1,1), (0,0,0,0))
-        return img
-
-def gerar_card_instagram(cliente, data_br, servicos, funcionario, valor_total):
-    # Canvas
-    W, H = 1080, 1350  # retrato para feed (1:1.25) / também serve para story (recorta)
-    bg = Image.new("RGB", (W, H), (15, 15, 15))
-    draw = ImageDraw.Draw(bg)
-
-    # Logo
-    logo = _baixar_logo(LOGO_PADRAO)
-    if logo.width > 0:
-        # encaixa no topo
-        target_w = 180
-        ratio = target_w / max(1, logo.width)
-        logo = logo.resize((int(logo.width*ratio), int(logo.height*ratio)))
-        bg.paste(logo, (60, 60), logo)
-
-    # fontes
-    try:
-        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 72)
-        font_sub = ImageFont.truetype("DejaVuSans.ttf", 42)
-        font_small = ImageFont.truetype("DejaVuSans.ttf", 32)
-    except Exception:
-        font_title = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-
-    # Títulos
-    y = 60 + (logo.height if logo.width > 0 else 0) + 50
-    draw.text((60, y), "Novo atendimento 💈", fill=(255,255,255), font=font_title)
-    y += 90
-    draw.text((60, y), f"Cliente: {cliente}", fill=(220,220,220), font=font_sub)
-    y += 60
-    draw.text((60, y), f"Data: {data_br}", fill=(220,220,220), font=font_sub)
-    y += 60
-    draw.text((60, y), f"Atendido por: {funcionario}", fill=(220,220,220), font=font_sub)
-    y += 80
-
-    # Lista de serviços (quebra em linhas)
-    draw.text((60, y), "Serviços:", fill=(255,255,255), font=font_sub)
-    y += 58
-    wrap_width = 28
-    for s in servicos:
-        for line in textwrap.wrap(f"• {s}", width=wrap_width):
-            draw.text((90, y), line, fill=(200,200,200), font=font_small)
-            y += 44
-    y += 20
-
-    # Valor total (opcional)
-    if valor_total is not None:
-        draw.text((60, y), f"Total: R$ {valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X","."), fill=(255,255,255), font=font_sub)
-
-    # rodapé
-    footer = "Siga @seu_salao • Agende seu horário ✂️"
-    draw.text((60, H-80), footer, fill=(160,160,160), font=font_small)
-
-    # buffer
-    buf = BytesIO()
-    bg.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf
-
-def tentar_postar_instagram(png_bytes: BytesIO, legenda: str):
-    """
-    Posta via Instagram Graph API (somente conta Business).
-    Requer secrets:
-      - INSTAGRAM_IG_USER_ID
-      - INSTAGRAM_TOKEN (long-lived)
-    """
-    ig_user_id = st.secrets.get("INSTAGRAM_IG_USER_ID")
-    token = st.secrets.get("INSTAGRAM_TOKEN")
-    if not ig_user_id or not token:
-        return False, "Credenciais do Instagram não configuradas (usando download manual)."
-
-    # 1) criar container (upload da imagem por URL é mais simples; aqui vamos subir como multipart para um host temporário)
-    # Como simplificação, vamos converter para base64 + usar upload anônimo do imgbb se você fornecer IMG_BB_KEY em secrets.
-    imgbb_key = st.secrets.get("IMG_BB_KEY")
-    if not imgbb_key:
-        return False, "IMG_BB_KEY ausente nos secrets (sem URL pública da imagem). Gerado card para download."
-
-    try:
-        # sobe imagem para imgbb
-        b64 = st.base64.b64encode(png_bytes.getvalue()).decode("utf-8")
-    except Exception:
-        import base64
-        b64 = base64.b64encode(png_bytes.getvalue()).decode("utf-8")
-
-    try:
-        r_up = requests.post(
-            "https://api.imgbb.com/1/upload",
-            data={"key": imgbb_key, "image": b64},
-            timeout=15
-        )
-        r_up.raise_for_status()
-        image_url = r_up.json()["data"]["url"]
-    except Exception as e:
-        return False, f"Falha ao hospedar imagem (imgbb): {e}"
-
-    try:
-        # 1) create container
-        create = requests.post(
-            f"https://graph.facebook.com/v20.0/{ig_user_id}/media",
-            data={
-                "image_url": image_url,
-                "caption": legenda,
-                "access_token": token
-            },
-            timeout=15
-        )
-        create.raise_for_status()
-        container_id = create.json()["id"]
-
-        # 2) publish
-        publish = requests.post(
-            f"https://graph.facebook.com/v20.0/{ig_user_id}/media_publish",
-            data={"creation_id": container_id, "access_token": token},
-            timeout=15
-        )
-        publish.raise_for_status()
-        return True, "Post publicado no Instagram com sucesso."
-    except Exception as e:
-        return False, f"Falha ao publicar no Instagram: {e}"
-
-# ====== UI ======
+# =========================================================
+# UI
+# =========================================================
+st.set_page_config(layout="wide")
 st.title("📅 Adicionar Atendimento")
 
 df_existente, _ = carregar_base()
-# Preparar listas
-df_existente["Data"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
-df_2025 = df_existente[df_existente["Data"].dt.year == 2025]
+
+# parse para listas sugestivas
+df_existente["_dt"] = pd.to_datetime(df_existente["Data"], format="%d/%m/%Y", errors="coerce")
+df_2025 = df_existente[df_existente["_dt"].dt.year == 2025]
 
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
-servicos_existentes = sorted(df_2025["Serviço"].astype(str).str.strip().unique())
-contas_existentes = sorted(df_2025["Conta"].dropna().astype(str).unique())
-combos_existentes = sorted(df_2025["Combo"].dropna().astype(str).unique())
+servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
+contas_existentes = sorted(df_2025["Conta"].dropna().unique())
+combos_existentes = sorted(df_2025["Combo"].dropna().unique())
 
-# === SELEÇÃO E AUTOPREENCHIMENTO ===
+# ------------ Toggle modo --------------
+modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
+
+# campos comuns
 col1, col2 = st.columns(2)
-
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-    cliente = st.selectbox("Nome do Cliente", clientes_existentes)
-    novo_nome = st.text_input("Ou digite um novo nome de cliente")
-    cliente = novo_nome if novo_nome else cliente
+    conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys(contas_existentes + ["Carteira", "Nubank"])))
+    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + combos_existentes)
+with col2:
+    funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"])
+    tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
+    fase = "Dono + funcionário"
+    periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"])
 
+if not modo_lote:
+    # ----------- MODO UM POR VEZ -----------
+    colA, colB = st.columns(2)
+    with colA:
+        cliente = st.selectbox("Nome do Cliente", clientes_existentes)
+    with colB:
+        novo_nome = st.text_input("Ou digite um novo nome de cliente")
+        cliente = novo_nome if novo_nome else cliente
+
+    # sugestão últimos
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
-    conta_sugerida = (ultimo["Conta"] if ultimo is not None else "") or ""
-    funcionario_sugerido = (ultimo["Funcionário"] if ultimo is not None else "JPaulo") or "JPaulo"
-    combo_sugerido = (ultimo["Combo"] if (ultimo is not None and ultimo["Combo"]) else "") or ""
+    if ultimo is not None:
+        conta = st.selectbox("Forma de Pagamento (última primeiro)",
+                             list(dict.fromkeys([ultimo["Conta"]] + [conta] + contas_existentes)), index=0)
+        combo = st.selectbox("Combo (último primeiro)",
+                             [""] + list(dict.fromkeys([ultimo["Combo"]] + [combo] + combos_existentes)))
 
-    conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys([conta_sugerida] + contas_existentes + ["Carteira", "Nubank"])))
-    combo = st.selectbox("Combo (opcional - use 'corte+barba')", [""] + list(dict.fromkeys([combo_sugerido] + combos_existentes)))
+    # controles
+    if "combo_salvo" not in st.session_state:
+        st.session_state.combo_salvo = False
+    if "simples_salvo" not in st.session_state:
+        st.session_state.simples_salvo = False
+    if st.button("🧹 Limpar formulário"):
+        st.session_state.combo_salvo = False
+        st.session_state.simples_salvo = False
+        st.rerun()
 
-with col2:
-    funcionario = st.selectbox(
-        "Funcionário", ["JPaulo", "Vinicius"],
-        index=["JPaulo", "Vinicius"].index(funcionario_sugerido) if funcionario_sugerido in ["JPaulo", "Vinicius"] else 0
-    )
-    tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
+    # salvar
+    if combo:
+        st.subheader("💰 Edite os valores do combo antes de salvar:")
+        valores_customizados = {}
+        for servico in combo.split("+"):
+            servico_formatado = servico.strip()
+            valor_padrao = obter_valor_servico(servico_formatado)
+            valor = st.number_input(
+                f"{servico_formatado} (padrão: R$ {valor_padrao})",
+                value=valor_padrao, step=1.0, key=f"valor_{servico_formatado}"
+            )
+            valores_customizados[servico_formatado] = valor
 
-fase = "Dono + funcionário"
-periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"])
-
-# === CONTROLE DE ESTADO ===
-if "combo_salvo" not in st.session_state:
-    st.session_state.combo_salvo = False
-if "simples_salvo" not in st.session_state:
-    st.session_state.simples_salvo = False
-
-if st.button("🧹 Limpar formulário"):
-    st.session_state.combo_salvo = False
-    st.session_state.simples_salvo = False
-    st.rerun()
-
-# ===== SALVAMENTO =====
-def salvar_linhas(linhas: list):
-    df, _ = carregar_base()
-    novas = []
-    for lin in linhas:
-        novas.append(_preencher_fiado_vazio(lin))
-    df_final = pd.concat([df, pd.DataFrame(novas)], ignore_index=True)
-    salvar_base(df_final)
-
-def salvar_combo(combo_str, valores_customizados):
-    servicos = [s.strip() for s in combo_str.split("+") if s.strip()]
-    linhas = []
-    for servico_formatado in servicos:
-        valor = float(valores_customizados.get(servico_formatado, obter_valor_servico(servico_formatado)))
-        linhas.append({
-            "Data": data,
-            "Serviço": servico_formatado,
-            "Valor": valor,
-            "Conta": conta,
-            "Cliente": cliente,
-            "Combo": combo_str,
-            "Funcionário": funcionario,
-            "Fase": fase,
-            "Tipo": tipo,
-            "Período": periodo_opcao,
-        })
-    salvar_linhas(linhas)
-    return servicos, sum(float(x["Valor"]) for x in linhas)
-
-def salvar_multiplos_servicos(servicos_escolhidos, valores_por_servico):
-    linhas = []
-    for s in servicos_escolhidos:
-        valor = float(valores_por_servico.get(s, obter_valor_servico(s)))
-        linhas.append({
-            "Data": data, "Serviço": s, "Valor": valor, "Conta": conta, "Cliente": cliente,
-            "Combo": "", "Funcionário": funcionario, "Fase": fase, "Tipo": tipo, "Período": periodo_opcao
-        })
-    salvar_linhas(linhas)
-    return servicos_escolhidos, sum(float(x["Valor"]) for x in linhas)
-
-# ===== FORMULÁRIO =====
-if combo:
-    st.subheader("💰 Edite os valores do combo antes de salvar:")
-    valores_customizados = {}
-    for servico in [s.strip() for s in combo.split("+") if s.strip()]:
-        valor_padrao = obter_valor_servico(servico)
-        valor = st.number_input(
-            f"{servico} (padrão: R$ {valor_padrao})",
-            value=float(valor_padrao), step=1.0, key=f"valor_combo_{servico}"
-        )
-        valores_customizados[servico] = valor
-
-    if not st.session_state.combo_salvo:
-        if st.button("✅ Confirmar e Salvar Combo"):
-            duplicado = any(ja_existe_atendimento(cliente, data, s.strip(), combo) for s in combo.split("+"))
-            if duplicado:
-                st.warning("⚠️ Combo já registrado para este cliente e data.")
-            else:
-                servicos_salvos, total = salvar_combo(combo, valores_customizados)
-                st.session_state.combo_salvo = True
-                st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                # Instagram se for Vinicius
-                if funcionario == "Vinicius":
-                    legenda = f"Novo atendimento de {cliente} em {data} • Serviços: {', '.join(servicos_salvos)}"
-                    buf_png = gerar_card_instagram(cliente, data, servicos_salvos, funcionario, total)
-                    st.image(buf_png, caption="Prévia do card para Instagram", use_container_width=True)
-                    ok, msg = tentar_postar_instagram(buf_png, legenda)
-                    st.info(msg)
-                    st.download_button("⬇️ Baixar card (PNG)", data=buf_png, file_name=f"card_{cliente}_{data}.png", mime="image/png")
-    else:
-        if st.button("➕ Novo Atendimento"):
-            st.session_state.combo_salvo = False
-            st.rerun()
-
-else:
-    st.subheader("✂️ Selecione os serviços e valores (vários de uma vez):")
-    # Multiseleção de serviços
-    escolhas = st.multiselect("Serviços", options=sorted(valores_servicos.keys()))
-    valores_por_servico = {}
-    for s in escolhas:
-        valor_padrao = obter_valor_servico(s)
-        valores_por_servico[s] = st.number_input(
-            f"{s} (padrão: R$ {valor_padrao})",
-            value=float(valor_padrao), step=1.0, key=f"valor_multi_{s}"
-        )
-
-    if not st.session_state.simples_salvo:
-        if st.button("📁 Salvar Atendimento(s)"):
-            if not escolhas:
-                st.warning("Selecione pelo menos um serviço.")
-            else:
-                # duplicidade: se algum serviço já existir na mesma data/cliente
-                dups = [s for s in escolhas if ja_existe_atendimento(cliente, data, s)]
-                if dups:
-                    st.warning("⚠️ Já existe(m) para este cliente e data: " + ", ".join(dups))
-                # salva mesmo que alguns já existam? Mantive bloqueio parcial: salva só os não duplicados
-                escolhas_para_salvar = [s for s in escolhas if s not in dups]
-                if escolhas_para_salvar:
-                    servicos_salvos, total = salvar_multiplos_servicos(escolhas_para_salvar, valores_por_servico)
-                    st.session_state.simples_salvo = True
-                    st.success(f"✅ Atendimento salvo para {cliente} no dia {data}.")
-                    if funcionario == "Vinicius":
-                        legenda = f"Novo atendimento de {cliente} em {data} • Serviços: {', '.join(servicos_salvos)}"
-                        buf_png = gerar_card_instagram(cliente, data, servicos_salvos, funcionario, total)
-                        st.image(buf_png, caption="Prévia do card para Instagram", use_container_width=True)
-                        ok, msg = tentar_postar_instagram(buf_png, legenda)
-                        st.info(msg)
-                        st.download_button("⬇️ Baixar card (PNG)", data=buf_png, file_name=f"card_{cliente}_{data}.png", mime="image/png")
+        if not st.session_state.combo_salvo:
+            if st.button("✅ Confirmar e Salvar Combo"):
+                duplicado = any(ja_existe_atendimento(cliente, data, s.strip(), combo) for s in combo.split("+"))
+                if duplicado:
+                    st.warning("⚠️ Combo já registrado para este cliente e data.")
                 else:
-                    st.stop()
+                    df_all, _ = carregar_base()
+                    servicos = combo.split("+")
+                    novas = []
+                    for s in servicos:
+                        s2 = s.strip()
+                        linha = {
+                            "Data": data, "Serviço": s2,
+                            "Valor": valores_customizados.get(s2, obter_valor_servico(s2)),
+                            "Conta": conta, "Cliente": cliente, "Combo": combo,
+                            "Funcionário": funcionario, "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
+                        }
+                        novas.append(_preencher_fiado_vazio(linha))
+                    df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
+                    salvar_base(df_final)
+                    st.session_state.combo_salvo = True
+                    st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
+                    if funcionario == "Vinicius":
+                        enviar_card_vinicius(df_final, cliente)
+        else:
+            if st.button("➕ Novo Atendimento"):
+                st.session_state.combo_salvo = False
+                st.rerun()
     else:
-        if st.button("➕ Novo Atendimento"):
-            st.session_state.simples_salvo = False
-            st.rerun()
+        st.subheader("✂️ Selecione o serviço e valor:")
+        servico = st.selectbox("Serviço", servicos_existentes)
+        valor_sugerido = obter_valor_servico(servico)
+        valor = st.number_input("Valor", value=valor_sugerido, step=1.0)
+
+        if not st.session_state.simples_salvo:
+            if st.button("📁 Salvar Atendimento"):
+                if ja_existe_atendimento(cliente, data, servico):
+                    st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
+                else:
+                    df_all, _ = carregar_base()
+                    nova = {
+                        "Data": data, "Serviço": servico, "Valor": valor, "Conta": conta,
+                        "Cliente": cliente, "Combo": "", "Funcionário": funcionario,
+                        "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
+                    }
+                    df_final = pd.concat([df_all, pd.DataFrame([_preencher_fiado_vazio(nova)])], ignore_index=True)
+                    salvar_base(df_final)
+                    st.session_state.simples_salvo = True
+                    st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
+                    if funcionario == "Vinicius":
+                        enviar_card_vinicius(df_final, cliente)
+        else:
+            if st.button("➕ Novo Atendimento"):
+                st.session_state.simples_salvo = False
+                st.rerun()
+else:
+    # ----------- MODO LOTE -----------
+    st.info("Selecione vários clientes e salve todos de uma vez. O mesmo serviço/combo e dados serão aplicados.")
+    clientes_multi = st.multiselect("Clientes existentes", clientes_existentes)
+    novos_nomes_raw = st.text_area("Ou cole novos nomes (um por linha)", value="")
+    novos_nomes = [n.strip() for n in novos_nomes_raw.splitlines() if n.strip()]
+    lista_final = list(dict.fromkeys(clientes_multi + novos_nomes))
+    st.write(f"Total selecionados: **{len(lista_final)}**")
+
+    enviar_telegram_vinic = st.checkbox("Enviar card no Telegram para atendimentos do Vinicius", value=True)
+
+    if combo:
+        st.subheader("💰 Edite os valores do combo (aplicados a todos):")
+        valores_customizados = {}
+        for servico in combo.split("+"):
+            servico_formatado = servico.strip()
+            valor_padrao = obter_valor_servico(servico_formatado)
+            valor = st.number_input(
+                f"{servico_formatado} (padrão: R$ {valor_padrao})",
+                value=valor_padrao, step=1.0, key=f"lote_{servico_formatado}"
+            )
+            valores_customizados[servico_formatado] = valor
+
+        if st.button("✅ Salvar COMBO para todos"):
+            if not lista_final:
+                st.warning("Selecione ou informe ao menos um cliente.")
+            else:
+                df_all, _ = carregar_base()
+                novas = []
+                for cli in lista_final:
+                    # não bloqueia por duplicidade em lote; avisa
+                    dup = any(ja_existe_atendimento(cli, data, s.strip(), combo) for s in combo.split("+"))
+                    if dup:
+                        st.warning(f"⚠️ Já existia combo para {cli} em {data}; pulando.")
+                        continue
+                    for s in combo.split("+"):
+                        s2 = s.strip()
+                        linha = {
+                            "Data": data, "Serviço": s2,
+                            "Valor": valores_customizados.get(s2, obter_valor_servico(s2)),
+                            "Conta": conta, "Cliente": cli, "Combo": combo,
+                            "Funcionário": funcionario, "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
+                        }
+                        novas.append(_preencher_fiado_vazio(linha))
+                if novas:
+                    df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
+                    salvar_base(df_final)
+                    st.success(f"✅ {len(novas)} linhas inseridas para {len(lista_final)} cliente(s).")
+                    if enviar_telegram_vinic and funcionario == "Vinicius":
+                        for cli in lista_final:
+                            enviar_card_vinicius(df_final, cli)
+    else:
+        servico_lote = st.selectbox("Serviço (aplicado a todos)", servicos_existentes)
+        valor_lote = st.number_input("Valor", value=obter_valor_servico(servico_lote), step=1.0)
+
+        if st.button("📁 Salvar SIMPLES para todos"):
+            if not lista_final:
+                st.warning("Selecione ou informe ao menos um cliente.")
+            else:
+                df_all, _ = carregar_base()
+                novas = []
+                for cli in lista_final:
+                    if ja_existe_atendimento(cli, data, servico_lote):
+                        st.warning(f"⚠️ Já existia atendimento p/ {cli} ({servico_lote}) em {data}; pulando.")
+                        continue
+                    nova = {
+                        "Data": data, "Serviço": servico_lote, "Valor": valor_lote, "Conta": conta,
+                        "Cliente": cli, "Combo": "", "Funcionário": funcionario,
+                        "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
+                    }
+                    novas.append(_preencher_fiado_vazio(nova))
+                if novas:
+                    df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
+                    salvar_base(df_final)
+                    st.success(f"✅ {len(novas)} linhas inseridas para {len(lista_final)} cliente(s).")
+                    if enviar_telegram_vinic and funcionario == "Vinicius":
+                        for cli in lista_final:
+                            enviar_card_vinicius(df_final, cli)
