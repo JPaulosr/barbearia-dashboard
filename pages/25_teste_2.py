@@ -242,7 +242,7 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     else:
         dias_str = "-"
 
-    # média de intervalo entre visitas (já correta: diffs entre datas únicas)
+    # média de intervalo entre visitas (diferenças entre datas únicas)
     if len(unique_days) >= 2:
         ts = [pd.to_datetime(x) for x in unique_days]
         diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
@@ -297,7 +297,7 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
 # =========================
 VALORES = {
     "Corte": 25.0, "Pezinho": 7.0, "Barba": 15.0, "Sobrancelha": 7.0,
-    "Luzes": 45.0, "Pintura": 35.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0,
+    "Luzes": 45.0, "Tintura": 20.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0,
 }
 def obter_valor_servico(servico):
     for k, v in VALORES.items():
@@ -364,6 +364,14 @@ servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
 contas_existentes = sorted([c for c in df_2025["Conta"].dropna().astype(str).str.strip().unique() if c])
 combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str.strip().unique() if c])
 
+# 🔤 Mapa canônico de serviços da base e função de normalização (capitalize quando não existir)
+CANON_SERVICO = {s.strip().casefold(): s.strip() for s in servicos_existentes}
+def canon_servico(nome: str) -> str:
+    n = (nome or "").strip()
+    if not n:
+        return n
+    return CANON_SERVICO.get(n.casefold(), n[:1].upper() + n[1:].lower())
+
 # =========================
 # FORM – Globais
 # =========================
@@ -410,20 +418,21 @@ if not modo_lote:
         st.subheader("💰 Edite os valores do combo antes de salvar:")
         valores_customizados = {}
         for s in combo.split("+"):
-            s2 = s.strip()
+            s2_raw = s.strip()
+            s2 = canon_servico(s2_raw)  # ✅ nome canônico
             valores_customizados[s2] = st.number_input(
                 f"{s2} (padrão: R$ {obter_valor_servico(s2)})",
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
         if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
-            duplicado = any(ja_existe_atendimento(cliente, data, s.strip(), combo) for s in combo.split("+"))
+            duplicado = any(ja_existe_atendimento(cliente, data, canon_servico(s.strip()), combo) for s in combo.split("+"))
             if duplicado:
                 st.warning("⚠️ Combo já registrado para este cliente e data.")
             else:
                 df_all, _ = carregar_base()
                 novas = []
                 for s in combo.split("+"):
-                    s2 = s.strip()
+                    s2 = canon_servico(s.strip())  # ✅ salva canônico
                     linha = _preencher_fiado_vazio({
                         "Data": data, "Serviço": s2, "Valor": valores_customizados.get(s2, obter_valor_servico(s2)),
                         "Conta": conta, "Cliente": cliente, "Combo": combo,
@@ -434,10 +443,10 @@ if not modo_lote:
                 salvar_base(df_final)
                 st.session_state.combo_salvo = True
                 st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
-                # card: passamos info explícita para já mostrar serviços do combo e somatório
+                # card com serviços já no padrão da base
                 enviar_card(
                     df_final, cliente, funcionario, data,
-                    servico=combo.replace("+", " + "),
+                    servico=" + ".join(canon_servico(x.strip()) for x in combo.split("+")),
                     valor=sum(valores_customizados.values()),
                     combo=combo
                 )
@@ -495,7 +504,7 @@ else:
                 combo_cli = st.session_state.get(f"combo_{cli}", "")
                 if combo_cli:
                     for s in combo_cli.split("+"):
-                        s2 = s.strip()
+                        s2 = canon_servico(s.strip())  # ✅ rótulo canônico
                         st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
                                         value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
             else:
@@ -523,10 +532,10 @@ else:
                     combo_cli = st.session_state.get(f"combo_{cli}", "")
                     if not combo_cli:
                         st.warning(f"⚠️ {cli}: combo não definido. Pulando."); continue
-                    if any(ja_existe_atendimento(cli, data, s.strip(), combo_cli) for s in combo_cli.split("+")):
+                    if any(ja_existe_atendimento(cli, data, canon_servico(s.strip()), combo_cli) for s in combo_cli.split("+")):
                         st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando."); continue
                     for s in combo_cli.split("+"):
-                        s2 = s.strip()
+                        s2 = canon_servico(s.strip())  # ✅ grava canônico
                         val = float(st.session_state.get(f"valor_{cli}_{s2}", obter_valor_servico(s2)))
                         novas.append(_preencher_fiado_vazio({
                             "Data": data, "Serviço": s2, "Valor": val, "Conta": conta_cli,
@@ -557,5 +566,5 @@ else:
 
                 if enviar_cards:
                     for cli in sorted(clientes_salvos):
-                        # aqui basta passar data; a função resume os serviços/valor do dia
+                        # o enviar_card resume o dia com os nomes já salvos no padrão
                         enviar_card(df_final, cli, funcionario_por_cliente.get(cli, "JPaulo"), data)
