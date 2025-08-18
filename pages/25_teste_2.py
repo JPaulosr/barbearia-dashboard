@@ -207,19 +207,34 @@ def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     return label, valor_total, is_combo, servicos
 
 def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total):
-    # métricas de frequência
+    # -------- métricas de frequência (já usam datas únicas) --------
     ultima, media, _ = calcular_metricas_cliente(df_all, cliente)
-    dias = None if ultima is None else (pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None) - ultima).days
+    if ultima is not None:
+        hoje = pd.Timestamp.now(tz=pytz.timezone(TZ)).normalize().tz_localize(None)
+        diff_days = (hoje - ultima).days
+        if diff_days < 0:
+            dias_str = f"em {abs(diff_days)} dias"       # atendimento futuro
+        elif diff_days == 0:
+            dias_str = "hoje"
+        else:
+            dias_str = f"{diff_days} dias"
+    else:
+        dias_str = "-"
 
-    # histórico
+    # -------- histórico por DATA (não por linha) --------
     d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
     d_hist["_dt"] = pd.to_datetime(d_hist["Data"], format="%d/%m/%Y", errors="coerce")
     d_hist = d_hist.dropna(subset=["_dt"]).sort_values("_dt")
-    total_atend = len(d_hist)
+
+    # total por dia único
+    unique_days = sorted(set(d_hist["_dt"].dt.date.tolist()))
+    total_atend = len(unique_days)
+
+    # último atendente considerando o registro mais recente
     ultimo_func = d_hist.iloc[-1]["Funcionário"] if total_atend > 0 else "-"
 
+    # -------- formatações --------
     media_str = "-" if media is None else f"{media:.1f} dias".replace(".", ",")
-    dias_str = "-" if dias is None else f"{dias} dias"
     valor_str = f"R$ {valor_total:.2f}".replace(".", ",")
 
     return (
