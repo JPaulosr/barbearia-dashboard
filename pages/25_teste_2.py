@@ -60,13 +60,15 @@ VALOR_TABELA = {
 # =============================
 # TELEGRAM (usa secrets ou FALLBACKS)
 # =============================
-# >>> FALLBACKS (ajuste aqui se quiser embutir no código)
+import requests
+
+# FALLBACKS (usados se não houver valores em st.secrets)
 TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 CHAT_ID_JP_FALLBACK     = "493747253"
-TELEGRAM_CHAT_ID_VINICIUS = "-1002953102982"
+CHAT_ID_VINI_FALLBACK   = "-1002953102982"   # id real do canal: Salão JP 🎖 Premiação 🎖
 
-# Usa secret se existir; senão usa fallback
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", TELEGRAM_TOKEN_FALLBACK)
+# Usa secrets se existirem; senão, usa fallbacks acima
+TELEGRAM_TOKEN            = st.secrets.get("TELEGRAM_TOKEN", TELEGRAM_TOKEN_FALLBACK)
 TELEGRAM_CHAT_ID_VINICIUS = st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS", CHAT_ID_VINI_FALLBACK)
 TELEGRAM_CHAT_ID_JPAULO   = st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", CHAT_ID_JP_FALLBACK)
 
@@ -79,7 +81,7 @@ def _tg_send_text(token: str, chat_id: str, text: str, parse_mode: str = "HTML")
         resp = requests.post(
             url,
             json={
-                "chat_id": chat_id,
+                "chat_id": chat_id,  # pode ser -100... ou @username
                 "text": text,
                 "parse_mode": parse_mode,
                 "disable_web_page_preview": True,
@@ -92,8 +94,7 @@ def _tg_send_text(token: str, chat_id: str, text: str, parse_mode: str = "HTML")
         return (False, None, str(e))
 
 def tg_send_long(token: str, chat_id: str, text: str, parse_mode: str = "HTML", chunk: int = 3800):
-    """Divide e envia em partes se passar do limite (aprox. 4096 chars).
-       Retorna (ok_geral: bool, detalhes: list[(ok,status,text)])"""
+    """Divide e envia em partes se passar de ~4096 chars."""
     detalhes = []
     ok_all = True
     for i in range(0, len(text), chunk):
@@ -102,7 +103,7 @@ def tg_send_long(token: str, chat_id: str, text: str, parse_mode: str = "HTML", 
         detalhes.append((ok, status, body))
         ok_all = ok_all and ok
     return ok_all, detalhes
-
+    
 # =============================
 # CONEXÃO SHEETS
 # =============================
