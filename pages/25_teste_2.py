@@ -7,7 +7,7 @@
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
 # - Arredondamento opcional para preço cheio por serviço (tabela) com tolerância.
 # - Bloco extra: FIADOS A RECEBER (histórico — ainda NÃO pagos), com comissão futura.
-# - NOVO: Botão para enviar RESUMO ao Telegram (canal do Vinícius).
+# - Botões de: Ping Telegram e Enviar Resumo ao Telegram (Vinícius).
 
 import streamlit as st
 import pandas as pd
@@ -19,7 +19,7 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import pytz
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 # =============================
 # CONFIG BÁSICA
@@ -58,36 +58,85 @@ VALOR_TABELA = {
 }
 
 # =============================
-# TELEGRAM (usa secrets se existirem)
+# TELEGRAM (usa secrets ou FALLBACKS)
 # =============================
-TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID_VINICIUS = st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS", "-1001234567890")
-TELEGRAM_CHAT_ID_JPAULO = st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", "493747253")
+# >>> FALLBACKS (ajuste aqui se quiser embutir no código)
+TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
+CHAT_ID_JP_FALLBACK     = "493747253"
+CHAT_ID_VINI_FALLBACK   = "-1001234567890"   # confirme o ID real do canal do Vinícius
 
-def _tg_send_text(token: str, chat_id: str, text: str, parse_mode: str = "HTML") -> bool:
+# Usa secret se existir; senão usa fallback
+TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", TELEGRAM_TOKEN_FALLBACK)
+TELEGRAM_CHAT_ID_VINICIUS = st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS", CHAT_ID_VINI_FALLBACK)
+TELEGRAM_CHAT_ID_JPAULO   = st.secrets.get("TELEGRAM_CHAT_ID_JPAULO", CHAT_ID_JP_FALLBACK)
+
+def _tg_send_text(token: str, chat_id: str, text: str, parse_mode: str = "HTML"):
+    """Retorna (ok: bool, status_code: int|None, resp_text: str|None)"""
     if not token or not chat_id:
-        return False
+        return (False, None, "Missing token or chat_id")
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        resp = requests.post(url, json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": True
-        }, timeout=20)
-        return resp.status_code == 200
-    except Exception:
-        return False
+        resp = requests.post(
+            url,
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": True,
+            },
+            timeout=20,
+        )
+        ok = (resp.status_code == 200)
+        return (ok, resp.status_code, resp.text)
+    except Exception as e:
+        return (False, None, str(e))
 
-def tg_send_long(token: str, chat_id: str, text: str, parse_mode: str = "HTML", chunk: int = 3800) -> bool:
-    """Divide e envia em partes se passar do limite (aprox. 4096 chars)."""
+def tg_send_long(token: str, chat_id: str, text: str, parse_mode: str = "HTML", chunk: int = 3800):
+    """Divide e envia em partes se passar do limite (aprox. 4096 chars).
+       Retorna (ok_geral: bool, detalhes: list[(ok,status,text)])"""
+    detalhes = []
     ok_all = True
     for i in range(0, len(text), chunk):
         part = text[i:i+chunk]
-        ok = _tg_send_text(token, chat_id, part, parse_mode=parse_mode)
+        ok, status, body = _tg_send_text(token, chat_id, part, parse_mode=parse_mode)
+        detalhes.append((ok, status, body))
         ok_all = ok_all and ok
-    return ok_all
+    return ok_all, detalhes
 
+# =============================
+# CONEXÃO SHEETS
+# =============================
+@st.cache_resource
+def _conn():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    cred = Credentials.from_service_account_info(info, scopes=escopo)
+    cli = gspread.authorize(cred)
+    return cli.open_by_key(SHEET_ID)
+
+def _ws(title: str):
+    sh = _conn()
+    try:
+        return sh.worksheet(title)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=2000, cols=50)
+        return ws
+
+def _read_df(title: str) -> pd.DataFrame:
+    ws = _ws(title)
+    df = get_as_dataframe(ws).fillna("")
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.dropna(how="all").replace({pd.NA: ""})
+    return df
+
+def _write_df(title: str, df: pd.DataFrame):
+    ws = _ws(title)
+    ws.clear()
+    set_with_dataframe(ws, df, include_index=False, include_column_header=True)
+
+# =============================
+# HELPERS
+# =============================
 def br_now():
     return datetime.now(pytz.timezone(TZ))
 
@@ -157,37 +206,6 @@ def format_brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # =============================
-# CONEXÃO SHEETS
-# =============================
-@st.cache_resource
-def _conn():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    cred = Credentials.from_service_account_info(info, scopes=escopo)
-    cli = gspread.authorize(cred)
-    return cli.open_by_key(SHEET_ID)
-
-def _ws(title: str):
-    sh = _conn()
-    try:
-        return sh.worksheet(title)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=2000, cols=50)
-        return ws
-
-def _read_df(title: str) -> pd.DataFrame:
-    ws = _ws(title)
-    df = get_as_dataframe(ws).fillna("")
-    df.columns = [str(c).strip() for c in df.columns]
-    df = df.dropna(how="all").replace({pd.NA: ""})
-    return df
-
-def _write_df(title: str, df: pd.DataFrame):
-    ws = _ws(title)
-    ws.clear()
-    set_with_dataframe(ws, df, include_index=False, include_column_header=True)
-
-# =============================
 # UI
 # =============================
 st.set_page_config(layout="wide")
@@ -247,6 +265,15 @@ reprocessar_terca = st.checkbox(
 # 🔁 Cópia para JP (opcional)
 enviar_copia_jp = st.checkbox("Enviar cópia do resumo para o JP (privado)", value=False)
 
+# 🔔 Ping rápido do Telegram
+if st.button("🔔 Ping Telegram (teste rápido)"):
+    ok, status, body = _tg_send_text(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, "Ping de teste ✅")
+    if ok:
+        st.success("Ping enviado com sucesso para o canal do Vinícius.")
+    else:
+        st.error("Ping falhou.")
+        st.write({"status": status, "resp": body})
+
 # Conjunto Vinicius
 dfv = base[s_lower(base["Funcionário"]) == "vinicius"].copy()
 if not incluir_produtos:
@@ -271,7 +298,7 @@ df_fiados = dfv[(s_lower(dfv["StatusFiado"]) != "") | (s_lower(dfv["IDLancFiado"
 df_fiados["_dt_pagto"] = df_fiados["DataPagamento"].apply(parse_br_date)
 fiados_liberados = df_fiados[(df_fiados["_dt_pagto"].notna()) & (df_fiados["_dt_pagto"] <= terca_pagto)].copy()
 
-# 3) NOVO BLOCO — Fiados pendentes (histórico, ainda não pagos)
+# 3) Fiados pendentes (histórico, ainda não pagos)
 fiados_pendentes = df_fiados[(df_fiados["_dt_pagto"].isna()) | (df_fiados["_dt_pagto"] > terca_pagto)].copy()
 
 # Cache de comissões já pagas (por RefID)
@@ -353,7 +380,7 @@ fiados_liberados_grid, total_fiados = preparar_grid(
     fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados"
 )
 
-# ------- NOVO: TABELA (somente leitura) — FIADOS A RECEBER -------
+# ------- TABELA (somente leitura) — FIADOS A RECEBER -------
 st.subheader("📌 Fiados a receber (histórico — ainda NÃO pagos)")
 if fiados_pendentes.empty:
     st.info("Nenhum fiado pendente no momento.")
@@ -398,8 +425,7 @@ def _fmt_linhas_para_card(df: pd.DataFrame, pct_col: str = "% Comissão") -> Lis
     if "Valor (para comissão)" not in show.columns and "Valor_base_comissao" in show.columns:
         show["Valor (para comissão)"] = show["Valor_base_comissao"]
     cols_ok = {"Data","Cliente","Serviço","Valor (para comissão)","% Comissão","Comissão (R$)"}
-    faltam = cols_ok - set(show.columns)
-    if faltam:
+    if not cols_ok.issubset(set(show.columns)):
         return linhas
     for _, r in show.iterrows():
         data = str(r["Data"]).strip()
@@ -456,14 +482,22 @@ with col_tg1:
             fiados_pendentes if 'Valor_base_comissao' in fiados_pendentes.columns else montar_valor_base(fiados_pendentes),
             total_fiados_pend
         )
-        ok_v = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg, parse_mode="HTML")
-        ok_j = True
+        ok_v, det_v = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg, parse_mode="HTML")
+        ok_j, det_j = (True, [])
         if enviar_copia_jp:
-            ok_j = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg, parse_mode="HTML")
-        if ok_v and ok_j:
+            ok_j, det_j = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg, parse_mode="HTML")
+
+        if ok_v and (ok_j if enviar_copia_jp else True):
             st.success("Resumo enviado para o canal do Vinícius" + (" e cópia para JP." if enviar_copia_jp else "."))
         else:
-            st.error("Falha ao enviar para o Telegram. Verifique o TOKEN/CHAT_ID nos Secrets ou o fallback no código.")
+            st.error("Falha ao enviar para o Telegram. Veja detalhes abaixo.")
+            with st.expander("Detalhes do envio (Vinícius)"):
+                for ok, status, body in det_v:
+                    st.write({"ok": ok, "status": status, "resp": body})
+            if enviar_copia_jp:
+                with st.expander("Detalhes do envio (JP)"):
+                    for ok, status, body in det_j:
+                        st.write({"ok": ok, "status": status, "resp": body})
 
 with col_tg2:
     st.caption("Dica: adicione TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS e (opcional) TELEGRAM_CHAT_ID_JPAULO em `Secrets`.")
@@ -491,6 +525,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                 })
 
         cache_df = _read_df(ABA_COMISSOES_CACHE)
+        cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
         cache_df = garantir_colunas(cache_df, cache_cols)
 
         if reprocessar_terca:
