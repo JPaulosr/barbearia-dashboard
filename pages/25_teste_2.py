@@ -63,7 +63,7 @@ VALOR_TABELA = {
 # >>> FALLBACKS (ajuste aqui se quiser embutir no código)
 TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 CHAT_ID_JP_FALLBACK     = "493747253"
-CHAT_ID_VINI_FALLBACK   = "-1001234567890"   # confirme o ID real do canal do Vinícius
+TELEGRAM_CHAT_ID_VINICIUS = "-1002953102982"
 
 # Usa secret se existir; senão usa fallback
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_TOKEN", TELEGRAM_TOKEN_FALLBACK)
