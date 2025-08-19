@@ -837,7 +837,7 @@ st.checkbox(
 
 # Não escreva no session_state; derive o uso efetivo:
 use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
-            
+    )
             # garante False em memória se não-cartão
             if force_off_cli:
                 st.session_state[f"flag_card_{cli}"] = False
