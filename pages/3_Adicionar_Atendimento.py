@@ -825,14 +825,19 @@ else:
                                    ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])),
                 key=f"conta_{cli}"
             )
-            force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
-            st.checkbox(
-                f"{cli} - Tratar como cartão (com taxa)?",
-                value=(False if force_off_cli else default_card_flag(st.session_state.get(f"conta_{cli}", ""))),
-                key=f"flag_card_{cli}",
-                disabled=force_off_cli,
-                help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None)
-            )
+           force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
+
+st.checkbox(
+    f"{cli} - Tratar como cartão (com taxa)?",
+    value=(False if force_off_cli else default_card_flag(st.session_state.get(f"conta_{cli}", ""))),
+    key=f"flag_card_{cli}",
+    disabled=force_off_cli,
+    help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None),
+)
+
+# Não escreva no session_state; derive o uso efetivo:
+use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
+            
             # garante False em memória se não-cartão
             if force_off_cli:
                 st.session_state[f"flag_card_{cli}"] = False
