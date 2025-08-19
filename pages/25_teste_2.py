@@ -10,8 +10,6 @@ import pytz
 import unicodedata
 import requests
 from collections import Counter
-import math
-import time
 
 # =========================
 # CONFIG
@@ -23,6 +21,7 @@ FOTO_COL_CANDIDATES = ["link_foto", "foto", "imagem", "url_foto", "foto_link", "
 
 TZ = "America/Sao_Paulo"
 REL_MULT = 1.5
+DATA_FMT = "%d/%m/%Y"
 
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
@@ -30,14 +29,12 @@ COLS_OFICIAIS = [
 ]
 COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]
 
-# 🔸 Colunas extras p/ pagamentos de cartão (iguais às do módulo de quitação)
+# Extras para cartão (iguais ao módulo de quitação)
 COLS_PAG_EXTRAS = [
     "ValorBrutoRecebido", "ValorLiquidoRecebido",
     "TaxaCartaoValor", "TaxaCartaoPct",
     "FormaPagDetalhe", "PagamentoID"
 ]
-
-DATA_FMT = "%d/%m/%Y"
 
 # =========================
 # UTILS
@@ -74,12 +71,11 @@ def contains_cartao(s: str) -> bool:
         "visa", "master", "elo", "hiper", "amex",
         "nubank", "nubank cnpj"
     }
-    x = unicodedata.normalize("NFKD", (s or "")).encode("ascii","ignore").decode("ascii")
+    x = unicodedata.normalize("NFKD", (s or "")).encode("ascii", "ignore").decode("ascii")
     x = x.lower().replace(" ", "")
     return any(k in x for k in MAQ)
 
 def gerar_pag_id(prefixo="A"):
-    # A = atendimento; compatível com P-... do outro app
     return f"{prefixo}-{datetime.now(pytz.timezone(TZ)).strftime('%Y%m%d%H%M%S%f')[:-3]}"
 
 # =========================
@@ -115,27 +111,29 @@ def format_extras_numeric(ws):
 
     def fmt(name, ntype, pattern):
         c = cmap.get(_norm_key(name))
-        if not c: return
+        if not c:
+            return
         a1_from = rowcol_to_a1(2, c)
-        a1_to   = rowcol_to_a1(50000, c)
+        a1_to = rowcol_to_a1(50000, c)
         try:
             ws.format(f"{a1_from}:{a1_to}", {"numberFormat": {"type": ntype, "pattern": pattern}})
         except Exception:
             pass
 
-    fmt("ValorBrutoRecebido",   "NUMBER",  "0.00")
-    fmt("ValorLiquidoRecebido", "NUMBER",  "0.00")
-    fmt("TaxaCartaoValor",      "NUMBER",  "0.00")
-    fmt("TaxaCartaoPct",        "PERCENT", "0.00%")
+    fmt("ValorBrutoRecebido", "NUMBER", "0.00")
+    fmt("ValorLiquidoRecebido", "NUMBER", "0.00")
+    fmt("TaxaCartaoValor", "NUMBER", "0.00")
+    fmt("TaxaCartaoPct", "PERCENT", "0.00%")
 
 def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(c).strip() for c in df.columns]
-    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]  # remove duplicados de cabeçalho
+    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]  # remove cabeçalhos duplicados
 
     for c in [*COLS_OFICIAIS, *COLS_FIADO, *COLS_PAG_EXTRAS]:
-        if c not in df.columns: df[c] = ""
+        if c not in df.columns:
+            df[c] = ""
 
     norm = {"manha": "Manhã", "Manha": "Manhã", "manha ": "Manhã", "tarde": "Tarde", "noite": "Noite"}
     df["Período"] = df["Período"].astype(str).str.strip().replace(norm)
@@ -148,11 +146,12 @@ def salvar_base(df_final: pd.DataFrame):
     headers_existentes = ler_cabecalho(aba) or [*COLS_OFICIAIS, *COLS_FIADO, *COLS_PAG_EXTRAS]
     colunas_alvo = list(dict.fromkeys([*headers_existentes, *COLS_OFICIAIS, *COLS_FIADO, *COLS_PAG_EXTRAS]))
     for c in colunas_alvo:
-        if c not in df_final.columns: df_final[c] = ""
+        if c not in df_final.columns:
+            df_final[c] = ""
     df_final = df_final[colunas_alvo]
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
-    # formatação das extras
+    # Formata extras
     try:
         format_extras_numeric(aba)
     except Exception:
@@ -174,7 +173,8 @@ def carregar_fotos_mapa():
         cols_lower = {c.lower(): c for c in df.columns}
         foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
         cli_col = next((cols_lower[c] for c in ["cliente", "nome", "nome_cliente"] if c in cols_lower), None)
-        if not (foto_col and cli_col): return {}
+        if not (foto_col and cli_col):
+            return {}
         tmp = df[[cli_col, foto_col]].copy()
         tmp.columns = ["Cliente", "Foto"]
         tmp["k"] = tmp["Cliente"].astype(str).map(_norm)
@@ -184,11 +184,11 @@ def carregar_fotos_mapa():
 FOTOS = carregar_fotos_mapa()
 
 # =========================
-# TELEGRAM (fallbacks e testes)
+# TELEGRAM
 # =========================
 TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
-TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"  # id real do canal
+TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"
 
 def _get_secret(name: str, default: str | None = None) -> str | None:
     try:
@@ -221,26 +221,20 @@ def tg_send(text: str, chat_id: str | None = None) -> bool:
     token = _get_token()
     chat = chat_id or _get_chat_id_jp()
     if not _check_tg_ready(token, chat):
-        st.warning("⚠️ Telegram não configurado para este destino.")
         return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         r = requests.post(url, json=payload, timeout=30)
         js = r.json()
-        if r.ok and js.get("ok"):
-            return True
-        st.warning(f"Falha ao enviar (HTTP {r.status_code}): {js}")
-        return False
-    except Exception as e:
-        st.warning(f"Falha ao enviar Telegram: {e}")
+        return bool(r.ok and js.get("ok"))
+    except Exception:
         return False
 
 def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> bool:
     token = _get_token()
     chat = chat_id or _get_chat_id_jp()
     if not _check_tg_ready(token, chat):
-        st.warning("⚠️ Telegram não configurado para este destino.")
         return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -249,10 +243,8 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
         js = r.json()
         if r.ok and js.get("ok"):
             return True
-        st.warning(f"Falha ao enviar foto (HTTP {r.status_code}): {js}. Tentando enviar como texto…")
         return tg_send(caption, chat_id=chat)
-    except Exception as e:
-        st.warning(f"Falha ao enviar foto (Telegram): {e}")
+    except Exception:
         return tg_send(caption, chat_id=chat)
 
 # =========================
@@ -320,7 +312,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     freq_dias = Counter()
     for dia, bloco in d.groupby(d["_dt"].dt.date):
         func_most = (bloco["Funcionário"].astype(str).str.strip()
-                                   .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
+                     .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
         if func_most in ["JPaulo", "Vinicius"]:
             freq_dias[func_most] += 1
     if freq_dias:
@@ -404,26 +396,26 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         extras = [sec_hist, sec_serv]
 
     caption_base = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label)
-    caption_jp   = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras)
+    caption_jp = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras)
 
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
         if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else:    tg_send(caption_jp, chat_id=chat_jp)
+        else: tg_send(caption_jp, chat_id=chat_jp)
         return
 
     if funcionario == "Vinicius":
         chat_v = _get_chat_id_vini()
         if foto: tg_send_photo(foto, caption_base, chat_id=chat_v)
-        else:    tg_send(caption_base, chat_id=chat_v)
+        else: tg_send(caption_base, chat_id=chat_v)
         chat_jp = _get_chat_id_jp()
         if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else:    tg_send(caption_jp, chat_id=chat_jp)
+        else: tg_send(caption_jp, chat_id=chat_jp)
         return
 
     destino = _chat_id_por_func(funcionario)
     if foto: tg_send_photo(foto, caption_base, chat_id=destino)
-    else:    tg_send(caption_base, chat_id=destino)
+    else: tg_send(caption_base, chat_id=destino)
 
 # =========================
 # VALORES DE SERVIÇO
@@ -434,7 +426,8 @@ VALORES = {
 }
 def obter_valor_servico(servico):
     for k, v in VALORES.items():
-        if k.lower() == servico.lower(): return v
+        if k.lower() == servico.lower():
+            return v
     return 0.0
 
 def _preencher_fiado_vazio(linha: dict):
@@ -457,16 +450,20 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
 
 def sugestoes_do_cliente(df_all, cli, conta_default, periodo_default, funcionario_default):
     d = df_all[df_all["Cliente"].astype(str).str.strip() == cli].copy()
-    if d.empty: return conta_default, periodo_default, funcionario_default
+    if d.empty:
+        return conta_default, periodo_default, funcionario_default
     d["_dt"] = pd.to_datetime(d["Data"], format=DATA_FMT, errors="coerce")
     d = d.dropna(subset=["_dt"]).sort_values("_dt")
-    if d.empty: return conta_default, periodo_default, funcionario_default
+    if d.empty:
+        return conta_default, periodo_default, funcionario_default
     ultima = d.iloc[-1]
     conta = (ultima.get("Conta") or "").strip() or conta_default
     periodo = (ultima.get("Período") or "").strip() or periodo_default
     func = (ultima.get("Funcionário") or "").strip() or funcionario_default
-    if periodo not in ["Manhã", "Tarde", "Noite"]: periodo = periodo_default
-    if func not in ["JPaulo", "Vinicius"]: func = funcionario_default
+    if periodo not in ["Manhã", "Tarde", "Noite"]:
+        periodo = periodo_default
+    if func not in ["JPaulo", "Vinicius"]:
+        func = funcionario_default
     return conta, periodo, func
 
 # =========================
@@ -496,7 +493,10 @@ modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", val
 col1, col2 = st.columns(2)
 with col1:
     data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-    conta_global = st.selectbox("Forma de Pagamento (padrão)", list(dict.fromkeys(contas_existentes + ["Carteira", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])))
+    conta_global = st.selectbox(
+        "Forma de Pagamento (padrão)",
+        list(dict.fromkeys(contas_existentes + ["Carteira", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
+    )
 with col2:
     funcionario_global = st.selectbox("Funcionário (padrão)", ["JPaulo", "Vinicius"])
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
@@ -514,18 +514,25 @@ if not modo_lote:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
 
-    sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(df_existente, cliente, conta_global, periodo_global, funcionario_global)
-    conta = st.selectbox("Forma de Pagamento", list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])))
+    sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
+        df_existente, cliente, conta_global, periodo_global, funcionario_global
+    )
+    conta = st.selectbox(
+        "Forma de Pagamento",
+        list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
+    )
     funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=(0 if sug_func == "JPaulo" else 1))
-    periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"], index=["Manhã","Tarde","Noite"].index(sug_periodo))
+    periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"],
+                                 index=["Manhã", "Tarde", "Noite"].index(sug_periodo))
 
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
     combo = ""
     if ultimo is not None:
-        combo = st.selectbox("Combo (último primeiro)", [""] + list(dict.fromkeys([ultima := ultimo["Combo"]] + combos_existentes)))
+        ult_combo = ultimo.get("Combo", "")
+        combo = st.selectbox("Combo (último primeiro)", [""] + list(dict.fromkeys([ult_combo] + combos_existentes)))
 
-    # --- Config Cartão (para simples/combos) ---
+    # --- Bloco Cartão (UI) ---
     def bloco_cartao_ui(total_bruto_padrao: float):
         with st.expander("💳 Pagamento no cartão (informe o LÍQUIDO recebido)", expanded=True):
             c1, c2 = st.columns(2)
@@ -537,13 +544,20 @@ if not modo_lote:
                 parcelas = st.number_input("Parcelas (se crédito)", min_value=1, max_value=12, value=1, step=1)
             taxa_val = max(0.0, float(total_bruto_padrao) - float(liquido or 0.0))
             taxa_pct = (taxa_val / float(total_bruto_padrao) * 100.0) if total_bruto_padrao > 0 else 0.0
-            st.caption(f"Taxa estimada: R$ {taxa_val:,.2f} ({taxa_pct:.2f}%)".replace(",", "X").replace(".", ",").replace("X", "."))
+            st.caption(
+                f"Taxa estimada: R$ {taxa_val:,.2f} ({taxa_pct:.2f}%)"
+                .replace(",", "X").replace(".", ",").replace("X", ".")
+            )
             return float(liquido or 0.0), str(bandeira), str(tipo_cartao), int(parcelas), float(taxa_val), float(taxa_pct)
 
-    if "combo_salvo" not in st.session_state: st.session_state.combo_salvo = False
-    if "simples_salvo" not in st.session_state: st.session_state.simples_salvo = False
+    if "combo_salvo" not in st.session_state:
+        st.session_state.combo_salvo = False
+    if "simples_salvo" not in st.session_state:
+        st.session_state.simples_salvo = False
     if st.button("🧹 Limpar formulário"):
-        st.session_state.combo_salvo = False; st.session_state.simples_salvo = False; st.rerun()
+        st.session_state.combo_salvo = False
+        st.session_state.simples_salvo = False
+        st.rerun()
 
     if combo:
         st.subheader("💰 Edite os valores do combo antes de salvar:")
@@ -555,10 +569,13 @@ if not modo_lote:
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
 
-        # bloco de cartão, se aplicável
-        liquido_total = None; bandeira = ""; tipo_cartao = "Crédito"; parcelas = 1
+        # UI cartão (se forma de pagamento for maquininha)
+        liquido_total = None
+        bandeira = ""
+        tipo_cartao = "Crédito"
+        parcelas = 1
         if contains_cartao(conta):
-            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(valor)
+            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(sum(valores_customizados.values()))
 
         if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
             duplicado = any(ja_existe_atendimento(cliente, data, _cap_first(s), combo) for s in combo.split("+"))
@@ -575,7 +592,6 @@ if not modo_lote:
                     s2_norm = _cap_first(s2_raw)
                     bruto_i = float(valores_customizados.get(s2_raw, obter_valor_servico(s2_norm)))
 
-                    # se for cartão, calcula LÍQUIDO proporcional e grava em Valor
                     if contains_cartao(conta) and total_bruto > 0:
                         liq_i = round(float(liquido_total or 0.0) * (bruto_i / total_bruto), 2)
                         taxa_i = round(bruto_i - liq_i, 2)
@@ -602,7 +618,7 @@ if not modo_lote:
                     })
                     novas.append(linha)
 
-                # ajuste de arredondamento da última linha para bater o total do líquido informado
+                # Ajuste de arredondamento
                 if contains_cartao(conta) and novas:
                     soma_liq = sum([float(n.get("Valor", 0) or 0) for n in novas])
                     delta = round((liquido_total or 0.0) - soma_liq, 2)
@@ -624,9 +640,9 @@ if not modo_lote:
         servico = st.selectbox("Serviço", servicos_existentes)
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
-        # bloco de cartão, se aplicável
+        # UI cartão (se aplicável)
         if contains_cartao(conta):
-            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = blococ := bloco_cartao_ui(valor)
+            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(valor)
         else:
             liquido_total, bandeira, tipo_cartao, parcelas = None, "", "Crédito", 1
 
@@ -682,13 +698,17 @@ else:
     for cli in lista_final:
         with st.container(border=True):
             st.subheader(f"⚙️ Atendimento para {cli}")
-            sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(df_existente, cli, conta_global, periodo_global, funcionario_global)
+            sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
+                df_existente, cli, conta_global, periodo_global, funcionario_global
+            )
 
             tipo_at = st.radio(f"Tipo de atendimento para {cli}", ["Simples", "Combo"], horizontal=True, key=f"tipo_{cli}")
 
-            st.selectbox(f"Forma de Pagamento de {cli}",
-                         list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])),
-                         key=f"conta_{cli}")
+            st.selectbox(
+                f"Forma de Pagamento de {cli}",
+                list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])),
+                key=f"conta_{cli}"
+            )
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
                          index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}")
             st.selectbox(f"Funcionário de {cli}", ["JPaulo", "Vinicius"],
@@ -704,7 +724,6 @@ else:
                         v = st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
                                             value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
                         total_padrao += float(v)
-                    # bloco cartão se aplicável
                     if contains_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                             c1, c2 = st.columns(2)
@@ -747,14 +766,16 @@ else:
                 if tipo_at == "Combo":
                     combo_cli = st.session_state.get(f"combo_{cli}", "")
                     if not combo_cli:
-                        st.warning(f"⚠️ {cli}: combo não definido. Pulando."); continue
+                        st.warning(f"⚠️ {cli}: combo não definido. Pulando.")
+                        continue
                     if any(ja_existe_atendimento(cli, data, _cap_first(s), combo_cli) for s in str(combo_cli).split("+")):
-                        st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando."); continue
+                        st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando.")
+                        continue
 
                     total_bruto = 0.0
                     valores_itens = []
                     for s in str(combo_cli).split("+"):
-                        s2_raw  = s.strip()
+                        s2_raw = s.strip()
                         s2_norm = _cap_first(s2_raw)
                         val = float(st.session_state.get(f"valor_{cli}_{s2_raw}", obter_valor_servico(s2_norm)))
                         valores_itens.append((s2_raw, s2_norm, val))
@@ -786,15 +807,18 @@ else:
                             "Cliente": cli, "Combo": combo_cli, "Funcionário": func_cli,
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli, **extras
                         }))
-                    clientes_salvos.add(cli); funcionario_por_cliente[cli] = func_cli
+                    clientes_salvos.add(cli)
+                    funcionario_por_cliente[cli] = func_cli
 
                 else:
                     serv_cli = st.session_state.get(f"servico_{cli}", None)
                     serv_norm = _cap_first(serv_cli) if serv_cli else ""
                     if not serv_norm:
-                        st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando."); continue
+                        st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando.")
+                        continue
                     if ja_existe_atendimento(cli, data, serv_norm):
-                        st.warning(f"⚠️ {cli}: já existia atendimento simples ({serv_norm}) em {data}. Pulando."); continue
+                        st.warning(f"⚠️ {cli}: já existia atendimento simples ({serv_norm}) em {data}. Pulando.")
+                        continue
                     bruto = float(st.session_state.get(f"valor_{cli}_simples", obter_valor_servico(serv_norm)))
 
                     if contains_cartao(conta_cli):
@@ -816,7 +840,8 @@ else:
                             "Cliente": cli, "Combo": "", "Funcionário": func_cli,
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
                         }))
-                    clientes_salvos.add(cli); funcionario_por_cliente[cli] = func_cli
+                    clientes_salvos.add(cli)
+                    funcionario_por_cliente[cli] = func_cli
 
             if not novas:
                 st.warning("Nenhuma linha válida para inserir.")
