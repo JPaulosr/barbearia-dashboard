@@ -558,7 +558,7 @@ if not modo_lote:
         # bloco de cartão, se aplicável
         liquido_total = None; bandeira = ""; tipo_cartao = "Crédito"; parcelas = 1
         if contains_cartao(conta):
-            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(sum(valores_customizados.values()))
+            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(valor)
 
         if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
             duplicado = any(ja_existe_atendimento(cliente, data, _cap_first(s), combo) for s in combo.split("+"))
