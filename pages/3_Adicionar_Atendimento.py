@@ -76,7 +76,7 @@ def contains_cartao(s: str) -> bool:
 def is_nao_cartao(conta: str) -> bool:
     """True se a forma de pagamento NÃO for cartão (ex.: PIX, Dinheiro, Transferência)."""
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower()
-    tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "transfer", "transferencia", "ted", "doc"}
+    tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "espécie", "transfer", "transferencia", "transferência", "ted", "doc"}
     return any(t in s for t in tokens)
 
 def default_card_flag(conta: str) -> bool:
@@ -825,23 +825,20 @@ else:
                                    ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])),
                 key=f"conta_{cli}"
             )
-           force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
 
-st.checkbox(
-    f"{cli} - Tratar como cartão (com taxa)?",
-    value=(False if force_off_cli else default_card_flag(st.session_state.get(f"conta_{cli}", ""))),
-    key=f"flag_card_{cli}",
-    disabled=force_off_cli,
-    help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None),
-)
+            # trava de cartão
+            force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
 
-# Não escreva no session_state; derive o uso efetivo:
-use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
-    )
-            # garante False em memória se não-cartão
-            if force_off_cli:
-                st.session_state[f"flag_card_{cli}"] = False
-            use_card_cli = bool(st.session_state.get(f"flag_card_{cli}", False))
+            st.checkbox(
+                f"{cli} - Tratar como cartão (com taxa)?",
+                value=(False if force_off_cli else default_card_flag(st.session_state.get(f"conta_{cli}", ""))),
+                key=f"flag_card_{cli}",
+                disabled=force_off_cli,
+                help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None),
+            )
+
+            # uso efetivo (sem escrever no session_state do widget)
+            use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
 
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
                          index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}")
