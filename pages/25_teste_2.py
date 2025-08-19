@@ -45,12 +45,16 @@ def conectar_sheets():
     return gspread.authorize(creds)
 
 @st.cache_data(show_spinner=False, ttl=300)
-def carregar_base(gc):
+def carregar_base():
+    """Carrega a Base de Dados sem receber objetos não-hashable como argumento."""
+    gc = conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
+
     # Higienização mínima
     df = df.dropna(how="all")
+
     # Normaliza colunas esperadas, quando possíveis
     if COL_DATA in df.columns:
         # aceita dd/mm/aaaa e datetime
@@ -68,9 +72,11 @@ def carregar_base(gc):
             except Exception:
                 return None
         df[COL_DATA] = df[COL_DATA].apply(_parse_data)
+
     # Valor numérico
     if COL_VALOR in df.columns:
         df[COL_VALOR] = pd.to_numeric(df[COL_VALOR], errors="coerce").fillna(0.0)
+
     # % comissão (se houver)
     if COL_PCT in df.columns:
         # aceita "50%" ou "0.5"
@@ -88,6 +94,7 @@ def carregar_base(gc):
             except:
                 return None
         df[COL_PCT] = df[COL_PCT].apply(_pct)
+
     return df
 
 # =============================
@@ -119,7 +126,9 @@ def filtrar_vinicius(df_raw, incluir_fiado_nao_pago=False):
         # incluir apenas fiado pago (StatusFiado == "Pago" ou DataPagamento preenchida)
         pago_mask = pd.Series([False]*len(df), index=df.index)
         if COL_STATUSF in df.columns:
-            pago_mask |= df[COL_STATUSF].astype(str).str.strip().str.lower().isin(["pago", "paga", "quitado", "quitada", "liberado", "liberada"])
+            pago_mask |= df[COL_STATUSF].astype(str).str.strip().str.lower().isin(
+                ["pago", "paga", "quitado", "quitada", "liberado", "liberada"]
+            )
         if COL_DT_PAG in df.columns:
             pago_mask |= df[COL_DT_PAG].notna() & (df[COL_DT_PAG].astype(str).str.strip() != "")
         # mantém: não-fiado OR (fiado & pago)
@@ -140,19 +149,16 @@ def filtrar_vinicius(df_raw, incluir_fiado_nao_pago=False):
 
     # Campos auxiliares
     tz = pytz.timezone(TZ)
-    today = datetime.now(tz)
-    df["Ano"] = df[COL_DATA].dt.year
-    df["Mes"] = df[COL_DATA].dt.month
+    df["Ano"] = pd.to_datetime(df[COL_DATA]).dt.year
+    df["Mes"] = pd.to_datetime(df[COL_DATA]).dt.month
 
     return df
 
 def resumo_cards(df, ano_alvo=None, mes_alvo=None, titulo="Resumo"):
     """Gera métricas básicas para cards."""
     if df.empty:
-        return dict(
-            atendimentos=0, clientes=0, base=0.0, comissao=0.0,
-            titulo=titulo
-        )
+        return dict(atendimentos=0, clientes=0, base=0.0, comissao=0.0, titulo=titulo)
+
     dfx = df.copy()
     if ano_alvo:
         dfx = dfx[dfx["Ano"] == ano_alvo]
@@ -207,8 +213,8 @@ def fmt_moeda(v):
 st.set_page_config(page_title="Comissão do Vinícius", layout="wide")
 st.title("💈 Comissão do Vinícius — direto da Base")
 
-gc = conectar_sheets()
-df_raw = carregar_base(gc)
+# ---- Carregar base (sem passar 'gc' para @st.cache_data) ----
+df_raw = carregar_base()
 
 # Opções de filtro
 col_f1, col_f2, col_f3, col_f4 = st.columns([1,1,1,2])
