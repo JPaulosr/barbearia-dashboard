@@ -2,11 +2,11 @@
 # 12_Fiado.py — Fiado + Telegram (foto + card), por funcionário + cópia p/ JP
 # - Lançar fiado: append sem limpar
 # - Quitar por COMPETÊNCIA com atualização mínima
-# - Notificações com FOTO e card HTML; roteamento por funcionário
+# - Notificações com FOTO e card HTML; roteamento por funcionário (Vinícius → canal; JPaulo → privado)
 # - Comissão só p/ elegíveis (ex.: Vinicius)
 # - 💳 Maquininha: captura LÍQUIDO e grava na BASE (com colunas extras p/ bruto e taxa)
 # - Quitar por ID (combo inteiro) ou por LINHA (serviço)
-# - Pagamentos: salva TotalLiquido + TotalBruto + Taxa
+# - Fiado_Pagamentos salva TotalLiquido + TotalBruto + Taxa
 
 import streamlit as st
 import pandas as pd
@@ -97,6 +97,7 @@ def _norm(s: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def carregar_fotos_mapa():
+    """NÃO recebe função; cria conexão internamente para evitar UnhashableParamError."""
     try:
         sh = conectar_sheets()
         if STATUS_ABA not in [w.title for w in sh.worksheets()]:
@@ -121,7 +122,8 @@ def carregar_fotos_mapa():
 # UTILS
 # =========================
 def proxima_terca(d: date) -> date:
-    wd = d.weekday()  # Monday=0
+    """Retorna a próxima TERÇA-FEIRA a partir de d (se for terça, retorna d)."""
+    wd = d.weekday()  # Monday=0, Tuesday=1, ..., Sunday=6
     delta = (1 - wd) % 7
     return d + timedelta(days=delta)
 
@@ -138,6 +140,7 @@ def _norm_key(s: str) -> str:
     return unicodedata.normalize("NFKC", str(s).strip()).casefold()
 
 def col_map(ws):
+    """Mapeia nome de coluna -> número (1-based) a partir do cabeçalho da worksheet."""
     headers = ws.row_values(1)
     return {h.strip(): i+1 for i, h in enumerate(headers)}
 
@@ -155,6 +158,7 @@ def ensure_headers(ws, desired_headers):
     return {h: i+1 for i, h in enumerate(headers)}
 
 def append_rows_generic(ws, dicts, default_headers=None):
+    """Append robusto por cabeçalho (trim+casefold). Útil para planilhas diversas."""
     headers = ws.row_values(1)
     if not headers:
         headers = default_headers or sorted({k for d in dicts for k in d.keys()})
@@ -182,8 +186,8 @@ def contains_cartao(s: str) -> bool:
     x = x.lower().replace(" ", "")
     return any(k in x for k in MAQUININHA_KEYWORDS)
 
-# Texto de serviços (sempre pelo que foi selecionado)
 def servicos_compactos_por_ids_parcial(df_rows: pd.DataFrame) -> str:
+    """Lista serviços selecionados por ID (ignora 'Combo'). Ex.: 'Corte+Sobrancelha | Gel'"""
     if df_rows.empty:
         return "-"
     partes = []
@@ -197,8 +201,8 @@ def servicos_compactos_por_ids_parcial(df_rows: pd.DataFrame) -> str:
             vistos.append(p); out.append(p)
     return " | ".join(out) if out else "-"
 
-# Histórico por ano + breakdown
 def historico_cliente_por_ano(df_base: pd.DataFrame, cliente: str) -> dict[int, float]:
+    """Retorna {ano: total_gasto_no_ano} para o cliente (soma 'Valor' da Base)."""
     if df_base is None or df_base.empty or not cliente:
         return {}
     df = df_base.copy()
@@ -217,6 +221,7 @@ def ano_da_data_str(dstr: str, fmt: str = "%d/%m/%Y") -> int | None:
         return None
 
 def breakdown_por_servico_no_ano(df_base: pd.DataFrame, cliente: str, ano: int, max_itens: int = 8):
+    """Retorna (df_ord, total_qtd, total_val, outros_qtd, outros_val) por serviço no ano."""
     if df_base is None or df_base.empty or not cliente or not ano:
         return pd.DataFrame(columns=["Serviço","Qtd","Total"]), 0, 0.0, 0, 0.0
     df = df_base.copy()
@@ -256,7 +261,7 @@ DATA_FMT = "%d/%m/%Y"
 
 BASE_COLS_MIN = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário","Fase","Tipo","Período"]
 EXTRA_COLS    = ["StatusFiado","IDLancFiado","VencimentoFiado","DataPagamento"]
-# 🔸 Colunas extras de pagamento (não existiam antes)
+# 🔸 Colunas extras de pagamento (para não perder bruto/taxa)
 BASE_PAG_EXTRAS = [
     "ValorBrutoRecebido", "ValorLiquidoRecebido",
     "TaxaCartaoValor", "TaxaCartaoPct",
@@ -307,6 +312,7 @@ def garantir_aba(ss, nome, cols):
     return ws
 
 def read_base_raw(ss):
+    """Lê a 'Base de Dados' SEM dropna, preservando todas as linhas/colunas."""
     ws = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     ensure_headers(ws, BASE_COLS_ALL)  # garante colunas extras
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
@@ -318,6 +324,7 @@ def read_base_raw(ss):
     return df, ws
 
 def append_rows_base(ws, novas_dicts):
+    """Append seguro: respeita ordem do cabeçalho sem limpar a planilha."""
     headers = ws.row_values(1)
     if not headers:
         headers = BASE_COLS_ALL
@@ -341,7 +348,6 @@ def carregar_listas():
     combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
     servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
     contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
-    # inclui Nubank CNPJ
     base_contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
     if "Nubank CNPJ" not in base_contas:
         base_contas.append("Nubank CNPJ")
@@ -445,14 +451,14 @@ if acao == "➕ Lançar fiado":
             ws_l = garantir_aba(ss, ABA_LANC, ["IDLanc","Data","Cliente","Combo","Servicos","Total","Venc","Func","Fase","Tipo","Periodo"])
             append_rows_generic(ws_l, [{
                 "IDLanc": idl, "Data": data_str, "Cliente": cliente, "Combo": combo_str,
-                "Servicos":"+"" .join(servicos), "Total": total, "Venc": venc_str, "Func": funcionario,
+                "Servicos": "+".join(servicos), "Total": total, "Venc": venc_str, "Func": funcionario,
                 "Fase": fase, "Tipo": tipo, "Periodo": periodo
             }])
 
             st.success(f"Fiado criado para **{cliente}** — ID: {idl}. Geradas {len(novas)} linhas na Base.")
             st.cache_data.clear()
 
-            # Notificação
+            # Notificação: novo fiado
             try:
                 total_fmt = _fmt_brl(total)
                 servicos_txt = combo_str.strip() if (combo_str and combo_str.strip()) else ("+".join(servicos) if servicos else "-")
@@ -467,8 +473,10 @@ if acao == "➕ Lançar fiado":
                 )
                 chat_dest = _chat_id_por_func(funcionario)
                 foto = FOTOS.get(_norm(cliente))
-                if foto: tg_send_photo(foto, msg_html, chat_id=chat_dest)
-                else:    tg_send(msg_html, chat_id=chat_dest)
+                if foto:
+                    tg_send_photo(foto, msg_html, chat_id=chat_dest)
+                else:
+                    tg_send(msg_html, chat_id=chat_dest)
             except Exception:
                 pass
 
@@ -556,6 +564,13 @@ elif acao == "💰 Registrar pagamento":
                 format_func=lambda i: linhas_label_map.get(i, str(i)),
             )
 
+    # ===== Campos de data/observação =====
+    cold1, cold2 = st.columns(2)
+    with cold1:
+        data_pag = st.date_input("Data do pagamento", value=date.today())
+    with cold2:
+        obs = st.text_input("Observação (opcional)", "", key="obs")
+
     # ===== Prévia =====
     total_sel = 0.0
     valor_liquido_cartao = None
@@ -626,10 +641,10 @@ elif acao == "💰 Registrar pagamento":
         if not mask.any():
             st.error("Nenhuma linha encontrada para a seleção feita.")
         else:
-            subset_all = dfb[mask].copy()
+            subset_all = dfb[mask].copy()  # contém os VALORES BRUTOS antes da atualização
             subset_all["Valor"] = pd.to_numeric(subset_all["Valor"], errors="coerce").fillna(0)
             total_bruto = float(subset_all["Valor"].sum())
-            data_pag_str = date.today().strftime(DATA_FMT) if not 'data_pag' in locals() else data_pag.strftime(DATA_FMT)
+            data_pag_str = data_pag.strftime(DATA_FMT)
 
             # ----- calcula líquido/ taxa -----
             id_pag = f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}"
@@ -643,7 +658,6 @@ elif acao == "💰 Registrar pagamento":
             # ----- distribui líquido proporcional por linha e atualiza BASE -----
             headers_map = col_map(ws_base2)  # já contém extras pois ensure_headers rodou
             updates = []
-            # Para ajuste de arredondamento
             liq_acum = 0.0
             idxs = list(subset_all.index)
             for i, idx in enumerate(idxs):
@@ -653,19 +667,18 @@ elif acao == "💰 Registrar pagamento":
                     liq_i = round(total_liquido * (bruto_i / total_bruto), 2)
                 else:
                     liq_i = 0.0
-                if i == len(idxs) - 1:  # ajusta para somar exatamente ao total_liquido
+                if i == len(idxs) - 1:  # ajusta para fechar no total_liquido
                     liq_i = round(total_liquido - liq_acum, 2)
                 liq_acum += liq_i
                 taxa_i  = round(bruto_i - liq_i, 2)
                 taxa_pct_i = (taxa_i / bruto_i * 100.0) if bruto_i > 0 else 0.0
 
-                # Campos base
                 pairs = {
                     "Conta": forma_pag,
                     "StatusFiado": "Pago",
                     "VencimentoFiado": "",
                     "DataPagamento": data_pag_str,
-                    "Valor": liq_i,  # 👈 sobrescreve com LÍQUIDO
+                    "Valor": liq_i,  # 👈 grava LÍQUIDO no Valor (impacta relatórios)
                     # extras
                     "ValorBrutoRecebido": bruto_i,
                     "ValorLiquidoRecebido": liq_i,
@@ -706,15 +719,14 @@ elif acao == "💰 Registrar pagamento":
             # ----- salva em Fiado_Pagamentos (com líquido) -----
             ws_p = garantir_aba(ss, ABA_PAGT, PAGT_COLS)
             ensure_headers(ws_p, PAGT_COLS)
-            obs = st.session_state.get("obs", "") if "obs" in st.session_state else ""
             append_rows_generic(ws_p, [{
                 "IDPagamento": id_pag,
                 "IDLancs": ";".join(sorted(set(subset_all["IDLancFiado"].astype(str)))),
                 "DataPagamento": data_pag_str,
                 "Cliente": cliente_sel,
                 "Forma": forma_pag,
-                "TotalLiquido": total_liquido,
-                "Obs": obs,
+                "TotalLiquido": total_liquido,   # 👈 líquido na planilha de pagamentos
+                "Obs": (obs or ""),
                 "TotalBruto": total_bruto,
                 "TaxaValor": round(taxa_total_valor, 2),
                 "TaxaPct": round(taxa_total_pct, 4),
@@ -739,22 +751,25 @@ elif acao == "💰 Registrar pagamento":
                     f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
                     f"🧾 Taxa: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>\n"
                     f"📅 Data pagto: {data_pag_str}\n"
-                    f"🗂️ IDs: <code>{ids_txt}</code>"
+                    f"🗂️ IDs: <code>{ids_txt}</code>\n"
+                    f"📝 Obs: {obs or '-'}"
                 )
                 foto = FOTOS.get(_norm(cliente_sel))
-                destinos = set(subset_all["Funcionário"].dropna().astype(str).str.strip().str.title().map(_chat_id_por_func).tolist())
+                funcs = subset_all["Funcionário"].dropna().astype(str).str.strip().str.title().unique().tolist()
+                destinos = {_chat_id_por_func(f) for f in funcs}
                 destinos = {d for d in destinos if d} or {_get_chat_id_jp()}
                 for chat in destinos:
-                    if foto: tg_send_photo(foto, msg_html, chat_id=chat)
-                    else:    tg_send(msg_html, chat_id=chat)
+                    if foto:
+                        tg_send_photo(foto, msg_html, chat_id=chat)
+                    else:
+                        tg_send(msg_html, chat_id=chat)
             except Exception:
                 pass
 
             # ----- Cópia privada para JP (comissão só elegíveis) -----
             try:
                 sub = subset_all.copy()
-                sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)  # bruto das linhas (antes do ajuste)
-                # Como a BASE já recebeu líquido em Valor, para comissão usamos o bruto original:
+                sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)  # bruto original
                 grup = sub.groupby("Funcionário", dropna=True)["Valor"].sum().reset_index()
                 itens = []
                 for _, r in grup.iterrows():
@@ -765,13 +780,14 @@ elif acao == "💰 Registrar pagamento":
                     itens.append(f"• {func_raw}: <b>{_fmt_brl(comiss)}</b>")
                 sec_comissao = ""
                 if itens:
-                    dt_pgto = proxima_terca(date.today())
+                    dt_pgto = proxima_terca(data_pag)
                     sec_comissao = (
                         "\n------------------------------\n"
                         f"💸 <b>Comissões sugeridas ({int(COMISSAO_PERC_PADRAO*100)}%)</b>\n"
                         + "\n".join(itens) +
                         f"\n📌 Pagar na próxima terça: <b>{dt_pgto.strftime(DATA_FMT)}</b>"
                     )
+
                 # Histórico/Breakdown
                 df_priv, _ = read_base_raw(conectar_sheets())
                 hist = historico_cliente_por_ano(df_priv, cliente_sel)
@@ -781,7 +797,7 @@ elif acao == "💰 Registrar pagamento":
                     bloco_hist = "\n------------------------------\n📚 <b>Histórico por ano</b>\n" + linhas_hist
                 else:
                     bloco_hist = "\n------------------------------\n📚 <b>Histórico por ano</b>\n• (sem registros)"
-                ano_corr = date.today().year
+                ano_corr = data_pag.year
                 brk, tq, tv, oq, ov = breakdown_por_servico_no_ano(df_priv, cliente_sel, ano_corr, max_itens=8)
                 if not brk.empty:
                     linhas_srv = "\n".join(
@@ -805,8 +821,10 @@ elif acao == "💰 Registrar pagamento":
                     + sec_comissao + bloco_hist + bloco_srv
                 )
                 foto = FOTOS.get(_norm(cliente_sel))
-                if foto: tg_send_photo(foto, msg_jp, chat_id=_get_chat_id_jp())
-                else:    tg_send(msg_jp, chat_id=_get_chat_id_jp())
+                if foto:
+                    tg_send_photo(foto, msg_jp, chat_id=_get_chat_id_jp())
+                else:
+                    tg_send(msg_jp, chat_id=_get_chat_id_jp())
             except Exception:
                 pass
 
