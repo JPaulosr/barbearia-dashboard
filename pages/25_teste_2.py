@@ -7,7 +7,7 @@
 # - Cópia privada p/ JP ao quitar: comissões (somente elegíveis) + próxima terça p/ pagar
 # - Cards incluem “🧰 Serviço(s)” (combo se houver; senão serviços) — sem ID
 # - Cópia p/ JP inclui “Histórico por ano” e “Ano corrente: por serviço (qtd × total)”
-# - 💳 Bloco de taxa do cartão (líquido → taxa R$ e %), log em Obs e na aba Cartao_Taxas
+# - 💳 Bloco de taxa da maquininha (líquido → taxa R$ e %), log em Obs e na aba Cartao_Taxas
 
 import streamlit as st
 import pandas as pd
@@ -177,18 +177,27 @@ def update_fiados_pagamento(ws, df_base: pd.DataFrame, mask, forma_pag: str, dat
     if data_updates:
         ws.batch_update(data_updates, value_input_option="USER_ENTERED")
 
+# ======== NOVO: reconhecer maquininha/adquirente ========
+MAQUININHA_KEYWORDS = {
+    "cart", "cartao", "cartão",
+    "credito", "crédito", "debito", "débito",
+    "maquina", "maquininha", "maquineta", "pos",
+    "pagseguro", "mercadopago", "mercado pago",
+    "sumup", "stone", "cielo", "rede", "getnet", "safra",
+    "visa", "master", "elo", "hiper", "amex"
+}
+
+def _normalize_simple(s: str) -> str:
+    s = unicodedata.normalize("NFKD", (s or "")).encode("ascii", "ignore").decode("ascii")
+    return s.lower().replace(" ", "")
+
 def contains_cartao(s: str) -> bool:
-    s = (s or "").strip().lower()
-    return "cart" in s  # pega "Cartão", "Cartao", etc.
+    x = _normalize_simple(s)
+    return any(_normalize_simple(k) in x for k in MAQUININHA_KEYWORDS)
+# ========================================================
 
 # Texto: serviços sem ID (por ID selecionado)
 def servicos_compactos_por_ids(df_rows: pd.DataFrame) -> str:
-    """
-    Retorna apenas os serviços por ID, sem prefixar com o ID.
-    - Se o ID tiver Combo, usa o Combo.
-    - Senão, junta os serviços distintos do ID com '+'.
-    - Se houver vários IDs, junta cada bloco com ' | '.
-    """
     if df_rows.empty:
         return "-"
     partes = []
@@ -204,8 +213,7 @@ def servicos_compactos_por_ids(df_rows: pd.DataFrame) -> str:
     vistos, out = [], []
     for p in partes:
         if p and p not in vistos:
-            vistos.append(p)
-            out.append(p)
+            vistos.append(p); out.append(p)
     return " | ".join(out) if out else "-"
 
 # --- Histórico por ano e breakdown ---
@@ -262,7 +270,7 @@ SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_BASE = "Base de Dados"
 ABA_LANC = "Fiado_Lancamentos"
 ABA_PAGT = "Fiado_Pagamentos"
-ABA_TAXAS = "Cartao_Taxas"  # NOVO: log (opcional) das taxas por pagamento
+ABA_TAXAS = "Cartao_Taxas"  # log das taxas por pagamento
 
 TZ = pytz.timezone("America/Sao_Paulo")
 DATA_FMT = "%d/%m/%Y"
@@ -339,7 +347,7 @@ def carregar_listas():
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
     df_list.columns = [str(c).strip() for c in df_list.columns]
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
-    combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
+    combos  = sorted([c for c in df_list.get("Combo", "").astype str).str.strip().unique() if c])
     servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
     contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
     contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
@@ -480,7 +488,7 @@ elif acao == "💰 Registrar pagamento":
         cliente_sel = st.selectbox("Cliente com fiado em aberto", options=[""] + clientes_abertos, index=0)
 
     ultima = ultima_forma_pagto_cliente(df_base_full, cliente_sel) if cliente_sel else None
-    lista_contas = contas_exist or ["Pix", "Dinheiro", "Cartão", "Transferência", "Outro"]
+    lista_contas = contas_exist or ["Pix", "Dinheiro", "Cartão", "Transferência", "Pagseguro", "Mercado Pago", "SumUp", "Cielo", "Stone", "Getnet", "Outro"]
     default_idx = lista_contas.index(ultima) if (ultima in lista_contas) else 0
     with colc2:
         forma_pag = st.selectbox("Forma de pagamento (quitação)", options=lista_contas, index=default_idx)
@@ -535,7 +543,7 @@ elif acao == "💰 Registrar pagamento":
     total_sel = 0.0
     funcs_envio = []  # funcionários envolvidos nos IDs (para roteamento Telegram)
 
-    # 💳 estado do bloco de cartão
+    # 💳 estado do bloco de maquininha
     valor_liquido_cartao = None
     bandeira_cartao = ""
     tipo_cartao = "Crédito"
@@ -553,9 +561,9 @@ elif acao == "💰 Registrar pagamento":
             f"Total bruto selecionado: **{_fmt_brl(total_sel)}**"
         )
 
-        # 💳 Detalhes do cartão (opcional)
+        # 💳 Detalhes da maquininha (abre para Cartão / PagSeguro / etc.)
         if contains_cartao(forma_pag):
-            with st.expander("💳 Detalhes do cartão (opcional)", expanded=True):
+            with st.expander("💳 Detalhes da maquininha (opcional)", expanded=True):
                 cdc1, cdc2 = st.columns([1,1])
                 with cdc1:
                     valor_liquido_cartao = st.number_input(
@@ -605,7 +613,7 @@ elif acao == "💰 Registrar pagamento":
             # Atualiza apenas colunas necessárias
             data_pag_str = data_pag.strftime(DATA_FMT)
 
-            # ---------- 💳 Cartão: prepara info de taxa / log opcional ----------
+            # ---------- 💳 Maquininha: prepara info de taxa / log opcional ----------
             cartao_info_txt = ""
             obs_extra = ""
             id_pag = f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}"
@@ -616,13 +624,13 @@ elif acao == "💰 Registrar pagamento":
                 taxa_pct = (taxa_valor / total_pago * 100.0) if total_pago > 0 else 0.0
 
                 cartao_info_txt = (
-                    f"💳 Cartão — Bandeira: {bandeira_cartao or '-'} | "
+                    f"💳 Maquininha — Bandeira: {bandeira_cartao or '-'} | "
                     f"Tipo: {tipo_cartao} | Parcelas: {int(parcelas_cartao)}\n"
                     f"Bruto: {_fmt_brl(total_pago)} | Líquido: {_fmt_brl(liquido)} | "
                     f"Taxa: {_fmt_brl(taxa_valor)} ({_fmt_pct(taxa_pct)})"
                 )
                 obs_extra = (
-                    f"[Cartão] Bruto={_fmt_brl(total_pago)}; Líquido={_fmt_brl(liquido)}; "
+                    f"[Maquininha] Bruto={_fmt_brl(total_pago)}; Líquido={_fmt_brl(liquido)}; "
                     f"Taxa={_fmt_brl(taxa_valor)} ({_fmt_pct(taxa_pct)}); "
                     f"Bandeira={bandeira_cartao or '-'}; Tipo={tipo_cartao}; Parcelas={int(parcelas_cartao)}"
                 )
@@ -649,7 +657,7 @@ elif acao == "💰 Registrar pagamento":
             # Faz a atualização de competência na BASE
             update_fiados_pagamento(ws_base2, dfb, mask, forma_pag, data_pag_str)
 
-            # Salva na aba Fiado_Pagamentos com observação (inclui cartão se houver)
+            # Salva na aba Fiado_Pagamentos com observação (inclui maquininha se houver)
             obs_final = (obs or "").strip()
             if obs_extra:
                 obs_final = f"{obs_final + '; ' if obs_final else ''}{obs_extra}"
@@ -707,7 +715,7 @@ elif acao == "💰 Registrar pagamento":
             except Exception:
                 pass
 
-            # ---------- Cópia privada para JP: comissão (somente elegíveis) + cartão + histórico ----------
+            # ---------- Cópia privada para JP: comissão (somente elegíveis) + maquininha + histórico ----------
             try:
                 sub = subset_all.copy()
                 sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)
