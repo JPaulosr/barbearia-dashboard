@@ -29,7 +29,7 @@ COLS_OFICIAIS = [
 ]
 COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]
 
-# Extras de cartão (iguais ao módulo de quitação)
+# Extras de cartão
 COLS_PAG_EXTRAS = [
     "ValorBrutoRecebido", "ValorLiquidoRecebido",
     "TaxaCartaoValor", "TaxaCartaoPct",
@@ -113,18 +113,15 @@ def _cmap(ws):
 def format_extras_numeric(ws):
     """Força número/percentual nas colunas extras (evita '07:12:00')."""
     cmap = _cmap(ws)
-
     def fmt(name, ntype, pattern):
         c = cmap.get(_norm_key(name))
-        if not c:
-            return
+        if not c: return
         a1_from = rowcol_to_a1(2, c)
         a1_to = rowcol_to_a1(50000, c)
         try:
             ws.format(f"{a1_from}:{a1_to}", {"numberFormat": {"type": ntype, "pattern": pattern}})
         except Exception:
             pass
-
     fmt("ValorBrutoRecebido", "NUMBER", "0.00")
     fmt("ValorLiquidoRecebido", "NUMBER", "0.00")
     fmt("TaxaCartaoValor", "NUMBER", "0.00")
@@ -135,11 +132,9 @@ def carregar_base():
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(c).strip() for c in df.columns]
     df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
-
     for c in [*COLS_OFICIAIS, *COLS_FIADO, *COLS_PAG_EXTRAS]:
         if c not in df.columns:
             df[c] = ""
-
     norm = {"manha": "Manhã", "Manha": "Manhã", "manha ": "Manhã", "tarde": "Tarde", "noite": "Noite"}
     df["Período"] = df["Período"].astype(str).str.strip().replace(norm)
     df.loc[~df["Período"].isin(["Manhã", "Tarde", "Noite"]), "Período"] = ""
@@ -177,8 +172,7 @@ def carregar_fotos_mapa():
         cols_lower = {c.lower(): c for c in df.columns}
         foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
         cli_col = next((cols_lower[c] for c in ["cliente", "nome", "nome_cliente"] if c in cols_lower), None)
-        if not (foto_col and cli_col):
-            return {}
+        if not (foto_col and cli_col): return {}
         tmp = df[[cli_col, foto_col]].copy()
         tmp.columns = ["Cliente", "Foto"]
         tmp["k"] = tmp["Cliente"].astype(str).map(_norm)
@@ -293,10 +287,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
 
     total_ano = float(d["Valor"].sum())
-    sec_hist = (
-        "📚 <b>Histórico por ano</b>\n"
-        f"{ano}: <b>{_fmt_brl(total_ano)}</b>"
-    )
+    sec_hist = "📚 <b>Histórico por ano</b>\n" + f"{ano}: <b>{_fmt_brl(total_ano)}</b>"
 
     grp = (
         d.dropna(subset=["Serviço"])
@@ -325,10 +316,6 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     return sec_hist, sec_serv
 
 def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
-    """
-    Se houver linhas de cartão nesse atendimento (mesmo PagamentoID),
-    retorna o bloco com Bruto/Líquido/Taxa e detalhes; senão, ''.
-    """
     df = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
@@ -431,7 +418,6 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     return base
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
-    # rótulo/valor/período
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
@@ -441,11 +427,9 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         valor_total = float(valor)
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
-    # bloco cartão se existir
     sec_cartao = _secao_pag_cartao(df_all, cliente, data_str)
     extras_base = [sec_cartao] if sec_cartao else []
 
-    # histórico (apenas na cópia do JP)
     ano = _ano_from_date_str(data_str)
     extras_jp = extras_base.copy()
     if ano is not None:
@@ -515,20 +499,16 @@ def ja_existe_atendimento(cliente, data, servico, combo=""):
 
 def sugestoes_do_cliente(df_all, cli, conta_default, periodo_default, funcionario_default):
     d = df_all[df_all["Cliente"].astype(str).str.strip() == cli].copy()
-    if d.empty:
-        return conta_default, periodo_default, funcionario_default
+    if d.empty: return conta_default, periodo_default, funcionario_default
     d["_dt"] = pd.to_datetime(d["Data"], format=DATA_FMT, errors="coerce")
     d = d.dropna(subset=["_dt"]).sort_values("_dt")
-    if d.empty:
-        return conta_default, periodo_default, funcionario_default
+    if d.empty: return conta_default, periodo_default, funcionario_default
     ultima = d.iloc[-1]
     conta = (ultima.get("Conta") or "").strip() or conta_default
     periodo = (ultima.get("Período") or "").strip() or periodo_default
     func = (ultima.get("Funcionário") or "").strip() or funcionario_default
-    if periodo not in ["Manhã", "Tarde", "Noite"]:
-        periodo = periodo_default
-    if func not in ["JPaulo", "Vinicius"]:
-        func = funcionario_default
+    if periodo not in ["Manhã", "Tarde", "Noite"]: periodo = periodo_default
+    if func not in ["JPaulo", "Vinicius"]: func = funcionario_default
     return conta, periodo, func
 
 # =========================
@@ -597,7 +577,7 @@ if not modo_lote:
         ult_combo = ultimo.get("Combo", "")
         combo = st.selectbox("Combo (último primeiro)", [""] + list(dict.fromkeys([ult_combo] + combos_existentes)))
 
-    # --- Bloco Cartão (UI) ---
+    # --- UI cartão helper ---
     def bloco_cartao_ui(total_bruto_padrao: float):
         with st.expander("💳 Pagamento no cartão (informe o LÍQUIDO recebido)", expanded=True):
             c1, c2 = st.columns(2)
@@ -609,9 +589,7 @@ if not modo_lote:
                 parcelas = st.number_input("Parcelas (se crédito)", min_value=1, max_value=12, value=1, step=1)
             taxa_val = max(0.0, float(total_bruto_padrao) - float(liquido or 0.0))
             taxa_pct = (taxa_val / float(total_bruto_padrao) * 100.0) if total_bruto_padrao > 0 else 0.0
-            st.caption(
-                f"Taxa estimada: {_fmt_brl(taxa_val)} ({taxa_pct:.2f}%)"
-            )
+            st.caption(f"Taxa estimada: {_fmt_brl(taxa_val)} ({taxa_pct:.2f}%)")
             return float(liquido or 0.0), str(bandeira), str(tipo_cartao), int(parcelas), float(taxa_val), float(taxa_pct)
 
     if "combo_salvo" not in st.session_state:
@@ -623,6 +601,7 @@ if not modo_lote:
         st.session_state.simples_salvo = False
         st.rerun()
 
+    # -------- COMBO (um por vez) --------
     if combo:
         st.subheader("💰 Edite os valores do combo antes de salvar:")
         valores_customizados = {}
@@ -633,13 +612,34 @@ if not modo_lote:
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
 
-        # UI cartão (se a forma for maquininha)
+        # UI cartão + distribuição
         liquido_total = None
         bandeira = ""
         tipo_cartao = "Crédito"
         parcelas = 1
+        dist_modo = "Proporcional (padrão)"
+        alvo_servico = None
+
         if contains_cartao(conta):
-            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(sum(valores_customizados.values()))
+            with st.expander("💳 Pagamento no cartão (informe o LÍQUIDO recebido)", expanded=True):
+                c1, c2 = st.columns(2)
+                with c1:
+                    total_bruto_combo = float(sum(valores_customizados.values()))
+                    liquido_total = st.number_input("Valor recebido (líquido)", value=total_bruto_combo, step=1.0, format="%.2f")
+                    bandeira = st.selectbox("Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0)
+                with c2:
+                    tipo_cartao = st.selectbox("Tipo", ["Débito", "Crédito"], index=1)
+                    parcelas = st.number_input("Parcelas (se crédito)", min_value=1, max_value=12, value=1, step=1)
+
+                dist_modo = st.radio("Distribuição do desconto/taxa",
+                                     ["Proporcional (padrão)", "Concentrar em um serviço"],
+                                     horizontal=False)
+                if dist_modo == "Concentrar em um serviço":
+                    alvo_servico = st.selectbox("Aplicar TODO o desconto/taxa em", list(valores_customizados.keys()))
+
+                taxa_val = max(0.0, total_bruto_combo - float(liquido_total or 0.0))
+                taxa_pct = (taxa_val / total_bruto_combo * 100.0) if total_bruto_combo > 0 else 0.0
+                st.caption(f"Taxa estimada: {_fmt_brl(taxa_val)} ({taxa_pct:.2f}%)")
 
         if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
             duplicado = any(ja_existe_atendimento(cliente, data, _cap_first(s), combo) for s in combo.split("+"))
@@ -651,13 +651,25 @@ if not modo_lote:
                 total_bruto = float(sum(valores_customizados.values()))
                 id_pag = gerar_pag_id("A") if contains_cartao(conta) else ""
 
+                soma_outros = None
+                if contains_cartao(conta) and dist_modo == "Concentrar em um serviço" and alvo_servico:
+                    soma_outros = sum(v for k, v in valores_customizados.items() if k != alvo_servico)
+
                 for s in combo.split("+"):
                     s2_raw = s.strip()
                     s2_norm = _cap_first(s2_raw)
                     bruto_i = float(valores_customizados.get(s2_raw, obter_valor_servico(s2_norm)))
 
                     if contains_cartao(conta) and total_bruto > 0:
-                        liq_i = round(float(liquido_total or 0.0) * (bruto_i / total_bruto), 2)
+                        if dist_modo == "Concentrar em um serviço" and alvo_servico:
+                            if s2_raw == alvo_servico:
+                                liq_i = float(liquido_total or 0.0) - float(soma_outros or 0.0)
+                                liq_i = round(max(0.0, liq_i), 2)
+                            else:
+                                liq_i = round(bruto_i, 2)
+                        else:
+                            liq_i = round(float(liquido_total or 0.0) * (bruto_i / total_bruto), 2)
+
                         taxa_i = round(bruto_i - liq_i, 2)
                         taxa_pct_i = (taxa_i / bruto_i * 100.0) if bruto_i > 0 else 0.0
                         valor_para_base = liq_i
@@ -682,12 +694,24 @@ if not modo_lote:
                     })
                     novas.append(linha)
 
-                # Ajuste de arredondamento para o total líquido
+                # ajuste final do líquido total
                 if contains_cartao(conta) and novas:
-                    soma_liq = sum([float(n.get("Valor", 0) or 0) for n in novas])
-                    delta = round((liquido_total or 0.0) - soma_liq, 2)
-                    novas[-1]["Valor"] = float(novas[-1]["Valor"]) + delta
-                    novas[-1]["ValorLiquidoRecebido"] = float(novas[-1].get("ValorLiquidoRecebido") or novas[-1]["Valor"])
+                    soma_liq = sum(float(n.get("Valor", 0) or 0) for n in novas)
+                    delta = round(float(liquido_total or 0.0) - soma_liq, 2)
+                    if abs(delta) >= 0.01:
+                        idx_ajuste = len(novas) - 1
+                        if dist_modo == "Concentrar em um serviço" and alvo_servico:
+                            for i, n in enumerate(novas):
+                                if _norm_key(n.get("Serviço","")) == _norm_key(_cap_first(alvo_servico)):
+                                    idx_ajuste = i; break
+                        novas[idx_ajuste]["Valor"] = float(novas[idx_ajuste]["Valor"]) + delta
+                        bsel = float(novas[idx_ajuste].get("ValorBrutoRecebido", 0) or 0)
+                        lsel = float(novas[idx_ajuste]["Valor"])
+                        tsel = round(bsel - lsel, 2)
+                        psel = (tsel / bsel * 100.0) if bsel > 0 else 0.0
+                        novas[idx_ajuste]["ValorLiquidoRecebido"] = lsel
+                        novas[idx_ajuste]["TaxaCartaoValor"] = tsel
+                        novas[idx_ajuste]["TaxaCartaoPct"] = round(psel, 4)
 
                 df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
                 salvar_base(df_final)
@@ -696,15 +720,16 @@ if not modo_lote:
                 enviar_card(
                     df_final, cliente, funcionario, data,
                     servico=combo.replace("+", " + "),
-                    valor=sum([float(n["Valor"]) for n in novas]),
+                    valor=sum(float(n["Valor"]) for n in novas),
                     combo=combo
                 )
+
+    # -------- SIMPLES (um por vez) --------
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
         servico = st.selectbox("Serviço", servicos_existentes)
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
-        # UI cartão (se aplicável)
         if contains_cartao(conta):
             liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(valor)
         else:
@@ -783,11 +808,15 @@ else:
                 combo_cli = st.session_state.get(f"combo_{cli}", "")
                 if combo_cli:
                     total_padrao = 0.0
+                    itens = []
                     for s in combo_cli.split("+"):
                         s2 = s.strip()
-                        v = st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
-                                            value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
-                        total_padrao += float(v)
+                        val = st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
+                                              value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
+                        itens.append((s2, val))
+                        total_padrao += float(val)
+
+                    # Cartão + distribuição
                     if contains_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                             c1, c2 = st.columns(2)
@@ -797,6 +826,14 @@ else:
                             with c2:
                                 st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                                 st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
+
+                            st.radio(f"{cli} - Distribuição do desconto/taxa",
+                                     ["Proporcional (padrão)", "Concentrar em um serviço"],
+                                     horizontal=False, key=f"dist_{cli}")
+                            if st.session_state.get(f"dist_{cli}", "Proporcional (padrão)") == "Concentrar em um serviço":
+                                st.selectbox(f"{cli} - Aplicar TODO o desconto/taxa em",
+                                             [nm for (nm, _) in itens], key=f"alvo_{cli}")
+
             else:
                 st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
                 serv_cli = st.session_state.get(f"servico_{cli}", None)
@@ -830,27 +867,41 @@ else:
                 if tipo_at == "Combo":
                     combo_cli = st.session_state.get(f"combo_{cli}", "")
                     if not combo_cli:
-                        st.warning(f"⚠️ {cli}: combo não definido. Pulando.")
-                        continue
+                        st.warning(f"⚠️ {cli}: combo não definido. Pulando."); continue
                     if any(ja_existe_atendimento(cli, data, _cap_first(s), combo_cli) for s in str(combo_cli).split("+")):
-                        st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando.")
-                        continue
+                        st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando."); continue
 
+                    # montar itens e total bruto
+                    itens = []
                     total_bruto = 0.0
-                    valores_itens = []
                     for s in str(combo_cli).split("+"):
                         s2_raw = s.strip()
                         s2_norm = _cap_first(s2_raw)
                         val = float(st.session_state.get(f"valor_{cli}_{s2_raw}", obter_valor_servico(s2_norm)))
-                        valores_itens.append((s2_raw, s2_norm, val))
+                        itens.append((s2_raw, s2_norm, val))
                         total_bruto += val
 
                     id_pag = gerar_pag_id("A") if contains_cartao(conta_cli) else ""
                     liq_total_cli = float(st.session_state.get(f"liq_{cli}", total_bruto)) if contains_cartao(conta_cli) else total_bruto
 
-                    for (s_raw, s_norm, bruto_i) in valores_itens:
+                    dist_modo = st.session_state.get(f"dist_{cli}", "Proporcional (padrão)")
+                    alvo = st.session_state.get(f"alvo_{cli}", None)
+                    soma_outros = None
+                    if contains_cartao(conta_cli) and dist_modo == "Concentrar em um serviço" and alvo:
+                        soma_outros = sum(val for (r, _, val) in itens if r != alvo)
+
+                    # criar linhas
+                    for (s_raw, s_norm, bruto_i) in itens:
                         if contains_cartao(conta_cli) and total_bruto > 0:
-                            liq_i = round(liq_total_cli * (bruto_i / total_bruto), 2)
+                            if dist_modo == "Concentrar em um serviço" and alvo:
+                                if s_raw == alvo:
+                                    liq_i = liq_total_cli - float(soma_outros or 0.0)
+                                    liq_i = round(max(0.0, liq_i), 2)
+                                else:
+                                    liq_i = round(bruto_i, 2)
+                            else:
+                                liq_i = round(liq_total_cli * (bruto_i / total_bruto), 2)
+
                             taxa_i = round(bruto_i - liq_i, 2)
                             taxa_pct_i = (taxa_i / bruto_i * 100.0) if bruto_i > 0 else 0.0
                             extras = {
@@ -871,6 +922,27 @@ else:
                             "Cliente": cli, "Combo": combo_cli, "Funcionário": func_cli,
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli, **extras
                         }))
+
+                    # ajuste delta para combo no cartão
+                    if contains_cartao(conta_cli):
+                        indices_cli = [i for i, n in enumerate(novas) if n["Cliente"] == cli and n["Combo"] == combo_cli]
+                        soma_liq = sum(float(novas[i]["Valor"]) for i in indices_cli)
+                        delta = round(liq_total_cli - soma_liq, 2)
+                        if abs(delta) >= 0.01 and indices_cli:
+                            idx_ajuste = indices_cli[-1]
+                            if dist_modo == "Concentrar em um serviço" and alvo:
+                                for i in indices_cli:
+                                    if _norm_key(novas[i]["Serviço"]) == _norm_key(_cap_first(alvo)):
+                                        idx_ajuste = i; break
+                            novas[idx_ajuste]["Valor"] = float(novas[idx_ajuste]["Valor"]) + delta
+                            bsel = float(novas[idx_ajuste].get("ValorBrutoRecebido", 0) or 0)
+                            lsel = float(novas[idx_ajuste]["Valor"])
+                            tsel = round(bsel - lsel, 2)
+                            psel = (tsel / bsel * 100.0) if bsel > 0 else 0.0
+                            novas[idx_ajuste]["ValorLiquidoRecebido"] = lsel
+                            novas[idx_ajuste]["TaxaCartaoValor"] = tsel
+                            novas[idx_ajuste]["TaxaCartaoPct"] = round(psel, 4)
+
                     clientes_salvos.add(cli)
                     funcionario_por_cliente[cli] = func_cli
 
@@ -878,11 +950,9 @@ else:
                     serv_cli = st.session_state.get(f"servico_{cli}", None)
                     serv_norm = _cap_first(serv_cli) if serv_cli else ""
                     if not serv_norm:
-                        st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando.")
-                        continue
+                        st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando."); continue
                     if ja_existe_atendimento(cli, data, serv_norm):
-                        st.warning(f"⚠️ {cli}: já existia atendimento simples ({serv_norm}) em {data}. Pulando.")
-                        continue
+                        st.warning(f"⚠️ {cli}: já existia atendimento simples ({serv_norm}) em {data}. Pulando."); continue
                     bruto = float(st.session_state.get(f"valor_{cli}_simples", obter_valor_servico(serv_norm)))
 
                     if contains_cartao(conta_cli):
@@ -904,6 +974,7 @@ else:
                             "Cliente": cli, "Combo": "", "Funcionário": func_cli,
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
                         }))
+
                     clientes_salvos.add(cli)
                     funcionario_por_cliente[cli] = func_cli
 
