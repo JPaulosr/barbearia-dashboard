@@ -6,7 +6,10 @@
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
 # - Arredondamento opcional para preço cheio por serviço (tabela) com tolerância.
 # - Blocos: NÃO fiado, Fiados liberados, Fiados pendentes (futuro).
-# - Telegram: Resumo Resumido (curto) e Detalhado, preview e ping.
+# - Telegram: Resumo Resumido (curto) e Detalhado, preview, ping.
+# - Novo: esconder “Base p/ comissão” do Vinícius; Resumo mensal (Vini e JP) e
+#   Resumo ANUAL (JP) com tabela mês a mês do que fica para o salão
+#   após comissão paga + taxa da maquininha.
 
 import streamlit as st
 import pandas as pd
@@ -53,7 +56,7 @@ VALOR_TABELA = {
 # =============================
 TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 CHAT_ID_JP_FALLBACK     = "493747253"
-CHAT_ID_VINI_FALLBACK   = "-1002953102982"  # ID real que você mostrou nos updates
+CHAT_ID_VINI_FALLBACK   = "-1002953102982"  # seu canal Salão JP 🎖 Premiação 🎖
 
 TELEGRAM_TOKEN            = st.secrets.get("TELEGRAM_TOKEN", TELEGRAM_TOKEN_FALLBACK)
 TELEGRAM_CHAT_ID_VINICIUS = st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS", CHAT_ID_VINI_FALLBACK)
@@ -179,6 +182,14 @@ def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bo
 def format_brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+def last_day_of_month(dt: datetime) -> datetime:
+    prox = (dt.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return prox - timedelta(days=1)
+
+def nome_mes_pt(dt: datetime) -> str:
+    meses = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"]
+    return f"{meses[dt.month-1]}/{dt.year}"
+
 # =============================
 # UI — entradas
 # =============================
@@ -213,7 +224,7 @@ usar_tabela_cartao = st.checkbox(
     value=True,
     help="Ignora o valor líquido (com taxa) e comissiona pelo preço de tabela do serviço."
 )
-col_r1, col_r2 = st.columns([2,1])
+col_r1, col_r2, col_r3 = st.columns([2,1,1])
 with col_r1:
     arred_cheio = st.checkbox(
         "Arredondar para preço cheio de TABELA (tolerância abaixo)",
@@ -222,6 +233,8 @@ with col_r1:
     )
 with col_r2:
     tol_reais = st.number_input("Tolerância (R$)", value=2.00, step=0.50, min_value=0.0)
+with col_r3:
+    taxa_cartao_pct = st.number_input("Taxa maquininha (%)", value=4.0, min_value=0.0, max_value=20.0, step=0.1)
 
 reprocessar_terca = st.checkbox(
     "Reprocessar esta terça (regravar): ignorar/limpar cache desta terça antes de salvar",
@@ -283,6 +296,15 @@ def montar_valor_base(df):
 
     df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
     return df
+
+# taxa maquininha por linha
+def _taxa_pos_por_row(row) -> float:
+    if not is_cartao(row.get("Conta", "")):
+        return 0.0
+    serv = str(row.get("Serviço", "")).strip()
+    bruto = float(row.get("Valor_num", 0.0))
+    base_fee = float(VALOR_TABELA.get(serv, bruto)) if (usar_tabela_cartao) else bruto
+    return base_fee * (float(taxa_cartao_pct) / 100.0)
 
 # ------- GRADE EDITÁVEL
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
@@ -408,35 +430,40 @@ def _build_resumo_msg(ini: datetime, fim: datetime,
     rodape = f"🧾 <b>Total a receber nesta terça:</b> {format_brl(total_hoje)}"
     return head + bloco_sem + bloco_fia + bloco_pend + rodape
 
-# ---- RESUMIDO (curto)
-def _contagem_servicos(df: pd.DataFrame) -> str:
-    if df is None or df.empty or "Serviço" not in df.columns:
-        return "—"
-    cont = df["Serviço"].astype(str).str.strip().value_counts()
-    return ", ".join([f"{s}×{int(q)}" for s, q in cont.items()]) if not cont.empty else "—"
-
-def _somar_base_para_comissao(df: pd.DataFrame) -> float:
-    if df is None or df.empty:
-        return 0.0
-    if "Valor (para comissão)" in df.columns:
-        base = pd.to_numeric(df["Valor (para comissão)"], errors="coerce").fillna(0)
-    elif "Valor_base_comissao" in df.columns:
-        base = pd.to_numeric(df["Valor_base_comissao"], errors="coerce").fillna(0)
-    else:
-        return 0.0
-    return float(base.sum())
-
-def _clientes_unicos(*dfs: pd.DataFrame) -> int:
-    vals = []
-    for d in dfs:
-        if d is not None and not d.empty and "Cliente" in d.columns:
-            vals.extend(d["Cliente"].astype(str).str.strip().tolist())
-    return len(pd.Series(vals).dropna().unique())
+# ---- RESUMIDO (curto) com controle de base
+import re as _re
+def _remove_base_from_text(msg: str) -> str:
+    return _re.sub(r"\s*\|\s*Base:\s*R\$[\d\.,]+", "", msg)
 
 def _build_resumo_msg_resumido(ini: datetime, fim: datetime,
                                semana_edit: pd.DataFrame, total_sem: float,
                                fiados_edit: pd.DataFrame, total_fia: float,
-                               pend_df: pd.DataFrame, total_pend: float) -> str:
+                               pend_df: pd.DataFrame, total_pend: float,
+                               include_base: bool = True) -> str:
+    def _contagem_servicos(df: pd.DataFrame) -> str:
+        if df is None or df.empty or "Serviço" not in df.columns:
+            return "—"
+        cont = df["Serviço"].astype(str).str.strip().value_counts()
+        return ", ".join([f"{s}×{int(q)}" for s, q in cont.items()]) if not cont.empty else "—"
+
+    def _somar_base_para_comissao(df: pd.DataFrame) -> float:
+        if df is None or df.empty:
+            return 0.0
+        if "Valor (para comissão)" in df.columns:
+            base = pd.to_numeric(df["Valor (para comissão)"], errors="coerce").fillna(0)
+        elif "Valor_base_comissao" in df.columns:
+            base = pd.to_numeric(df["Valor_base_comissao"], errors="coerce").fillna(0)
+        else:
+            return 0.0
+        return float(base.sum())
+
+    def _clientes_unicos(*dfs: pd.DataFrame) -> int:
+        vals = []
+        for d in dfs:
+            if d is not None and not d.empty and "Cliente" in d.columns:
+                vals.extend(d["Cliente"].astype(str).str.strip().tolist())
+        return len(pd.Series(vals).dropna().unique())
+
     a = semana_edit if semana_edit is not None else pd.DataFrame()
     b = fiados_edit if fiados_edit is not None else pd.DataFrame()
     juntos = pd.concat([a, b], ignore_index=True) if (not a.empty or not b.empty) else a
@@ -450,9 +477,10 @@ def _build_resumo_msg_resumido(ini: datetime, fim: datetime,
         f"<b>💈 Resumo — Vinícius</b>  ({to_br_date(ini)} → {to_br_date(fim)})",
         f"👥 Clientes: <b>{clientes}</b>",
         f"✂️ Serviços: {servicos}",
-        f"💵 Base p/ comissão: <b>{format_brl(base_total)}</b>",
-        f"🧾 Comissão de hoje: <b>{format_brl(com_total)}</b>",
     ]
+    if include_base:
+        linhas.append(f"💵 Base p/ comissão: <b>{format_brl(base_total)}</b>")
+    linhas.append(f"🧾 Comissão de hoje: <b>{format_brl(com_total)}</b>")
     if total_pend > 0:
         linhas.append(f"🕒 Comissão futura (fiados pendentes): <b>{format_brl(total_pend)}</b>")
     return "\n".join(linhas)
@@ -461,42 +489,62 @@ def _build_resumo_msg_resumido(ini: datetime, fim: datetime,
 # TELEGRAM — preview e botões
 # =============================
 st.divider()
+ocultar_base_vini = st.checkbox("🔒 Ocultar 'Base p/ comissão' do Vinícius (enviar só pra mim)", value=True)
 formato_resumo = st.radio("Formato do resumo", ["Resumido", "Detalhado"], index=0, horizontal=True)
 
-# Garante base calculada para pendentes
+# garante base calculada para pendentes
 pend_ok = fiados_pendentes if 'Valor_base_comissao' in fiados_pendentes.columns else montar_valor_base(fiados_pendentes)
 
-# Pré-visualização
+# Pré-visualização (o que Vini receberá)
 if formato_resumo == "Resumido":
-    msg_preview = _build_resumo_msg_resumido(
-        ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados, pend_ok, total_fiados_pend
+    msg_preview_vini = _build_resumo_msg_resumido(
+        ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados,
+        pend_ok, total_fiados_pend, include_base=not ocultar_base_vini
     )
 else:
-    msg_preview = _build_resumo_msg(
-        ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados, pend_ok, total_fiados_pend
+    base_msg = _build_resumo_msg(
+        ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados,
+        pend_ok, total_fiados_pend
     )
+    msg_preview_vini = _remove_base_from_text(base_msg) if ocultar_base_vini else base_msg
 
-st.caption("Pré‑visualização do texto que será enviado:")
-st.code(msg_preview, language="html")
+st.caption("Pré-visualização (o que o Vinícius receberá):")
+st.code(msg_preview_vini, language="html")
 
 col_tg1, col_tg2, col_tg3 = st.columns([1,1,1])
 
 with col_tg1:
     if st.button("📢 Enviar RESUMO (curto)"):
-        msg = _build_resumo_msg_resumido(
-            ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados, pend_ok, total_fiados_pend
+        msg_vini = _build_resumo_msg_resumido(
+            ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados,
+            pend_ok, total_fiados_pend, include_base=not ocultar_base_vini
         )
-        ok_v, det_v = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg, parse_mode="HTML")
+        ok_v, det_v = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg_vini, parse_mode="HTML")
+
         if enviar_copia_jp:
-            tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg, parse_mode="HTML")
+            msg_jp = _build_resumo_msg_resumido(
+                ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados,
+                pend_ok, total_fiados_pend, include_base=True
+            )
+            tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg_jp, parse_mode="HTML")
+
         st.success("Resumo (curto) enviado ✅") if ok_v else st.error(det_v)
 
 with col_tg2:
     if st.button("📢 Enviar (formato escolhido)"):
-        msg = msg_preview
-        ok_v, det_v = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg, parse_mode="HTML")
+        msg_vini = msg_preview_vini
+        ok_v, det_v = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg_vini, parse_mode="HTML")
+
         if enviar_copia_jp:
-            tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg, parse_mode="HTML")
+            if formato_resumo == "Resumido":
+                msg_jp = _build_resumo_msg_resumido(
+                    ini, fim, semana_grid, total_semana, fiados_liberados_grid, total_fiados,
+                    pend_ok, total_fiados_pend, include_base=True
+                )
+            else:
+                msg_jp = base_msg
+            tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg_jp, parse_mode="HTML")
+
         st.success("Resumo enviado ✅") if ok_v else st.error(det_v)
 
 with col_tg3:
@@ -505,12 +553,192 @@ with col_tg3:
         st.success("Ping OK") if ok else st.error({"status": status, "resp": body})
 
 # =============================
+# RESUMO MENSAL (Vini e JP)
+# =============================
+def primeiro_ultimo_dia_mes(ref: datetime):
+    ini_m = ref.replace(day=1)
+    fim_m = last_day_of_month(ini_m)
+    return ini_m, fim_m
+
+def build_resumo_mensal_vini(df_base_vini: pd.DataFrame, cache_df: pd.DataFrame, ini_m: datetime, fim_m: datetime) -> str:
+    dfm = df_base_vini.copy()
+    dfm["_dt"] = dfm["Data"].apply(parse_br_date)
+    dfm = dfm[(dfm["_dt"].notna()) & (dfm["_dt"] >= ini_m) & (dfm["_dt"] <= fim_m)].copy()
+
+    # contagem por serviço
+    serv = "—"
+    if not dfm.empty:
+        serv_counts = dfm["Serviço"].astype(str).str.strip().value_counts()
+        serv = ", ".join([f"{s}×{int(q)}" for s, q in serv_counts.items()]) if not serv_counts.empty else "—"
+    clientes = dfm["Cliente"].astype(str).str.strip().nunique() if not dfm.empty else 0
+
+    # comissão RECEBIDA no mês (cache)
+    c = cache_df.copy()
+    c["_pago"] = c["PagoEm"].apply(parse_br_date)
+    c["ValorComissao_num"] = pd.to_numeric(
+        c["ValorComissao"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce"
+    ).fillna(0.0)
+    com_mes = float(c[(c["_pago"].notna()) & (c["_pago"] >= ini_m) & (c["_pago"] <= fim_m)]["ValorComissao_num"].sum())
+
+    linhas = [
+        f"<b>📆 Resumo mensal — Vinícius</b> ({nome_mes_pt(ini_m)})",
+        f"👥 Clientes: <b>{clientes}</b>",
+        f"✂️ Serviços: {serv}",
+        f"🧾 Comissão RECEBIDA no mês: <b>{format_brl(com_mes)}</b>",
+    ]
+    return "\n".join(linhas)
+
+def build_resumo_mensal_jp(df_base_vini: pd.DataFrame, cache_df: pd.DataFrame, ini_m: datetime, fim_m: datetime) -> str:
+    dfm = df_base_vini.copy()
+    dfm["_dt"] = dfm["Data"].apply(parse_br_date)
+    dfm = dfm[(dfm["_dt"].notna()) & (dfm["_dt"] >= ini_m) & (dfm["_dt"] <= fim_m)].copy()
+    dfm = montar_valor_base(dfm)
+    dfm["TaxaPOS"] = dfm.apply(_taxa_pos_por_row, axis=1)
+    receita = float(pd.to_numeric(dfm["Valor"], errors="coerce").fillna(0.0).sum())
+    base_mes = float(pd.to_numeric(dfm["Valor_base_comissao"], errors="coerce").fillna(0.0).sum())
+    taxas = float(dfm["TaxaPOS"].sum())
+
+    c = cache_df.copy()
+    c["_pago"] = c["PagoEm"].apply(parse_br_date)
+    c["ValorComissao_num"] = pd.to_numeric(
+        c["ValorComissao"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce"
+    ).fillna(0.0)
+    com_mes = float(c[(c["_pago"].notna()) & (c["_pago"] >= ini_m) & (c["_pago"] <= fim_m)]["ValorComissao_num"].sum())
+    liquido = receita - com_mes - taxas
+
+    linhas = [
+        f"<b>📆 Resumo mensal — JP</b> ({nome_mes_pt(ini_m)})",
+        f"💵 Receita (base de dados): <b>{format_brl(receita)}</b>",
+        f"🧾 Comissão paga (mês): <b>{format_brl(com_mes)}</b>",
+        f"🏧 Taxas maquininha (~{taxa_cartao_pct:.1f}%): <b>{format_brl(taxas)}</b>",
+        f"⚖️ <u>Líquido do salão</u>: <b>{format_brl(liquido)}</b>",
+        f"ℹ️ Base mensal p/ comissão: <b>{format_brl(base_mes)}</b>",
+    ]
+    return "\n".join(linhas)
+
+st.markdown("---")
+st.subheader("📆 Resumo mensal")
+mes_ref = st.date_input("Escolha um dia do mês", value=fim.date())
+ini_m, fim_m = primeiro_ultimo_dia_mes(datetime.combine(mes_ref, datetime.min.time()))
+
+msg_mensal_vini = build_resumo_mensal_vini(dfv, cache, ini_m, fim_m)
+msg_mensal_jp   = build_resumo_mensal_jp(dfv, cache, ini_m, fim_m)
+
+col_rm1, col_rm2 = st.columns(2)
+with col_rm1:
+    st.caption("Prévia (Vínicius)")
+    st.code(msg_mensal_vini, language="html")
+    if st.button("📤 Enviar RESUMO MENSAL — Vinícius"):
+        ok, det = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_VINICIUS, msg_mensal_vini, parse_mode="HTML")
+        st.success("Enviado ✅") if ok else st.error(det)
+
+with col_rm2:
+    st.caption("Prévia (JP)")
+    st.code(msg_mensal_jp, language="html")
+    if st.button("📤 Enviar RESUMO MENSAL — JP"):
+        ok, det = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg_mensal_jp, parse_mode="HTML")
+        st.success("Enviado ✅") if ok else st.error(det)
+
+# =============================
+# RESUMO ANUAL (JP) — tabela Jan → mês atual
+# =============================
+def build_df_anual_jp(df_base_vini: pd.DataFrame, cache_df: pd.DataFrame, year: int) -> pd.DataFrame:
+    # prepara dataframes
+    df = df_base_vini.copy()
+    df["_dt"] = df["Data"].apply(parse_br_date)
+    df["Valor_num"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+
+    c = cache_df.copy()
+    c["_pago"] = c["PagoEm"].apply(parse_br_date)
+    c["ValorComissao_num"] = pd.to_numeric(
+        c["ValorComissao"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce"
+    ).fillna(0.0)
+
+    hoje = br_now()
+    ultimo_mes = 12 if year < hoje.year else hoje.month
+
+    rows = []
+    for m in range(1, ultimo_mes + 1):
+        ini_m = datetime(year, m, 1)
+        fim_m = last_day_of_month(ini_m)
+
+        dmf = df[(df["_dt"].notna()) & (df["_dt"] >= ini_m) & (df["_dt"] <= fim_m)].copy()
+        dmf = montar_valor_base(dmf)
+        dmf["TaxaPOS"] = dmf.apply(_taxa_pos_por_row, axis=1)
+
+        receita = float(dmf["Valor_num"].sum())
+        taxas   = float(dmf["TaxaPOS"].sum())
+        base_mes = float(pd.to_numeric(dmf["Valor_base_comissao"], errors="coerce").fillna(0.0).sum())
+
+        cm = float(c[(c["_pago"].notna()) & (c["_pago"] >= ini_m) & (c["_pago"] <= fim_m)]["ValorComissao_num"].sum())
+        liquido = receita - cm - taxas
+
+        rows.append({
+            "Mês": nome_mes_pt(ini_m),
+            "Receita": receita,
+            "Comissão paga": cm,
+            "Taxas cartão": taxas,
+            "Líquido salão": liquido,
+            "Base p/ comissão": base_mes,
+        })
+
+    dfm = pd.DataFrame(rows)
+    if dfm.empty:
+        return dfm
+
+    total = pd.DataFrame([{
+        "Mês": "TOTAL",
+        "Receita": dfm["Receita"].sum(),
+        "Comissão paga": dfm["Comissão paga"].sum(),
+        "Taxas cartão": dfm["Taxas cartão"].sum(),
+        "Líquido salão": dfm["Líquido salão"].sum(),
+        "Base p/ comissão": dfm["Base p/ comissão"].sum(),
+    }])
+    return pd.concat([dfm, total], ignore_index=True)
+
+def build_msg_anual_jp(df_anual: pd.DataFrame, year: int) -> str:
+    if df_anual is None or df_anual.empty:
+        return f"<b>📊 Resumo anual — JP ({year})</b>\nSem dados."
+    linhas = [f"<b>📊 Resumo anual — JP ({year})</b>"]
+    for _, r in df_anual.iterrows():
+        linhas.append(
+            f"{r['Mês']}: Receita {format_brl(r['Receita'])} | Comissão {format_brl(r['Comissão paga'])} | "
+            f"Taxas {format_brl(r['Taxas cartão'])} | 💼 Líquido {format_brl(r['Líquido salão'])}"
+        )
+    return "\n".join(linhas)
+
+st.markdown("---")
+st.subheader("📊 Resumo ANUAL — JP (Jan → mês atual)")
+ano_ref = st.number_input("Ano", value=br_now().year, step=1, min_value=2020, max_value=2100)
+
+df_anual = build_df_anual_jp(dfv, cache, int(ano_ref))
+if df_anual is None or df_anual.empty:
+    st.info("Sem dados para o ano selecionado.")
+else:
+    df_show = df_anual.copy()
+    for col in ["Receita","Comissão paga","Taxas cartão","Líquido salão","Base p/ comissão"]:
+        df_show[col] = df_show[col].map(format_brl)
+    st.dataframe(df_show, use_container_width=True)
+
+    msg_anual = build_msg_anual_jp(df_anual, int(ano_ref))
+    st.caption("Prévia do texto que será enviado para JP:")
+    st.code(msg_anual, language="html")
+
+    if st.button("📤 Enviar RESUMO ANUAL — JP"):
+        ok, det = tg_send_long(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID_JPAULO, msg_anual, parse_mode="HTML")
+        st.success("Resumo anual enviado ✅") if ok else st.error(det)
+
+# =============================
 # CONFIRMAR E GRAVAR
 # =============================
 if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens como pagos"):
     if (semana_grid is None or semana_grid.empty) and (fiados_liberados_grid is None or fiados_liberados_grid.empty):
         st.warning("Não há itens para pagar.")
     else:
+        # 1) Atualiza cache
         novos_cache = []
         for df_part in [semana_grid, fiados_liberados_grid]:
             if df_part is None or df_part.empty:
@@ -534,6 +762,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
         cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
+        # 2) Lança em DESPESAS por DIA do atendimento
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
         for c in COLS_DESPESAS_FIX:
