@@ -73,10 +73,15 @@ def contains_cartao(s: str) -> bool:
     x = x.lower().replace(" ", "")
     return any(k in x for k in MAQ)
 
-def default_card_flag(conta: str) -> bool:
-    """Padrão do interruptor 'Tratar como cartão?' – desliga em PIX/transferência."""
+def is_nao_cartao(conta: str) -> bool:
+    """True se a forma de pagamento NÃO for cartão (ex.: PIX, Dinheiro, Transferência)."""
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower()
-    if "pix" in s or "transfer" in s or "ted" in s:
+    tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "transfer", "transferencia", "ted", "doc"}
+    return any(t in s for t in tokens)
+
+def default_card_flag(conta: str) -> bool:
+    """Padrão do interruptor 'Tratar como cartão?' – desliga em PIX/transferência/dinheiro."""
+    if is_nao_cartao(conta):
         return False
     return contains_cartao(conta)
 
@@ -575,8 +580,16 @@ if not modo_lote:
         list(dict.fromkeys([sug_conta] + contas_existentes +
                            ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
     )
-    usar_cartao = st.checkbox("Tratar como cartão (com taxa)?",
-                              value=default_card_flag(conta), key="flag_card_um")
+
+    # checkbox com trava para meios NÃO-cartão
+    force_off = is_nao_cartao(conta)
+    usar_cartao = st.checkbox(
+        "Tratar como cartão (com taxa)?",
+        value=(False if force_off else default_card_flag(conta)),
+        key="flag_card_um",
+        disabled=force_off,
+        help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off else None)
+    )
 
     funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=(0 if sug_func == "JPaulo" else 1))
     periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"],
@@ -631,7 +644,7 @@ if not modo_lote:
         dist_modo = "Proporcional (padrão)"
         alvo_servico = None
 
-        if usar_cartao:
+        if usar_cartao and not is_nao_cartao(conta):
             with st.expander("💳 Pagamento no cartão (informe o LÍQUIDO recebido)", expanded=True):
                 c1, c2 = st.columns(2)
                 with c1:
@@ -660,10 +673,11 @@ if not modo_lote:
                 df_all, _ = carregar_base()
                 novas = []
                 total_bruto = float(sum(valores_customizados.values()))
-                id_pag = gerar_pag_id("A") if usar_cartao else ""
+                usar_cartao_efetivo = usar_cartao and not is_nao_cartao(conta)
+                id_pag = gerar_pag_id("A") if usar_cartao_efetivo else ""
 
                 soma_outros = None
-                if usar_cartao and dist_modo == "Concentrar em um serviço" and alvo_servico:
+                if usar_cartao_efetivo and dist_modo == "Concentrar em um serviço" and alvo_servico:
                     soma_outros = sum(v for k, v in valores_customizados.items() if k != alvo_servico)
 
                 for s in combo.split("+"):
@@ -671,7 +685,7 @@ if not modo_lote:
                     s2_norm = _cap_first(s2_raw)
                     bruto_i = float(valores_customizados.get(s2_raw, obter_valor_servico(s2_norm)))
 
-                    if usar_cartao and total_bruto > 0:
+                    if usar_cartao_efetivo and total_bruto > 0:
                         if dist_modo == "Concentrar em um serviço" and alvo_servico:
                             if s2_raw == alvo_servico:
                                 liq_i = float(liquido_total or 0.0) - float(soma_outros or 0.0)
@@ -706,7 +720,7 @@ if not modo_lote:
                     novas.append(linha)
 
                 # ajuste final do líquido total (se cartão)
-                if usar_cartao and novas:
+                if usar_cartao_efetivo and novas:
                     soma_liq = sum(float(n.get("Valor", 0) or 0) for n in novas)
                     delta = round(float(liquido_total or 0.0) - soma_liq, 2)
                     if abs(delta) >= 0.01:
@@ -741,7 +755,7 @@ if not modo_lote:
         servico = st.selectbox("Serviço", servicos_existentes)
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
-        if usar_cartao:
+        if usar_cartao and not is_nao_cartao(conta):
             liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(valor)
         else:
             liquido_total, bandeira, tipo_cartao, parcelas = None, "", "Crédito", 1
@@ -752,7 +766,8 @@ if not modo_lote:
                 st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
             else:
                 df_all, _ = carregar_base()
-                if usar_cartao:
+                usar_cartao_efetivo = usar_cartao and not is_nao_cartao(conta)
+                if usar_cartao_efetivo:
                     id_pag = gerar_pag_id("A")
                     bruto = float(valor)
                     liq = float(liquido_total or 0.0)
@@ -810,11 +825,18 @@ else:
                                    ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])),
                 key=f"conta_{cli}"
             )
-            st.checkbox(f"{cli} - Tratar como cartão (com taxa)?",
-                        value=default_card_flag(st.session_state.get(f"conta_{cli}", "")),
-                        key=f"flag_card_{cli}")
-            use_card_cli = bool(st.session_state.get(f"flag_card_{cli}",
-                                  default_card_flag(st.session_state.get(f"conta_{cli}", ""))))
+            force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
+            st.checkbox(
+                f"{cli} - Tratar como cartão (com taxa)?",
+                value=(False if force_off_cli else default_card_flag(st.session_state.get(f"conta_{cli}", ""))),
+                key=f"flag_card_{cli}",
+                disabled=force_off_cli,
+                help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None)
+            )
+            # garante False em memória se não-cartão
+            if force_off_cli:
+                st.session_state[f"flag_card_{cli}"] = False
+            use_card_cli = bool(st.session_state.get(f"flag_card_{cli}", False))
 
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
                          index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}")
@@ -835,7 +857,7 @@ else:
                         total_padrao += float(val)
 
                     # Cartão + distribuição
-                    if use_card_cli:
+                    if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                             c1, c2 = st.columns(2)
                             with c1:
@@ -858,7 +880,7 @@ else:
                 st.number_input(f"{cli} - Valor do serviço",
                                 value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
                                 step=1.0, key=f"valor_{cli}_simples")
-                if use_card_cli:
+                if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                         c1, c2 = st.columns(2)
                         with c1:
@@ -879,8 +901,7 @@ else:
             for cli in lista_final:
                 tipo_at = st.session_state.get(f"tipo_{cli}", "Simples")
                 conta_cli = st.session_state.get(f"conta_{cli}", conta_global)
-                use_card_cli = bool(st.session_state.get(f"flag_card_{cli}",
-                                      default_card_flag(st.session_state.get(f"conta_{cli}", ""))))
+                use_card_cli = bool(st.session_state.get(f"flag_card_{cli}", False)) and not is_nao_cartao(conta_cli)
                 periodo_cli = st.session_state.get(f"periodo_{cli}", periodo_global)
                 func_cli = st.session_state.get(f"func_{cli}", funcionario_global)
 
