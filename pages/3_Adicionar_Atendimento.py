@@ -74,13 +74,11 @@ def contains_cartao(s: str) -> bool:
     return any(k in x for k in MAQ)
 
 def is_nao_cartao(conta: str) -> bool:
-    """True se a forma de pagamento NÃO for cartão (ex.: PIX, Dinheiro, Transferência)."""
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower()
     tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "espécie", "transfer", "transferencia", "transferência", "ted", "doc"}
     return any(t in s for t in tokens)
 
 def default_card_flag(conta: str) -> bool:
-    """Padrão do interruptor 'Tratar como cartão?' – desliga em PIX/transferência/dinheiro."""
     if is_nao_cartao(conta):
         return False
     return contains_cartao(conta)
@@ -123,7 +121,6 @@ def _cmap(ws):
     return cmap
 
 def format_extras_numeric(ws):
-    """Força formato numérico/percentual nas colunas extras (evita virar '07:12:00')."""
     cmap = _cmap(ws)
     def fmt(name, ntype, pattern):
         c = cmap.get(_norm_key(name))
@@ -543,22 +540,33 @@ contas_existentes = sorted([c for c in df_2025["Conta"].dropna().astype(str).str
 combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str.strip().unique() if c])
 
 # =========================
-# FORM – Globais
+# FORM – Modo (evita duplicidades!)
 # =========================
 modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
 
-col1, col2 = st.columns(2)
-with col1:
-    data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-    conta_global = st.selectbox(
-        "Forma de Pagamento (padrão)",
-        list(dict.fromkeys(contas_existentes + ["Carteira", "Pix", "Transferência",
-                                               "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
-    )
-with col2:
-    funcionario_global = st.selectbox("Funcionário (padrão)", ["JPaulo", "Vinicius"])
+# Data sempre visível
+data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
+
+# Mostrar campos “padrão” **apenas** no modo Lote
+if modo_lote:
+    col1, col2 = st.columns(2)
+    with col1:
+        conta_global = st.selectbox(
+            "Forma de Pagamento (padrão)",
+            list(dict.fromkeys(contas_existentes + ["Carteira", "Pix", "Transferência",
+                                                    "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
+        )
+    with col2:
+        funcionario_global = st.selectbox("Funcionário (padrão)", ["JPaulo", "Vinicius"])
+    periodo_global = st.selectbox("Período do Atendimento (padrão)", ["Manhã", "Tarde", "Noite"])
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
-periodo_global = st.selectbox("Período do Atendimento (padrão)", ["Manhã", "Tarde", "Noite"])
+else:
+    # Defaults silenciosos (sem widgets visíveis no modo 1x)
+    conta_global = None
+    funcionario_global = None
+    periodo_global = None
+    tipo = "Serviço"  # padrão comum
+
 fase = "Dono + funcionário"
 
 # =========================
@@ -572,9 +580,19 @@ if not modo_lote:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
 
+    # Fallbacks para sugestões quando não há “padrões” na tela
+    conta_fallback = (contas_existentes[0] if contas_existentes else "Carteira")
+    periodo_fallback = "Manhã"
+    func_fallback = "JPaulo"
+
     sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
-        df_existente, cliente, conta_global, periodo_global, funcionario_global
+        df_existente,
+        cliente,
+        conta_global or conta_fallback,
+        periodo_global or periodo_fallback,
+        funcionario_global or func_fallback
     )
+
     conta = st.selectbox(
         "Forma de Pagamento",
         list(dict.fromkeys([sug_conta] + contas_existentes +
@@ -719,7 +737,6 @@ if not modo_lote:
                     })
                     novas.append(linha)
 
-                # ajuste final do líquido total (se cartão)
                 if usar_cartao_efetivo and novas:
                     soma_liq = sum(float(n.get("Valor", 0) or 0) for n in novas)
                     delta = round(float(liquido_total or 0.0) - soma_liq, 2)
@@ -914,7 +931,6 @@ else:
                     if any(ja_existe_atendimento(cli, data, _cap_first(s), combo_cli) for s in str(combo_cli).split("+")):
                         st.warning(f"⚠️ {cli}: já existia COMBO em {data}. Pulando."); continue
 
-                    # montar itens e total bruto
                     itens = []
                     total_bruto = 0.0
                     for s in str(combo_cli).split("+"):
@@ -933,7 +949,6 @@ else:
                     if use_card_cli and dist_modo == "Concentrar em um serviço" and alvo:
                         soma_outros = sum(val for (r, _, val) in itens if r != alvo)
 
-                    # criar linhas
                     for (s_raw, s_norm, bruto_i) in itens:
                         if use_card_cli and total_bruto > 0:
                             if dist_modo == "Concentrar em um serviço" and alvo:
@@ -966,7 +981,6 @@ else:
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli, **extras
                         }))
 
-                    # ajuste delta para combo no cartão
                     if use_card_cli:
                         indices_cli = [i for i, n in enumerate(novas) if n["Cliente"] == cli and n["Combo"] == combo_cli]
                         soma_liq = sum(float(novas[i]["Valor"]) for i in indices_cli)
