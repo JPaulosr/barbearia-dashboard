@@ -346,11 +346,13 @@ def carregar_listas():
     ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
     df_list.columns = [str(c).strip() for c in df_list.columns]
+
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
-    combos  = sorted([c for c in df_list.get("Combo", "").astype str).str.strip().unique() if c])
+    combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])  # <- aqui estava o erro
     servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
     contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
     contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
+
     return clientes, combos, servs, contas
 
 def append_row(nome_aba, vals):
