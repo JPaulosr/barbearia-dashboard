@@ -29,7 +29,7 @@ COLS_OFICIAIS = [
 ]
 COLS_FIADO = ["StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento"]
 
-# Extras para cartão (iguais ao módulo de quitação)
+# Extras de cartão (iguais ao módulo de quitação)
 COLS_PAG_EXTRAS = [
     "ValorBrutoRecebido", "ValorLiquidoRecebido",
     "TaxaCartaoValor", "TaxaCartaoPct",
@@ -54,14 +54,12 @@ def now_br():
     return datetime.now(pytz.timezone(TZ)).strftime("%d/%m/%Y %H:%M:%S")
 
 def _cap_first(s: str) -> str:
-    """Primeira letra maiúscula; resto minúsculo; preserva acentos."""
     return (str(s).strip().lower().capitalize()) if s is not None else ""
 
 def _norm_key(s: str) -> str:
     return unicodedata.normalize("NFKC", str(s).strip()).casefold()
 
 def contains_cartao(s: str) -> bool:
-    """Reconhece maquininha/adquirente."""
     MAQ = {
         "cart", "cartao", "cartão",
         "credito", "crédito", "debito", "débito",
@@ -77,6 +75,13 @@ def contains_cartao(s: str) -> bool:
 
 def gerar_pag_id(prefixo="A"):
     return f"{prefixo}-{datetime.now(pytz.timezone(TZ)).strftime('%Y%m%d%H%M%S%f')[:-3]}"
+
+def _fmt_brl(v: float) -> str:
+    try:
+        v = float(v)
+    except Exception:
+        v = 0.0
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # =========================
 # SHEETS
@@ -106,7 +111,7 @@ def _cmap(ws):
     return cmap
 
 def format_extras_numeric(ws):
-    """Força número/percentual nas colunas extras (evita exibir '07:12:00')."""
+    """Força número/percentual nas colunas extras (evita '07:12:00')."""
     cmap = _cmap(ws)
 
     def fmt(name, ntype, pattern):
@@ -129,7 +134,7 @@ def carregar_base():
     aba = conectar_sheets().worksheet(ABA_DADOS)
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(c).strip() for c in df.columns]
-    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]  # remove cabeçalhos duplicados
+    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
 
     for c in [*COLS_OFICIAIS, *COLS_FIADO, *COLS_PAG_EXTRAS]:
         if c not in df.columns:
@@ -151,7 +156,6 @@ def salvar_base(df_final: pd.DataFrame):
     df_final = df_final[colunas_alvo]
     aba.clear()
     set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
-    # Formata extras
     try:
         format_extras_numeric(aba)
     except Exception:
@@ -248,7 +252,7 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
         return tg_send(caption, chat_id=chat)
 
 # =========================
-# CARD – resumo do atendimento e histórico
+# CARD – resumo/histórico + BLOCO CARTÃO
 # =========================
 def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     d = df_all[
@@ -271,7 +275,6 @@ def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
 
     return label, valor_total, is_combo, servicos, periodo_label
 
-
 def _ano_from_date_str(data_str: str) -> int | None:
     dt = pd.to_datetime(data_str, format=DATA_FMT, errors="coerce")
     return None if pd.isna(dt) else int(dt.year)
@@ -292,7 +295,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     total_ano = float(d["Valor"].sum())
     sec_hist = (
         "📚 <b>Histórico por ano</b>\n"
-        f"{ano}: <b>R$ {total_ano:,.2f}</b>".replace(",", "X").replace(".", ",").replace("X", ".")
+        f"{ano}: <b>{_fmt_brl(total_ano)}</b>"
     )
 
     grp = (
@@ -303,8 +306,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
          .sort_values(["total", "qtd"], ascending=[False, False])
     )
     linhas_serv = [
-        f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>R$ {float(r['total']):,.2f}</b>"
-        .replace(",", "X").replace(".", ",").replace("X", ".")
+        f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>{_fmt_brl(float(r['total']))}</b>"
         for _, r in grp.iterrows()
     ]
     sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
@@ -321,6 +323,56 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         sec_serv += "\n\n👥 <b>Frequência por funcionário</b>\n" + "\n".join(linhas_func)
 
     return sec_hist, sec_serv
+
+def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
+    """
+    Se houver linhas de cartão nesse atendimento (mesmo PagamentoID),
+    retorna o bloco com Bruto/Líquido/Taxa e detalhes; senão, ''.
+    """
+    df = df_all[
+        (df_all["Cliente"].astype(str).str.strip() == cliente) &
+        (df_all["Data"].astype(str).str.strip() == data_str)
+    ].copy()
+    if df.empty:
+        return ""
+
+    df["_idx"] = df.index
+    com_pid = df[df["PagamentoID"].astype(str).str.strip() != ""].copy()
+    if com_pid.empty:
+        return ""
+
+    latest_row = com_pid.loc[com_pid["_idx"].idxmax()]
+    pid = str(latest_row["PagamentoID"]).strip()
+    bloco = df[df["PagamentoID"].astype(str).str.strip() == pid].copy()
+
+    bruto  = pd.to_numeric(bloco.get("ValorBrutoRecebido", 0), errors="coerce").fillna(0).sum()
+    liqui  = pd.to_numeric(bloco.get("ValorLiquidoRecebido", 0), errors="coerce").fillna(0).sum()
+    taxa_v = pd.to_numeric(bloco.get("TaxaCartaoValor", 0), errors="coerce").fillna(0).sum()
+    if liqui <= 0:
+        liqui = pd.to_numeric(bloco.get("Valor", 0), errors="coerce").fillna(0).sum()
+    taxa_pct = (taxa_v / bruto * 100.0) if bruto > 0 else 0.0
+
+    det = ""
+    if "FormaPagDetalhe" in bloco.columns:
+        s = bloco["FormaPagDetalhe"].astype(str).str.strip()
+        s = s[s != ""]
+        if not s.empty:
+            det = s.iloc[0]
+    conta = ""
+    if "Conta" in bloco.columns:
+        s2 = bloco["Conta"].astype(str).str.strip()
+        s2 = s2[s2 != ""]
+        if not s2.empty:
+            conta = s2.iloc[0]
+
+    linhas = [
+        "------------------------------",
+        "💳 <b>Pagamento no cartão</b>",
+        f"Forma: <b>{conta or '-'}</b>{(' · ' + det) if det else ''}",
+        f"Bruto: <b>{_fmt_brl(bruto)}</b> · Líquido: <b>{_fmt_brl(liqui)}</b>",
+        f"Taxa total: <b>{_fmt_brl(taxa_v)} ({taxa_pct:.2f}%)</b>",
+    ]
+    return "\n".join(linhas)
 
 def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
                          append_sections: list[str] | None = None):
@@ -356,7 +408,7 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
         media = None
 
     media_str = "-" if media is None else f"{media:.1f} dias".replace(".", ",")
-    valor_str = f"R$ {valor_total:.2f}".replace(".", ",")
+    valor_str = _fmt_brl(valor_total)
 
     base = (
         "📌 <b>Atendimento registrado</b>\n"
@@ -379,6 +431,7 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     return base
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
+    # rótulo/valor/período
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
@@ -388,34 +441,46 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         valor_total = float(valor)
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
-    foto = FOTOS.get(_norm(cliente))
+    # bloco cartão se existir
+    sec_cartao = _secao_pag_cartao(df_all, cliente, data_str)
+    extras_base = [sec_cartao] if sec_cartao else []
+
+    # histórico (apenas na cópia do JP)
     ano = _ano_from_date_str(data_str)
-    extras = []
+    extras_jp = extras_base.copy()
     if ano is not None:
         sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
-        extras = [sec_hist, sec_serv]
+        extras_jp.extend([sec_hist, sec_serv])
 
-    caption_base = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label)
-    caption_jp = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras)
+    foto = FOTOS.get(_norm(cliente))
+
+    caption_base = make_card_caption_v2(
+        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
+        append_sections=extras_base
+    )
+    caption_jp = make_card_caption_v2(
+        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
+        append_sections=extras_jp
+    )
 
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
         if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else: tg_send(caption_jp, chat_id=chat_jp)
+        else:    tg_send(caption_jp, chat_id=chat_jp)
         return
 
     if funcionario == "Vinicius":
         chat_v = _get_chat_id_vini()
         if foto: tg_send_photo(foto, caption_base, chat_id=chat_v)
-        else: tg_send(caption_base, chat_id=chat_v)
+        else:    tg_send(caption_base, chat_id=chat_v)
         chat_jp = _get_chat_id_jp()
         if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else: tg_send(caption_jp, chat_id=chat_jp)
+        else:    tg_send(caption_jp, chat_id=chat_jp)
         return
 
     destino = _chat_id_por_func(funcionario)
     if foto: tg_send_photo(foto, caption_base, chat_id=destino)
-    else: tg_send(caption_base, chat_id=destino)
+    else:    tg_send(caption_base, chat_id=destino)
 
 # =========================
 # VALORES DE SERVIÇO
@@ -545,8 +610,7 @@ if not modo_lote:
             taxa_val = max(0.0, float(total_bruto_padrao) - float(liquido or 0.0))
             taxa_pct = (taxa_val / float(total_bruto_padrao) * 100.0) if total_bruto_padrao > 0 else 0.0
             st.caption(
-                f"Taxa estimada: R$ {taxa_val:,.2f} ({taxa_pct:.2f}%)"
-                .replace(",", "X").replace(".", ",").replace("X", ".")
+                f"Taxa estimada: {_fmt_brl(taxa_val)} ({taxa_pct:.2f}%)"
             )
             return float(liquido or 0.0), str(bandeira), str(tipo_cartao), int(parcelas), float(taxa_val), float(taxa_pct)
 
@@ -569,7 +633,7 @@ if not modo_lote:
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
 
-        # UI cartão (se forma de pagamento for maquininha)
+        # UI cartão (se a forma for maquininha)
         liquido_total = None
         bandeira = ""
         tipo_cartao = "Crédito"
@@ -618,7 +682,7 @@ if not modo_lote:
                     })
                     novas.append(linha)
 
-                # Ajuste de arredondamento
+                # Ajuste de arredondamento para o total líquido
                 if contains_cartao(conta) and novas:
                     soma_liq = sum([float(n.get("Valor", 0) or 0) for n in novas])
                     delta = round((liquido_total or 0.0) - soma_liq, 2)
