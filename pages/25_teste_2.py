@@ -104,7 +104,9 @@ def carregar_fotos_mapa():
             return {}
         ws = sh.worksheet(STATUS_ABA)
         df = get_as_dataframe(ws).fillna("")
+        # dedup colunas
         df.columns = [str(c).strip() for c in df.columns]
+        df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
         cols_lower = {c.lower(): c for c in df.columns}
         foto_col = next((cols_lower[c] for c in FOTO_COL_CANDIDATES if c in cols_lower), None)
         cli_col  = next((cols_lower[c] for c in ["cliente","nome","nome_cliente"] if c in cols_lower), None)
@@ -312,11 +314,13 @@ def garantir_aba(ss, nome, cols):
     return ws
 
 def read_base_raw(ss):
-    """Lê a 'Base de Dados' SEM dropna, preservando todas as linhas/colunas."""
+    """Lê a 'Base de Dados' SEM dropna, preservando todas as linhas/colunas e deduplicando cabeçalhos."""
     ws = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     ensure_headers(ws, BASE_COLS_ALL)  # garante colunas extras
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
+    # dedup colunas
     df.columns = [str(c).strip() for c in df.columns]
+    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
     for c in BASE_COLS_ALL:
         if c not in df.columns:
             df[c] = ""
@@ -343,7 +347,9 @@ def carregar_listas():
     ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     ensure_headers(ws_base, BASE_COLS_ALL)
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
+    # dedup colunas
     df_list.columns = [str(c).strip() for c in df_list.columns]
+    df_list = df_list.loc[:, ~pd.Index(df_list.columns).duplicated(keep="first")]
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
     combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
     servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
