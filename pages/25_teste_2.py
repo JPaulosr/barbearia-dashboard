@@ -190,13 +190,14 @@ def contains_cartao(s: str) -> bool:
 
 def is_nao_cartao(conta: str) -> bool:
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower()
-    tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "espécie", "transfer", "transferencia", "transferência", "ted", "doc"}
+    tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "espécie",
+              "transfer", "transferencia", "transferência", "ted", "doc"}
     return any(t in s for t in tokens)
 
 def default_card_flag(conta: str) -> bool:
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower().replace(" ", "")
     if "nubankcnpj" in s:
-        return False           # por padrão transferência; se for NFC o usuário marca o checkbox
+        return False           # padrão: transferência; se for NFC, usuário marca manualmente
     if is_nao_cartao(conta):
         return False
     return contains_cartao(conta)
@@ -360,13 +361,12 @@ def carregar_listas():
     ensure_headers(ws_base, BASE_COLS_ALL)
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
     df_list.columns = [str(c).strip() for c in df_list.columns]
-    df_list = df_list.loc[:, ~pd.Index(df_list.columns).duplicated(keep="first")]
+    df_list = df_list.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
     combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
     servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
     contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
     base_contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
-    # sempre ter Nubank CNPJ como opção
     if "Nubank CNPJ" not in base_contas:
         base_contas.append("Nubank CNPJ")
     return clientes, combos, servs, base_contas
@@ -616,7 +616,6 @@ elif acao == "💰 Registrar pagamento":
             f"Total bruto selecionado: **{_fmt_brl(total_sel)}**"
         )
 
-        # bloco da maquininha só quando USAR CARTÃO estiver marcado
         if usar_cartao:
             with st.expander("💳 Detalhes da maquininha (informe o LÍQUIDO)", expanded=True):
                 cdc1, cdc2 = st.columns([1,1])
@@ -652,7 +651,7 @@ elif acao == "💰 Registrar pagamento":
     if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
         dfb, ws_base2 = read_base_raw(ss)
         ensure_headers(ws_base2, BASE_COLS_ALL)
-        format_extras_numeric(ws_base2)  # 👈 garante número/percentual nas extras
+        format_extras_numeric(ws_base2)
 
         if modo_sel.startswith("Por ID"):
             mask = dfb.get("IDLancFiado", "").isin(id_selecionados)
@@ -675,9 +674,8 @@ elif acao == "💰 Registrar pagamento":
             taxa_total_valor = max(0.0, total_bruto - total_liquido)
             taxa_total_pct   = (taxa_total_valor / total_bruto * 100.0) if total_bruto > 0 else 0.0
 
-            headers_map = col_map(ws_base2)  # nomes normalizados -> índice (primeira ocorrência)
-            updates = []
-            liq_acum = 0.0
+            headers_map = col_map(ws_base2)
+            updates, liq_acum = [], 0.0
             idxs = list(subset_all.index)
             for i, idx in enumerate(idxs):
                 row_no = int(idx) + 2
@@ -697,7 +695,7 @@ elif acao == "💰 Registrar pagamento":
                     "StatusFiado": "Pago",
                     "VencimentoFiado": "",
                     "DataPagamento": data_pag_str,
-                    "Valor": liq_i,  # 👈 grava LÍQUIDO no Valor (competência)
+                    "Valor": liq_i,
                     "ValorBrutoRecebido": (bruto_i if usar_cartao else ""),
                     "ValorLiquidoRecebido": (liq_i if usar_cartao else ""),
                     "TaxaCartaoValor": (taxa_i if usar_cartao else ""),
@@ -713,7 +711,6 @@ elif acao == "💰 Registrar pagamento":
             if updates:
                 ws_base2.batch_update(updates, value_input_option="USER_ENTERED")
 
-            # grava planilha de taxas somente se cartão
             if usar_cartao:
                 try:
                     ws_taxas = garantir_aba(ss, ABA_TAXAS, TAXAS_COLS)
@@ -758,6 +755,10 @@ elif acao == "💰 Registrar pagamento":
             try:
                 servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
                 ids_txt = ", ".join(sorted(set(subset_all["IDLancFiado"].astype(str))))
+                linha_taxa = (
+                    f"🧾 Taxa: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>\n"
+                    if usar_cartao else ""
+                )
                 msg_html = (
                     "✅ <b>Fiado quitado (competência)</b>\n"
                     f"👤 Cliente: <b>{cliente_sel}</b>\n"
@@ -765,7 +766,7 @@ elif acao == "💰 Registrar pagamento":
                     f"💳 Forma: <b>{forma_pag}</b>\n"
                     f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
                     f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
-                    f"🧾 Taxa: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>\n"
+                    + linha_taxa +
                     f"📅 Data pagto: {data_pag_str}\n"
                     f"🗂️ IDs: <code>{ids_txt}</code>\n"
                     f"📝 Obs: {obs or '-'}"
@@ -822,14 +823,19 @@ elif acao == "💰 Registrar pagamento":
                 else:
                     bloco_srv = f"\n------------------------------\n🔎 <b>{ano_corr}: por serviço</b>\n• (sem registros)"
 
+                linha_taxa_jp = (
+                    f"\n🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>"
+                    if usar_cartao else ""
+                )
+
                 servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
                 msg_jp = (
                     "🧾 <b>Cópia para controle</b>\n"
                     f"👤 Cliente: <b>{cliente_sel}</b>\n"
                     f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
                     f"💳 Forma: <b>{forma_pag}</b>\n"
-                    f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
-                    f"🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>"
+                    f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>"
+                    + linha_taxa_jp
                     + sec_comissao + bloco_hist + bloco_srv
                 )
                 foto = FOTOS.get(_norm(cliente_sel))
