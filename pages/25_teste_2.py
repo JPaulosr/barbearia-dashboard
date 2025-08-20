@@ -1,359 +1,404 @@
 # -*- coding: utf-8 -*-
-# 12_Comissoes.py — Comissão por Funcionário (direto da Base, com cards mensal/anual + seletor)
-
+# Detalhes do Funcionário — versão mobile-first (tabs, CSS compacto)
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+from io import BytesIO
 import gspread
-from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
-from datetime import datetime, date
-import pytz
+from google.oauth2.service_account import Credentials
 
-# =============================
-# CONFIG
-# =============================
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"
-TZ = "America/Sao_Paulo"
+# =========================
+# CONFIG GERAL + CSS MOBILE
+# =========================
+st.set_page_config(page_title="Detalhes do Funcionário", layout="wide")
 
-# Padrão de % de comissão por FUNCIONÁRIO (se a base NÃO trouxer "% Comissão" por linha)
-# -> ajuste livre conforme sua regra
-DEFAULT_PCT_MAP = {
-    "Vinicius": 0.50,  # 50%
-    # Para os demais, 0% (dono etc.) — você pode adicionar aqui se quiser outra % padrão
+st.markdown("""
+<style>
+/* reduz margens no mobile */
+.block-container { padding-top: 0.6rem; padding-left: 0.6rem; padding-right: 0.6rem; }
+
+/* títulos um pouco menores no mobile */
+h1, h2, h3 { line-height: 1.2; }
+
+/* botões maiores para toque */
+.stButton>button, .stDownloadButton>button {
+  padding: 0.8rem 1rem; border-radius: 12px; font-size: 1rem;
 }
 
-# Nomes possíveis de colunas na base (compatibilidade)
-COL_DATA      = "Data"
-COL_SERVICO   = "Serviço"
-COL_VALOR     = "Valor"
-COL_CLIENTE   = "Cliente"
-COL_FUNC      = "Funcionário"
-COL_TIPO      = "Tipo"              # "Fiado" ou não
-COL_STATUSF   = "StatusFiado"       # "Pago" / "A receber" etc, se houver
-COL_DT_PAG    = "DataPagamento"     # para fiado quitado, se houver
-COL_PCT       = "% Comissão"        # se a base já trouxer % por linha
-COL_REFID     = "RefID"             # se existir, apenas exibimos
-COL_PERIODO   = "Período"           # opcional, não é usado no cálculo
+/* cards de métricas com sombra suave */
+div[data-testid="stMetric"] {
+  border-radius: 14px; box-shadow: 0 6px 18px rgba(0,0,0,.08);
+  padding: 0.6rem; background: rgba(250,250,250,.75);
+}
 
-# =============================
-# CONEXÃO
-# =============================
-@st.cache_resource(show_spinner=False)
-def conectar_sheets():
-    """Conecta no Google Sheets via Service Account do st.secrets."""
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(st.secrets["GCP_SERVICE_ACCOUNT"], scopes=scopes)
-    return gspread.authorize(creds)
+/* tabelas com rolagem horizontal no mobile */
+[data-testid="stDataFrame"] div[role="table"] { overflow-x: auto; }
 
-@st.cache_data(show_spinner=False, ttl=300)
-def carregar_base():
-    """Carrega a Base de Dados sem receber objetos não-hashable como argumento."""
-    gc = conectar_sheets()
-    sh = gc.open_by_key(SHEET_ID)
-    ws = sh.worksheet(ABA_DADOS)
-    df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-
-    # Higienização mínima
-    df = df.dropna(how="all")
-
-    # Normaliza DATA
-    if COL_DATA in df.columns:
-        def _parse_data(x):
-            if pd.isna(x): return None
-            if isinstance(x, (datetime, date)): return pd.to_datetime(x)
-            x = str(x).strip()
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                try:
-                    return pd.to_datetime(x, format=fmt, dayfirst=True)
-                except Exception:
-                    pass
-            try:
-                return pd.to_datetime(x, dayfirst=True, errors="coerce")
-            except Exception:
-                return None
-        df[COL_DATA] = df[COL_DATA].apply(_parse_data)
-
-    # Valor numérico
-    if COL_VALOR in df.columns:
-        df[COL_VALOR] = pd.to_numeric(df[COL_VALOR], errors="coerce").fillna(0.0)
-
-    # % comissão (se houver)
-    if COL_PCT in df.columns:
-        def _pct(v):
-            if pd.isna(v): return None
-            s = str(v).strip().replace(",", ".")
-            if s.endswith("%"):
-                try:
-                    return float(s[:-1]) / 100.0
-                except:
-                    return None
-            try:
-                f = float(s)
-                return f/100.0 if f > 1 else f
-            except:
-                return None
-        df[COL_PCT] = df[COL_PCT].apply(_pct)
-
-    return df
-
-# =============================
-# LÓGICA
-# =============================
-def filtrar_por_funcionario(df_raw, funcionario, incluir_fiado_nao_pago=False):
-    """Filtra por funcionário e calcula comissão.
-       Valor para comissão: DIRETO da Base (coluna Valor).
-       % por linha (se existir) tem prioridade; senão usa DEFAULT_PCT_MAP[func] (ou 0.0).
-    """
-    if df_raw.empty:
-        return df_raw.copy()
-
-    df = df_raw.copy()
-
-    # Filtra funcionário
-    if COL_FUNC in df.columns:
-        df = df[df[COL_FUNC].astype(str).str.strip().str.lower() == str(funcionario).strip().lower()]
-    else:
-        df = df.head(0)  # se não há coluna, retorna vazio
-
-    if df.empty:
-        return df
-
-    # Fiado
-    tipo_series = df[COL_TIPO].astype(str).str.strip().str.lower() if COL_TIPO in df.columns else pd.Series([""]*len(df), index=df.index)
-    eh_fiado = tipo_series.eq("fiado")
-
-    if not incluir_fiado_nao_pago:
-        # incluir apenas fiado pago (StatusFiado == "Pago" ou DataPagamento preenchida)
-        pago_mask = pd.Series([False]*len(df), index=df.index)
-        if COL_STATUSF in df.columns:
-            pago_mask |= df[COL_STATUSF].astype(str).str.strip().str.lower().isin(
-                ["pago", "paga", "quitado", "quitada", "liberado", "liberada"]
-            )
-        if COL_DT_PAG in df.columns:
-            pago_mask |= df[COL_DT_PAG].notna() & (df[COL_DT_PAG].astype(str).str.strip() != "")
-        # mantém: não-fiado OR (fiado & pago)
-        df = df[(~eh_fiado) | (eh_fiado & pago_mask)]
-
-    # Valor para comissão: DIRETO da base
-    df["Valor_para_comissao"] = df[COL_VALOR].astype(float)
-
-    # % da comissão por linha > senão padrão do funcionário > senão 0.0
-    if COL_PCT in df.columns and df[COL_PCT].notna().any():
-        pct_series = df[COL_PCT].fillna(DEFAULT_PCT_MAP.get(funcionario, 0.0))
-    else:
-        pct_series = DEFAULT_PCT_MAP.get(funcionario, 0.0)
-
-    df["Pct_Comissao"] = pct_series
-    df["Comissao_R$"] = (df["Valor_para_comissao"] * df["Pct_Comissao"]).round(2)
-
-    # Campos auxiliares
-    df["Ano"] = pd.to_datetime(df[COL_DATA]).dt.year
-    df["Mes"] = pd.to_datetime(df[COL_DATA]).dt.month
-
-    return df
-
-def resumo_cards(df, ano_alvo=None, mes_alvo=None, titulo="Resumo"):
-    """Gera métricas básicas para cards."""
-    if df.empty:
-        return dict(atendimentos=0, clientes=0, base=0.0, comissao=0.0, titulo=titulo)
-
-    dfx = df.copy()
-    if ano_alvo:
-        dfx = dfx[dfx["Ano"] == ano_alvo]
-    if mes_alvo:
-        dfx = dfx[(dfx["Mes"] == mes_alvo) & (dfx["Ano"] == (ano_alvo if ano_alvo else dfx["Ano"]))]
-
-    if dfx.empty:
-        return dict(atendimentos=0, clientes=0, base=0.0, comissao=0.0, titulo=titulo)
-
-    atend = len(dfx)
-    clientes = dfx[COL_CLIENTE].astype(str).str.strip().nunique() if COL_CLIENTE in dfx.columns else atend
-    base = dfx["Valor_para_comissao"].sum()
-    com = dfx["Comissao_R$"].sum()
-    return dict(
-        atendimentos=int(atend),
-        clientes=int(clientes),
-        base=float(round(base, 2)),
-        comissao=float(round(com, 2)),
-        titulo=titulo
-    )
-
-def card_html(titulo, valor1_label, valor1, valor2_label, valor2):
-    """Card simples em HTML (dark)."""
-    return f"""
-    <div style="
-        background: #121212;
-        border: 1px solid #2a2a2a;
-        border-radius: 16px;
-        padding: 18px 18px;
-        color: #eaeaea;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-    ">
-      <div style="font-size: 14px; opacity: 0.85; margin-bottom: 6px;">{titulo}</div>
-      <div style="display:flex; justify-content: space-between; gap:16px;">
-        <div>
-          <div style="font-size:12px; opacity:.7;">{valor1_label}</div>
-          <div style="font-size:24px; font-weight:700;">{valor1}</div>
-        </div>
-        <div>
-          <div style="font-size:12px; opacity:.7; text-align:right;">{valor2_label}</div>
-          <div style="font-size:24px; font-weight:700; text-align:right;">{valor2}</div>
-        </div>
-      </div>
-    </div>
-    """
-
-def fmt_moeda(v):
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-# =============================
-# UI
-# =============================
-st.set_page_config(page_title="Comissão por Funcionário", layout="wide")
-st.title("💈 Comissão — direto da Base")
-
-# Carregar base
-df_raw = carregar_base()
-
-# =============================
-# Seletor de Funcionário
-# =============================
-col_top1, col_top2, col_top3, col_top4 = st.columns([1.2, 1, 1, 2])
-with col_top1:
-    incluir_fiado = st.toggle("Incluir FIADO não pago", value=False, help="Quando desligado, só entram fiados quitados.")
-
-# Lista de funcionários disponíveis (ordenada; Vinicius padrão se existir)
-if COL_FUNC in df_raw.columns and not df_raw.empty:
-    funcoes = (
-        df_raw[COL_FUNC]
-        .dropna()
-        .astype(str)
-        .str.strip()
-        .replace("", pd.NA)
-        .dropna()
-        .unique()
-        .tolist()
-    )
-    funcoes = sorted(funcoes, key=lambda x: x.lower())
-else:
-    funcoes = []
-
-default_index = 0
-if "Vinicius" in funcoes:
-    default_index = funcoes.index("Vinicius")
-
-with col_top2:
-    funcionario_sel = st.selectbox("Funcionário", options=funcoes if funcoes else ["(sem dados)"], index=default_index if funcoes else 0)
-
-with col_top3:
-    hoje = datetime.now(pytz.timezone(TZ))
-    ano_sel = st.number_input("Ano", min_value=2023, max_value=hoje.year, value=hoje.year, step=1)
-
-with col_top4:
-    mes_sel = st.number_input("Mês", min_value=1, max_value=12, value=hoje.month, step=1)
-    st.caption("Obs.: O cálculo usa **Valor** da Base de Dados. Se existir **% Comissão** por linha na Base, ela prevalece; caso contrário, usa o padrão do funcionário (ex.: Vinicius 50%).")
-
-# Filtrar por funcionário escolhido
-df = filtrar_por_funcionario(df_raw, funcionario_sel, incluir_fiado_nao_pago=incluir_fiado) if funcoes else pd.DataFrame()
-
-# ===== CARDS =====
-st.subheader(f"📌 {funcionario_sel} — Resumos")
-res_mes = resumo_cards(df, ano_alvo=int(ano_sel), mes_alvo=int(mes_sel), titulo=f"Mês {mes_sel:02d}/{ano_sel}")
-res_ano = resumo_cards(df, ano_alvo=int(ano_sel), titulo=f"Ano {ano_sel}")
-
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.markdown(card_html(
-        res_mes["titulo"],
-        "Atendimentos",
-        f'{res_mes["atendimentos"]}',
-        "Clientes únicos",
-        f'{res_mes["clientes"]}',
-    ), unsafe_allow_html=True)
-with c2:
-    st.markdown(card_html(
-        "Base p/ comissão (Mês)",
-        "Base",
-        fmt_moeda(res_mes["base"]),
-        "Comissão",
-        fmt_moeda(res_mes["comissao"]),
-    ), unsafe_allow_html=True)
-with c3:
-    st.markdown(card_html(
-        res_ano["titulo"],
-        "Atendimentos",
-        f'{res_ano["atendimentos"]}',
-        "Clientes únicos",
-        f'{res_ano["clientes"]}',
-    ), unsafe_allow_html=True)
-with c4:
-    st.markdown(card_html(
-        "Base p/ comissão (Ano)",
-        "Base",
-        fmt_moeda(res_ano["base"]),
-        "Comissão",
-        fmt_moeda(res_ano["comissao"]),
-    ), unsafe_allow_html=True)
-
-st.divider()
-
-# ===== QUEBRA POR SERVIÇO (MÊS SELECIONADO) =====
-st.subheader("📊 Quebra por serviço — Mês selecionado")
-df_mes = df[(df["Ano"] == int(ano_sel)) & (df["Mes"] == int(mes_sel))].copy() if not df.empty else pd.DataFrame()
-if not df_mes.empty:
-    grp = (
-        df_mes
-        .groupby(COL_SERVICO, dropna=False)
-        .agg(
-            Qtde=("Valor_para_comissao", "count"),
-            Base=("Valor_para_comissao", "sum"),
-            Comissao=("Comissao_R$", "sum")
-        )
-        .reset_index()
-        .sort_values(["Base", "Qtde"], ascending=[False, False])
-    )
-    grp["Base"] = grp["Base"].round(2)
-    grp["Comissao"] = grp["Comissao"].round(2)
-
-    grp_fmt = grp.copy()
-    grp_fmt["Base"] = grp_fmt["Base"].apply(fmt_moeda)
-    grp_fmt["Comissao"] = grp_fmt["Comissao"].apply(fmt_moeda)
-    st.dataframe(grp_fmt, hide_index=True, use_container_width=True)
-else:
-    st.info("Sem registros para o mês selecionado.")
-
-# ===== TABELA DETALHADA (OPCIONAL) =====
-with st.expander("Ver detalhes das linhas (opcional)"):
-    cols_show = []
-    for c in [COL_DATA, COL_CLIENTE, COL_SERVICO, COL_VALOR, "Valor_para_comissao", "Pct_Comissao", "Comissao_R$", COL_TIPO, COL_STATUSF, COL_DT_PAG, COL_REFID]:
-        if not df.empty and c in df.columns:
-            cols_show.append(c)
-
-    dfd = df[(df["Ano"] == int(ano_sel)) & (df["Mes"] == int(mes_sel))][cols_show].copy() if cols_show else pd.DataFrame()
-    if not dfd.empty:
-        if COL_DATA in dfd.columns:
-            dfd[COL_DATA] = pd.to_datetime(dfd[COL_DATA], errors="coerce").dt.strftime("%d/%m/%Y")
-        for colnum in ["Valor_para_comissao", "Comissao_R$"]:
-            if colnum in dfd.columns:
-                dfd[colnum] = dfd[colnum].apply(fmt_moeda)
-        if "Pct_Comissao" in dfd.columns:
-            dfd["Pct_Comissao"] = (pd.to_numeric(dfd["Pct_Comissao"], errors="coerce").fillna(0)*100).round(0).astype(int).astype(str) + "%"
-        st.dataframe(dfd, hide_index=True, use_container_width=True)
-    else:
-        st.caption("Sem linhas detalhadas para o período.")
-
-# ===== RODAPÉ =====
-st.markdown(f"""
-<small>
-• Funcionário selecionado: <b>{funcionario_sel}</b>.<br>
-• A comissão é calculada <b>diretamente sobre o Valor da Base de Dados</b>.<br>
-• Fiados <b>não pagos</b> são excluídos por padrão. Use o toggle no topo se quiser incluí-los.<br>
-• Se a Base tiver a coluna <b>% Comissão</b>, ela é respeitada por linha.<br>
-• Caso não haja <b>% Comissão</b> por linha, aplica-se o padrão do funcionário
-  (ex.: Vinicius = 50%; outros = 0%), configurável em <code>DEFAULT_PCT_MAP</code>.
-</small>
+/* esconde header quando instalado como app (webclip/pwa) */
+@media (display-mode: standalone) { header, footer { display:none; } }
+</style>
 """, unsafe_allow_html=True)
+
+st.title("🧑‍💼 Detalhes do Funcionário")
+
+# =========================
+# CONFIGURAÇÃO GOOGLE SHEETS
+# =========================
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+BASE_ABA = "Base de Dados"
+
+@st.cache_resource
+def conectar_sheets():
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
+
+@st.cache_data
+def carregar_dados():
+    planilha = conectar_sheets()
+    aba = planilha.worksheet(BASE_ABA)
+    df = get_as_dataframe(aba).dropna(how="all")
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # datas
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+    df = df.dropna(subset=["Data"])
+    df["Ano"] = df["Data"].dt.year.astype(int)
+
+    # numéricos
+    if "Valor" in df.columns:
+        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+    else:
+        df["Valor"] = 0.0
+
+    # normaliza coluna de pagamento (fiado/pago)
+    conta_col = "Conta" if "Conta" in df.columns else ("Forma de Pagamento" if "Forma de Pagamento" in df.columns else None)
+    if conta_col:
+        df["Conta_norm"] = df[conta_col].astype(str).str.strip().str.lower().replace({"nan": ""})
+    else:
+        df["Conta_norm"] = ""
+
+    # garante colunas esperadas
+    for c in ["Funcionário", "Cliente", "Serviço"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    return df
+
+@st.cache_data
+def carregar_despesas():
+    planilha = conectar_sheets()
+    aba_desp = planilha.worksheet("Despesas")
+    df_desp = get_as_dataframe(aba_desp).dropna(how="all")
+    df_desp.columns = [str(col).strip() for col in df_desp.columns]
+    df_desp["Data"] = pd.to_datetime(df_desp["Data"], errors="coerce")
+    df_desp = df_desp.dropna(subset=["Data"])
+    df_desp["Ano"] = df_desp["Data"].dt.year.astype(int)
+
+    # numérico
+    if "Valor" in df_desp.columns:
+        df_desp["Valor"] = pd.to_numeric(df_desp["Valor"], errors="coerce").fillna(0.0)
+    else:
+        df_desp["Valor"] = 0.0
+
+    # normaliza texto
+    for c in ["Prestador", "Descrição"]:
+        if c not in df_desp.columns:
+            df_desp[c] = ""
+        else:
+            df_desp[c] = df_desp[c].astype(str)
+
+    return df_desp
+
+def fmt_brl(x: float) -> str:
+    return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
+
+# =========================
+# CARGA
+# =========================
+df = carregar_dados()
+df_despesas = carregar_despesas()
+
+# =========================
+# FILTROS SUPERIORES (compactos)
+# =========================
+funcionarios = sorted(df["Funcionário"].dropna().unique().tolist())
+anos = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
+
+col_top = st.columns(2)
+ano_escolhido = col_top[0].selectbox("🗕️ Ano", anos, index=0)
+funcionario_escolhido = col_top[1].selectbox("📋 Funcionário", funcionarios)
+
+modo_pag = st.radio(
+    "Filtro de pagamento",
+    ["Apenas pagos", "Apenas fiado", "Incluir tudo"],
+    index=0, horizontal=True,
+    help="Considera a coluna Conta/Forma de Pagamento normalizada."
+)
+
+df_base_ano = df[df["Ano"] == ano_escolhido].copy()
+if modo_pag == "Apenas pagos":
+    df_base_ano = df_base_ano[df_base_ano["Conta_norm"] != "fiado"]
+elif modo_pag == "Apenas fiado":
+    df_base_ano = df_base_ano[df_base_ano["Conta_norm"] == "fiado"]
+
+df_func = df_base_ano[df_base_ano["Funcionário"] == funcionario_escolhido].copy()
+
+with st.expander("🔎 Filtros avançados", expanded=False):
+    col_f1, col_f2, col_f3 = st.columns(3)
+    # Mês
+    meses_disponiveis = sorted(df_func["Data"].dt.month.unique())
+    mes_filtro = col_f1.selectbox("📆 Mês", options=["Todos"] + list(meses_disponiveis))
+    if mes_filtro != "Todos":
+        df_func = df_func[df_func["Data"].dt.month == mes_filtro]
+
+    # Dia
+    dias_disponiveis = sorted(df_func["Data"].dt.day.unique())
+    dia_filtro = col_f2.selectbox("📅 Dia", options=["Todos"] + list(dias_disponiveis))
+    if dia_filtro != "Todos":
+        df_func = df_func[df_func["Data"].dt.day == dia_filtro]
+
+    # Semana ISO
+    df_func["Semana"] = df_func["Data"].dt.isocalendar().week
+    semanas_disponiveis = sorted(df_func["Semana"].unique().tolist())
+    semana_filtro = col_f3.selectbox("🗓️ Semana ISO", options=["Todas"] + list(semanas_disponiveis))
+    if semana_filtro != "Todas":
+        df_func = df_func[df_func["Semana"] == semana_filtro]
+
+    # Tipo de serviço
+    tipos_servico = sorted(df_func["Serviço"].dropna().unique().tolist())
+    tipo_selecionado = st.multiselect("Tipo de serviço", tipos_servico)
+    if tipo_selecionado:
+        df_func = df_func[df_func["Serviço"].isin(tipo_selecionado)]
+
+# =========================
+# TABS (mobile-first)
+# =========================
+tab_resumo, tab_graficos, tab_historico, tab_exportar = st.tabs(
+    ["📌 Resumo", "📊 Gráficos", "📜 Histórico", "📄 Exportar"]
+)
+
+# ======= TAB RESUMO =======
+with tab_resumo:
+    st.subheader("📌 Insights do Funcionário")
+
+    # Métricas (2 por linha no mobile fica ok)
+    col1, col2 = st.columns(2)
+    col3, col4 = st.columns(2)
+
+    total_atendimentos = int(df_func.shape[0])
+    clientes_unicos = int(df_func["Cliente"].nunique())
+    total_receita = float(df_func["Valor"].sum())
+    ticket_medio_geral = float(df_func["Valor"].mean()) if total_atendimentos > 0 else 0.0
+
+    col1.metric("🔢 Atendimentos", total_atendimentos)
+    col2.metric("👥 Clientes únicos", clientes_unicos)
+    col3.metric("💰 Receita total", fmt_brl(total_receita))
+    col4.metric("🎫 Ticket médio", fmt_brl(ticket_medio_geral))
+
+    # Dia mais cheio
+    dia_mais_cheio = (
+        df_func.groupby(df_func["Data"].dt.date).size()
+        .reset_index(name="Atendimentos")
+        .sort_values("Atendimentos", ascending=False)
+        .head(1)
+    )
+    if not dia_mais_cheio.empty:
+        data_cheia = pd.to_datetime(dia_mais_cheio.iloc[0, 0]).strftime("%d/%m/%Y")
+        qtd_atend = int(dia_mais_cheio.iloc[0, 1])
+        st.info(f"📅 Dia com mais atendimentos: **{data_cheia}** com **{qtd_atend}**")
+
+    # Resumos de receita/comissão (tabelas curtas)
+    if funcionario_escolhido.lower() == "vinicius":
+        bruto = float(df_func["Valor"].sum())
+        comissao_real = float(
+            df_despesas[
+                (df_despesas["Prestador"] == "Vinicius") &
+                (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
+                (df_despesas["Ano"] == ano_escolhido)
+            ]["Valor"].abs().sum()
+        )
+        receita_liquida = comissao_real
+        receita_salao = bruto - comissao_real
+
+        st.markdown("#### 💸 Receita do Vinicius & Salão")
+        st.dataframe(
+            pd.DataFrame({
+                "Tipo de Receita": [
+                    "Receita Bruta de Vinicius",
+                    "Receita de Vinicius (comissão real)",
+                    "Valor que ficou para o salão"
+                ],
+                "Valor": [fmt_brl(bruto), fmt_brl(receita_liquida), fmt_brl(receita_salao)]
+            }),
+            use_container_width=True, height=160
+        )
+
+    elif funcionario_escolhido.lower() == "jpaulo":
+        receita_jpaulo = float(df_func["Valor"].sum())
+        receita_vinicius_total = float(
+            df_base_ano[(df_base_ano["Funcionário"] == "Vinicius") & (df_base_ano["Ano"] == ano_escolhido)]["Valor"].sum()
+        )
+        comissao_paga = float(
+            df_despesas[
+                (df_despesas["Prestador"] == "Vinicius") &
+                (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
+                (df_despesas["Ano"] == ano_escolhido)
+            ]["Valor"].abs().sum()
+        )
+        receita_liquida_vinicius = max(0.0, receita_vinicius_total - comissao_paga)
+        receita_total_salao = receita_jpaulo + receita_liquida_vinicius
+
+        st.markdown("#### 💰 Receita do Salão (JPaulo como dono)")
+        st.dataframe(
+            pd.DataFrame({
+                "Origem": [
+                    "Receita JPaulo",
+                    "Receita Vinicius (líquida)",
+                    "Comissão paga ao Vinicius (despesa)",
+                    "Total receita do salão"
+                ],
+                "Valor": [fmt_brl(receita_jpaulo), fmt_brl(receita_liquida_vinicius), fmt_brl(comissao_paga), fmt_brl(receita_total_salao)]
+            }),
+            use_container_width=True, height=180
+        )
+
+# ======= TAB GRÁFICOS =======
+with tab_graficos:
+    # Atendimentos por dia da semana
+    st.markdown("### 📆 Atendimentos por dia da semana")
+    dias_semana = {0: "Seg", 1: "Ter", 2: "Qua", 3: "Qui", 4: "Sex", 5: "Sáb", 6: "Dom"}
+    order_semana = {"Seg":0, "Ter":1, "Qua":2, "Qui":3, "Sex":4, "Sáb":5, "Dom":6}
+
+    df_semana = df_func.copy()
+    df_semana["DiaSemana"] = df_semana["Data"].dt.dayofweek.map(dias_semana)
+    grafico_semana = (
+        df_semana.groupby("DiaSemana").size()
+        .reset_index(name="Qtd Atendimentos")
+        .sort_values("DiaSemana", key=lambda x: x.map(order_semana))
+    )
+    fig_dias = px.bar(
+        grafico_semana, x="DiaSemana", y="Qtd Atendimentos",
+        text_auto=True, template="plotly_white"
+    )
+    fig_dias.update_layout(height=380, margin=dict(t=30, b=20))
+    st.plotly_chart(fig_dias, use_container_width=True, key="graf_semana")
+
+    # Média de atendimentos por dia do mês
+    st.markdown("### 🗓️ Média de atendimentos por dia do mês")
+    df_dm = df_func.copy()
+    df_dm["Dia"] = df_dm["Data"].dt.day
+    media_por_dia = df_dm.groupby("Dia").size().reset_index(name="Média por dia")
+    fig_dia_mes = px.line(media_por_dia, x="Dia", y="Média por dia", markers=True, template="plotly_white")
+    fig_dia_mes.update_layout(height=360, margin=dict(t=30, b=20))
+    st.plotly_chart(fig_dia_mes, use_container_width=True, key="graf_media_dia")
+
+    # Receita mensal (com lógica especial p/ JPaulo)
+    st.markdown("### 📊 Receita Mensal")
+    meses_pt = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
+        7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    }
+    df_mensal = df_func.copy()
+    df_mensal["MesNum"] = df_mensal["Data"].dt.month
+    df_mensal["MesNome"] = df_mensal["MesNum"].map(meses_pt) + df_mensal["Data"].dt.strftime(" %Y")
+    receita_jp = df_mensal.groupby(["MesNum", "MesNome"])["Valor"].sum().reset_index(name="JPaulo")
+    receita_jp = receita_jp.sort_values("MesNum")
+
+    # Comissão real Vinicius (sempre por ano escolhido)
+    df_com_vinicius = df_despesas[
+        (df_despesas["Prestador"] == "Vinicius") &
+        (df_despesas["Descrição"].str.contains("comissão", case=False, na=False)) &
+        (df_despesas["Ano"] == ano_escolhido)
+    ].copy()
+    df_com_vinicius["Valor"] = df_com_vinicius["Valor"].abs()
+    df_com_vinicius["MesNum"] = df_com_vinicius["Data"].dt.month
+    df_com_vinicius = df_com_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="ComissaoRealVinicius")
+
+    if funcionario_escolhido.lower() == "jpaulo":
+        receita_mes_vinicius = df_base_ano[
+            (df_base_ano["Funcionário"] == "Vinicius") & (df_base_ano["Ano"] == ano_escolhido)
+        ].copy()
+        receita_mes_vinicius["MesNum"] = receita_mes_vinicius["Data"].dt.month
+        receita_mes_vinicius = receita_mes_vinicius.groupby("MesNum")["Valor"].sum().reset_index(name="ReceitaVinicius")
+
+        receita_merged = receita_jp.merge(df_com_vinicius, on="MesNum", how="left").merge(
+            receita_mes_vinicius, on="MesNum", how="left"
+        ).fillna(0)
+
+        receita_merged["LiquidoVinicius"] = (receita_merged["ReceitaVinicius"] - receita_merged["ComissaoRealVinicius"]).clip(lower=0)
+        receita_merged["ReceitaRealSalao"] = receita_merged["JPaulo"] + receita_merged["LiquidoVinicius"]
+
+        receita_melt = receita_merged.melt(
+            id_vars=["MesNum", "MesNome"],
+            value_vars=["JPaulo", "ReceitaRealSalao"],
+            var_name="Tipo", value_name="Valor"
+        ).sort_values("MesNum")
+
+        fig_mensal_comp = px.bar(
+            receita_melt, x="MesNome", y="Valor", color="Tipo",
+            barmode="group", text_auto=True,
+            labels={"Valor": "Receita (R$)", "MesNome": "Mês", "Tipo": ""}
+        )
+        fig_mensal_comp.update_layout(height=420, template="plotly_white", margin=dict(t=30, b=20))
+        st.plotly_chart(fig_mensal_comp, use_container_width=True, key="graf_mensal_comp")
+
+        # Tabela curta
+        tabela = receita_merged[["MesNome", "JPaulo", "ComissaoRealVinicius", "ReceitaRealSalao"]].copy()
+        tabela["Receita JPaulo"] = tabela["JPaulo"].apply(fmt_brl)
+        tabela["Comissão paga ao Vinicius"] = tabela["ComissaoRealVinicius"].apply(fmt_brl)
+        tabela["Receita Real do Salão"] = tabela["ReceitaRealSalao"].apply(fmt_brl)
+        st.dataframe(
+            tabela[["MesNome", "Receita JPaulo", "Comissão paga ao Vinicius", "Receita Real do Salão"]],
+            use_container_width=True, height=220
+        )
+
+    else:
+        receita_jp["Valor Formatado"] = receita_jp["JPaulo"].apply(fmt_brl)
+        fig_mensal = px.bar(
+            receita_jp, x="MesNome", y="JPaulo", text="Valor Formatado",
+            labels={"JPaulo": "Receita (R$)", "MesNome": "Mês"}
+        )
+        fig_mensal.update_layout(height=420, template="plotly_white", margin=dict(t=30, b=20))
+        fig_mensal.update_traces(textposition="outside", cliponaxis=False)
+        st.plotly_chart(fig_mensal, use_container_width=True, key="graf_mensal_simples")
+
+    # Ticket Médio por mês (com regra 11/05)
+    st.markdown("### 📉 Ticket Médio por Mês")
+    df_tk = df_func.copy()
+    data_referencia = pd.to_datetime("2025-05-11")
+    df_tk["Grupo"] = df_tk["Data"].dt.strftime("%Y-%m-%d") + "_" + df_tk["Cliente"]
+
+    antes_ticket = df_tk[df_tk["Data"] < data_referencia].copy()
+    antes_ticket["AnoMes"] = antes_ticket["Data"].dt.to_period("M").astype(str)
+    antes_ticket = antes_ticket.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
+
+    depois_ticket = df_tk[df_tk["Data"] >= data_referencia].copy()
+    depois_ticket = depois_ticket.groupby(["Grupo", "Data"])["Valor"].sum().reset_index()
+    depois_ticket["AnoMes"] = depois_ticket["Data"].dt.to_period("M").astype(str)
+    depois_ticket = depois_ticket.groupby("AnoMes")["Valor"].mean().reset_index(name="Ticket Médio")
+
+    ticket_mensal = pd.concat([antes_ticket, depois_ticket]).groupby("AnoMes")["Ticket Médio"].mean().reset_index()
+    ticket_mensal["Ticket Médio Formatado"] = ticket_mensal["Ticket Médio"].apply(fmt_brl)
+    st.dataframe(ticket_mensal, use_container_width=True, height=240)
+
+# ======= TAB HISTÓRICO =======
+with tab_historico:
+    st.subheader("🗕️ Histórico de Atendimentos")
+    with st.expander("Mostrar/ocultar histórico", expanded=False):
+        st.dataframe(df_func.sort_values("Data", ascending=False), use_container_width=True, height=420)
+
+# ======= TAB EXPORTAR =======
+with tab_exportar:
+    st.subheader("📄 Exportar dados filtrados")
+    buffer = BytesIO()
+    df_func.to_excel(buffer, index=False, sheet_name="Filtrado", engine="openpyxl")
+    st.download_button(
+        "Baixar Excel com dados filtrados",
+        data=buffer.getvalue(),
+        file_name="dados_filtrados.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
