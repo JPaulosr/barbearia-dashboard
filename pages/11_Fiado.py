@@ -4,7 +4,7 @@
 # - Quitar por COMPETÊNCIA com atualização mínima
 # - Notificações com FOTO e card HTML; roteamento por funcionário (Vinícius → canal; JPaulo → privado)
 # - Comissão só p/ elegíveis (ex.: Vinicius)
-# - 💳 Maquininha: grava LÍQUIDO no campo Valor da BASE (e preenche colunas extras: bruto/taxa)
+# - 💳 Maquininha: grava LÍQUIDO no campo Valor da BASE (e preenche colunas extras: bruto/taxa) **apenas se usar_cartao=True**
 # - Quitar por ID (combo inteiro) ou por LINHA (serviço)
 # - Fiado_Pagamentos salva TotalLiquido + TotalBruto + Taxa
 
@@ -173,18 +173,34 @@ def append_rows_generic(ws, dicts, default_headers=None):
     if rows:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
 
+# --- mesma detecção do 11_Adicionar_Atendimento ---
 def contains_cartao(s: str) -> bool:
-    MAQUININHA_KEYWORDS = {
+    MAQ = {
         "cart", "cartao", "cartão",
         "credito", "crédito", "debito", "débito",
         "maquina", "maquininha", "maquineta", "pos",
         "pagseguro", "mercadopago", "mercado pago",
         "sumup", "stone", "cielo", "rede", "getnet", "safra",
-        "visa", "master", "elo", "hiper", "amex", "nubank"
+        "visa", "master", "elo", "hiper", "amex",
+        "nubank", "nubank cnpj"
     }
-    x = unicodedata.normalize("NFKD", (s or "")).encode("ascii","ignore").decode("ascii")
+    x = unicodedata.normalize("NFKD", (s or "")).encode("ascii", "ignore").decode("ascii")
     x = x.lower().replace(" ", "")
-    return any(k in x for k in MAQUININHA_KEYWORDS)
+    return any(k in x for k in MAQ)
+
+def is_nao_cartao(conta: str) -> bool:
+    s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower()
+    tokens = {"pix", "dinheiro", "carteira", "cash", "especie", "espécie",
+              "transfer", "transferencia", "transferência", "ted", "doc"}
+    return any(t in s for t in tokens)
+
+def default_card_flag(conta: str) -> bool:
+    s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower().replace(" ", "")
+    if "nubankcnpj" in s:
+        return False           # padrão: transferência; se for NFC, usuário marca manualmente
+    if is_nao_cartao(conta):
+        return False
+    return contains_cartao(conta)
 
 def servicos_compactos_por_ids_parcial(df_rows: pd.DataFrame) -> str:
     if df_rows.empty:
@@ -343,16 +359,21 @@ def carregar_listas():
     ss = conectar_sheets()
     ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     ensure_headers(ws_base, BASE_COLS_ALL)
+
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
     df_list.columns = [str(c).strip() for c in df_list.columns]
+    # 👇 correção: usar df_list.columns (antes estava df.columns)
     df_list = df_list.loc[:, ~pd.Index(df_list.columns).duplicated(keep="first")]
+
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
     combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
-    servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
-    contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
+    servs   = sorted([s for s in df_list.get("Serviço", "").astype(str).str.strip().unique() if s])
+
+    contas_raw = [c for c in df_list.get("Conta", "").astype(str).str.strip().unique() if c]
     base_contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
     if "Nubank CNPJ" not in base_contas:
         base_contas.append("Nubank CNPJ")
+
     return clientes, combos, servs, base_contas
 
 def append_row(nome_aba, vals):
@@ -493,11 +514,20 @@ elif acao == "💰 Registrar pagamento":
 
     ultima = ultima_forma_pagto_cliente(df_base_full, cliente_sel) if cliente_sel else None
     lista_contas_default = ["Pix","Dinheiro","Cartão","Transferência","Pagseguro","Mercado Pago","Nubank CNPJ",
-                            "SumUp","Cielo","Stone","Getnet","Outro"]
+                            "SumUp","Cielo","Stone","Getnet","Outro","Nubank"]
     lista_contas = sorted(set(contas_exist + lista_contas_default), key=lambda s: s.lower())
     default_idx = lista_contas.index(ultima) if (ultima in lista_contas) else 0
     with colc2:
         forma_pag = st.selectbox("Forma de pagamento (quitação)", options=lista_contas, index=default_idx)
+
+    # === checkbox de cartão (mesma lógica do 11) ===
+    force_off = is_nao_cartao(forma_pag)
+    usar_cartao = st.checkbox(
+        "Tratar como cartão (com taxa)?",
+        value=(False if force_off else default_card_flag(forma_pag)),
+        disabled=force_off,
+        help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off else "Use quando passar no POS/NFC.")
+    )
 
     modo_sel = st.radio("Modo de seleção de quitação", ["Por ID (combo inteiro)", "Por linha (serviço)"], index=0, horizontal=True)
 
@@ -591,8 +621,8 @@ elif acao == "💰 Registrar pagamento":
             f"Total bruto selecionado: **{_fmt_brl(total_sel)}**"
         )
 
-        if contains_cartao(forma_pag):
-            with st.expander("💳 Detalhes da maquininha (opcional)", expanded=True):
+        if usar_cartao:
+            with st.expander("💳 Detalhes da maquininha (informe o LÍQUIDO)", expanded=True):
                 cdc1, cdc2 = st.columns([1,1])
                 with cdc1:
                     valor_liquido_cartao = st.number_input(
@@ -626,7 +656,7 @@ elif acao == "💰 Registrar pagamento":
     if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
         dfb, ws_base2 = read_base_raw(ss)
         ensure_headers(ws_base2, BASE_COLS_ALL)
-        format_extras_numeric(ws_base2)  # 👈 garante número/percentual nas extras
+        format_extras_numeric(ws_base2)
 
         if modo_sel.startswith("Por ID"):
             mask = dfb.get("IDLancFiado", "").isin(id_selecionados)
@@ -642,16 +672,15 @@ elif acao == "💰 Registrar pagamento":
             data_pag_str = data_pag.strftime(DATA_FMT)
 
             id_pag = f"P-{datetime.now(TZ).strftime('%Y%m%d%H%M%S%f')[:-3]}"
-            if contains_cartao(forma_pag) and (valor_liquido_cartao is not None):
+            if usar_cartao and (valor_liquido_cartao is not None):
                 total_liquido = float(valor_liquido_cartao or 0.0)
             else:
                 total_liquido = total_bruto
             taxa_total_valor = max(0.0, total_bruto - total_liquido)
             taxa_total_pct   = (taxa_total_valor / total_bruto * 100.0) if total_bruto > 0 else 0.0
 
-            headers_map = col_map(ws_base2)  # nomes normalizados -> índice (primeira ocorrência)
-            updates = []
-            liq_acum = 0.0
+            headers_map = col_map(ws_base2)
+            updates, liq_acum = [], 0.0
             idxs = list(subset_all.index)
             for i, idx in enumerate(idxs):
                 row_no = int(idx) + 2
@@ -671,23 +700,23 @@ elif acao == "💰 Registrar pagamento":
                     "StatusFiado": "Pago",
                     "VencimentoFiado": "",
                     "DataPagamento": data_pag_str,
-                    "Valor": liq_i,  # 👈 grava LÍQUIDO no Valor (coluna correta)
-                    "ValorBrutoRecebido": bruto_i,
-                    "ValorLiquidoRecebido": liq_i,
-                    "TaxaCartaoValor": taxa_i,
-                    "TaxaCartaoPct": round(taxa_pct_i, 4),
-                    "FormaPagDetalhe": f"{(bandeira_cartao or '-')} | {tipo_cartao} | {int(parcelas_cartao)}x" if contains_cartao(forma_pag) else "",
+                    "Valor": liq_i,
+                    "ValorBrutoRecebido": (bruto_i if usar_cartao else ""),
+                    "ValorLiquidoRecebido": (liq_i if usar_cartao else ""),
+                    "TaxaCartaoValor": (taxa_i if usar_cartao else ""),
+                    "TaxaCartaoPct": (round(taxa_pct_i, 4) if usar_cartao else ""),
+                    "FormaPagDetalhe": (f"{(bandeira_cartao or '-')} | {tipo_cartao} | {int(parcelas_cartao)}x" if usar_cartao else ""),
                     "PagamentoID": id_pag
                 }
                 for col, val in pairs.items():
-                    c = headers_map.get(_norm_key(col))  # 👈 usa chave normalizada
+                    c = headers_map.get(_norm_key(col))
                     if c:
                         updates.append({"range": rowcol_to_a1(row_no, c), "values": [[val]]})
 
             if updates:
                 ws_base2.batch_update(updates, value_input_option="USER_ENTERED")
 
-            if contains_cartao(forma_pag):
+            if usar_cartao:
                 try:
                     ws_taxas = garantir_aba(ss, ABA_TAXAS, TAXAS_COLS)
                     ensure_headers(ws_taxas, TAXAS_COLS)
@@ -731,6 +760,10 @@ elif acao == "💰 Registrar pagamento":
             try:
                 servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
                 ids_txt = ", ".join(sorted(set(subset_all["IDLancFiado"].astype(str))))
+                linha_taxa = (
+                    f"🧾 Taxa: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>\n"
+                    if usar_cartao else ""
+                )
                 msg_html = (
                     "✅ <b>Fiado quitado (competência)</b>\n"
                     f"👤 Cliente: <b>{cliente_sel}</b>\n"
@@ -738,7 +771,7 @@ elif acao == "💰 Registrar pagamento":
                     f"💳 Forma: <b>{forma_pag}</b>\n"
                     f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
                     f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
-                    f"🧾 Taxa: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>\n"
+                    + linha_taxa +
                     f"📅 Data pagto: {data_pag_str}\n"
                     f"🗂️ IDs: <code>{ids_txt}</code>\n"
                     f"📝 Obs: {obs or '-'}"
@@ -795,14 +828,19 @@ elif acao == "💰 Registrar pagamento":
                 else:
                     bloco_srv = f"\n------------------------------\n🔎 <b>{ano_corr}: por serviço</b>\n• (sem registros)"
 
+                linha_taxa_jp = (
+                    f"\n🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>"
+                    if usar_cartao else ""
+                )
+
                 servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
                 msg_jp = (
                     "🧾 <b>Cópia para controle</b>\n"
                     f"👤 Cliente: <b>{cliente_sel}</b>\n"
                     f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
                     f"💳 Forma: <b>{forma_pag}</b>\n"
-                    f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
-                    f"🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>"
+                    f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>"
+                    + linha_taxa_jp
                     + sec_comissao + bloco_hist + bloco_srv
                 )
                 foto = FOTOS.get(_norm(cliente_sel))
