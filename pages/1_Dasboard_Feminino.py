@@ -2,287 +2,238 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import gspread
-from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
 
-st.set_page_config(layout="wide", page_title="📊 Dashboard Salão JP", page_icon="💈")
-st.title("📊 Dashboard Salão JP")
+st.set_page_config(layout="wide", page_title="💅 Dashboard Feminino", page_icon="💅")
+st.title("💅 Dashboard Feminino")
 
 # =========================
-# CONFIGURAÇÃO GOOGLE SHEETS
+# CONFIG
 # =========================
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-
-ABA_MASC_BASE = "Base de Dados"
 ABA_FEM_BASE = "Base de Dados Feminino"
-
-ABA_STATUS_MASC = "clientes_status"
-ABA_STATUS_FEM = "clientes_status_feminino"
 
 # =========================
 # CONEXÃO
 # =========================
 @st.cache_resource
 def conectar_sheets():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(SHEET_ID)
+    info = st.secrets.get("GCP_SERVICE_ACCOUNT") or st.secrets.get("gcp_service_account")
+    if not info:
+        st.error("Secrets ausentes. Adicione [GCP_SERVICE_ACCOUNT] nos Secrets do Streamlit.")
+        st.stop()
+    escopo = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(info, scopes=escopo)
+    return gspread.authorize(creds).open_by_key(SHEET_ID)
 
 # =========================
-# CARREGAMENTO DE ABAS
+# HELPERS
 # =========================
-def _limpar_df(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.dropna(how="all")
+def _strip2d(rows):
+    out = []
+    for r in rows:
+        out.append([("" if c is None else str(c).strip()) for c in r])
+    return out
+
+def _coerce_valor(series: pd.Series) -> pd.Series:
+    """
+    Converte: número, 'R$ 1.234,56', '1234.56' etc.
+    """
+    def parse_cell(x):
+        if pd.isna(x):
+            return 0.0
+        if isinstance(x, (int, float)):
+            return float(x)
+        s = str(x).strip()
+        if not s:
+            return 0.0
+        s = s.replace("R$", "").replace(" ", "")
+        if "," in s:                     # formato BR
+            s = s.replace(".", "")       # remove milhar
+            s = s.replace(",", ".")      # vírgula -> decimal
+            return pd.to_numeric(s, errors="coerce")
+        if s.count(".") > 1:             # vários pontos: último = decimal
+            left, last = s.rsplit(".", 1)
+            left = left.replace(".", "")
+            s = f"{left}.{last}"
+        return pd.to_numeric(s, errors="coerce")
+    return series.map(parse_cell).fillna(0.0)
+
+def _parse_data_sheets(col: pd.Series) -> pd.Series:
+    # texto dd/mm/aaaa
+    dt_txt = pd.to_datetime(col, errors="coerce", dayfirst=True, infer_datetime_format=True)
+    # número serial do Sheets
+    s_num = pd.to_numeric(col, errors="coerce")
+    dt_num = pd.to_datetime(s_num, unit="D", origin="1899-12-30")
+    return dt_txt.combine_first(dt_num)
+
+@st.cache_data(ttl=300)
+def carregar_base_feminina() -> pd.DataFrame:
+    ss = conectar_sheets()
+    ws = ss.worksheet(ABA_FEM_BASE)
+
+    rows_raw = ws.get_all_values(value_render_option="UNFORMATTED_VALUE")
+    rows = _strip2d(rows_raw)
+    if not rows:
+        return pd.DataFrame()
+
+    header = [c.strip() for c in rows[0]]
+    corpo = rows[1:]
+    corpo = [r for r in corpo if any(c != "" for c in r)]
+    if not corpo:
+        return pd.DataFrame(columns=header)
+
+    width = len(header)
+    corpo = [(r + [""]*max(0, width-len(r)))[:width] for r in corpo]
+    df = pd.DataFrame(corpo, columns=header)
     df.columns = [str(c).strip() for c in df.columns]
+
+    # Valor numérico
+    df["ValorNum"] = _coerce_valor(df["Valor"]) if "Valor" in df.columns else 0.0
+
+    # Data
     if "Data" in df.columns:
-        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+        df["Data"] = _parse_data_sheets(df["Data"])
         df = df.dropna(subset=["Data"])
-        df["Ano"] = df["Data"].dt.year
-        df["Mês"] = df["Data"].dt.month
-        df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
-    if "Valor" in df.columns:
-        df["ValorNum"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0)
-    return df
-
-@st.cache_data(ttl=300)
-def carregar_base(aba_nome: str) -> pd.DataFrame:
-    ss = conectar_sheets()
-    ws = ss.worksheet(aba_nome)
-    df = get_as_dataframe(ws)
-    return _limpar_df(df)
-
-@st.cache_data(ttl=300)
-def carregar_status(aba_nome: str) -> pd.DataFrame:
-    ss = conectar_sheets()
-    ws = ss.worksheet(aba_nome)
-    df = get_as_dataframe(ws)
-    df = df.dropna(how="all")
-    df.columns = [str(c).strip() for c in df.columns]
-    # normalizar nome da coluna de cliente
-    possiveis = [c for c in df.columns if c.strip().lower() in ["cliente", "nome", "nome do cliente"]]
-    if not possiveis:
-        # cria coluna Cliente vazia para não quebrar
-        df["Cliente"] = ""
+        df["Ano"] = df["Data"].dt.year.astype(int)
+        df["Mês"] = df["Data"].dt.month.astype(int)
+        df["Dia"] = df["Data"].dt.date  # para deduplicar por dia
     else:
-        if "Cliente" not in df.columns:
-            df["Cliente"] = df[possiveis[0]]
-    # padroniza campos comuns que podem ser úteis no futuro
-    for col in ["Status", "Imagem", "Observação"]:
-        if col not in df.columns:
-            df[col] = ""
-    df["Cliente_norm"] = df["Cliente"].astype(str).str.strip()
+        df["Ano"] = pd.NA
+        df["Mês"] = pd.NA
+        df["Dia"] = pd.NA
+
+    # Normaliza "Funcionário"
+    col_func = [c for c in df.columns if c.lower() in ["funcionário","funcionario"]]
+    if col_func:
+        df.rename(columns={col_func[0]: "Funcionário"}, inplace=True)
+
+    # Normaliza "Cliente"
+    if "Cliente" in df.columns:
+        df["Cliente"] = df["Cliente"].astype(str).str.strip()
+    else:
+        df["Cliente"] = ""
+
     return df
 
+# === Contagem de atendimentos por Cliente+Data (regra única no feminino) ===
+def total_atendimentos_unicos(df: pd.DataFrame) -> int:
+    pares = (df.loc[df["Cliente"].ne(""), ["Cliente", "Dia"]]
+               .dropna()
+               .drop_duplicates())
+    return int(len(pares))
+
+def atendimentos_por_cliente(df: pd.DataFrame) -> pd.Series:
+    pares = (df.loc[df["Cliente"].ne(""), ["Cliente", "Dia"]]
+               .dropna()
+               .drop_duplicates())
+    return pares.groupby("Cliente").size().astype(int)
+
 # =========================
-# SIDE BAR
+# CARREGA BASE
 # =========================
-st.sidebar.header("🎛️ Filtros")
-
-fonte = st.sidebar.selectbox(
-    "🗂️ Fonte de dados",
-    ["Masculino", "Feminino", "Ambos"],
-    index=0
-)
-
-# Carrega bases conforme seleção
-if fonte == "Masculino":
-    df = carregar_base(ABA_MASC_BASE)
-elif fonte == "Feminino":
-    df = carregar_base(ABA_FEM_BASE)
-else:
-    df_m = carregar_base(ABA_MASC_BASE)
-    df_f = carregar_base(ABA_FEM_BASE)
-    # alinhar colunas
-    cols = sorted(set(df_m.columns) | set(df_f.columns))
-    df = pd.concat([df_m.reindex(columns=cols), df_f.reindex(columns=cols)], ignore_index=True)
-    df = _limpar_df(df)  # recalcula campos derivados se necessário
-
+df = carregar_base_feminina()
 if df.empty:
-    st.warning("Sem dados para a fonte selecionada.")
+    st.warning("Sem dados na aba **Base de Dados Feminino**.")
     st.stop()
 
-# Carrega status (feminino + fallback masculino)
-status_fem = carregar_status(ABA_STATUS_FEM)
-status_masc = carregar_status(ABA_STATUS_MASC)
-
-# Mapa de status/imagem por cliente: prioriza FEM, depois fallback MASC
-status_map = (
-    status_fem.set_index("Cliente_norm")[["Status", "Imagem"]]
-    .combine_first(status_masc.set_index("Cliente_norm")[["Status", "Imagem"]])
-    .to_dict(orient="index")
-)
-
 # =========================
-# FILTROS DE ANO/MÊS
+# FILTROS
 # =========================
-anos_disponiveis = sorted(df["Ano"].dropna().unique(), reverse=True)
-ano_escolhido = st.sidebar.selectbox("🗓️ Escolha o Ano", anos_disponiveis)
+st.sidebar.header("🎛️ Filtros")
+meses_pt = {1:"Janeiro",2:"Fevereiro",3:"Março",4:"Abril",5:"Maio",6:"Junho",
+            7:"Julho",8:"Agosto",9:"Setembro",10:"Outubro",11:"Novembro",12:"Dezembro"}
 
-meses_pt = {
-    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
-}
-meses_disponiveis = sorted(df[df["Ano"] == ano_escolhido]["Mês"].dropna().unique())
-mes_opcoes = [meses_pt[m] for m in meses_disponiveis]
-meses_selecionados = st.sidebar.multiselect("📆 Selecione os Meses (opcional)", mes_opcoes, default=mes_opcoes)
+anos_disp = sorted(df["Ano"].dropna().unique().tolist(), reverse=True)
+ano = st.sidebar.selectbox("🗓️ Ano", anos_disp, index=0)
 
-if meses_selecionados:
-    meses_numeros = [k for k, v in meses_pt.items() if v in meses_selecionados]
-    df = df[(df["Ano"] == ano_escolhido) & (df["Mês"].isin(meses_numeros))]
+meses_do_ano = sorted(df.loc[df["Ano"] == ano, "Mês"].dropna().unique().tolist())
+mes_labels = [meses_pt[m] for m in meses_do_ano]
+meses_sel = st.sidebar.multiselect("📆 Meses (opcional)", mes_labels, default=mes_labels)
+
+if meses_sel:
+    meses_num = [k for k, v in meses_pt.items() if v in meses_sel]
+    base = df[(df["Ano"] == ano) & (df["Mês"].isin(meses_num))].copy()
 else:
-    df = df[df["Ano"] == ano_escolhido]
+    base = df[df["Ano"] == ano].copy()
+
+if base.empty:
+    st.info("Sem dados para o período filtrado.")
+    st.stop()
 
 # =========================
-# REGRAS DE "FIADO" (exclui só para receita)
+# Excluir FIADO apenas na receita
 # =========================
-col_conta = next((c for c in df.columns if c.strip().lower() in ["conta", "forma de pagamento", "pagamento", "status"]), None)
-if col_conta:
-    mask_fiado = df[col_conta].astype(str).str.strip().str.lower().eq("fiado")
-else:
-    mask_fiado = pd.Series(False, index=df.index)
-
-df_receita = df[~mask_fiado].copy()
+col_conta = next((c for c in base.columns if c.lower() in ["conta","forma de pagamento","pagamento","status"]), None)
+mask_fiado = base[col_conta].astype(str).str.strip().str.lower().eq("fiado") if col_conta else pd.Series(False, index=base.index)
+base_rec = base[~mask_fiado].copy()
 
 # =========================
-# INDICADORES
+# INDICADORES (Cliente+Data em todo o período)
 # =========================
-receita_total = df_receita["ValorNum"].sum() if "ValorNum" in df_receita.columns else 0.0
-total_atendimentos = len(df)  # inclui fiado
+receita_total = float(base_rec["ValorNum"].sum())
+total_atend   = total_atendimentos_unicos(base)                 # <<< regra aplicada
+clientes_ativos = base.loc[base["Cliente"].ne(""), "Cliente"].nunique()
+ticket = receita_total/total_atend if total_atend else 0.0
 
-# regra de clientes únicos (sua data limite)
-data_limite = pd.to_datetime("2025-05-11")
-antes = df[df["Data"] < data_limite]
-depois = df[df["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
-clientes_unicos = pd.concat([antes, depois])["Cliente"].nunique()
+def brl(x: float) -> str:
+    return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v",".")
 
-ticket_medio = receita_total / total_atendimentos if total_atendimentos else 0
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 Receita Total", f"R$ {receita_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col2.metric("📅 Total de Atendimentos", total_atendimentos)
-col3.metric("🎯 Ticket Médio", f"R$ {ticket_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-col4.metric("🟢 Clientes Ativos", clientes_unicos)
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("💰 Receita Total", brl(receita_total))
+c2.metric("📅 Total de Atendimentos", int(total_atend))
+c3.metric("🎯 Ticket Médio", brl(ticket))
+c4.metric("🟢 Clientes Ativos", int(clientes_ativos))
 
 # =========================
-# GRÁFICOS
+# 📆 Receita Mensal
+# =========================
+st.markdown("### 📆 Receita Mensal (Ano selecionado)")
+mens = (base_rec.groupby("Mês")["ValorNum"].sum()
+        .reindex(range(1,13), fill_value=0).reset_index())
+mens["MêsNome"] = mens["Mês"].map(meses_pt)
+fig_mensal = px.bar(mens, x="MêsNome", y="ValorNum", text_auto=True,
+                    labels={"ValorNum":"Receita (R$)", "MêsNome":"Mês"},
+                    template="plotly_dark")
+fig_mensal.update_layout(height=420, showlegend=False)
+st.plotly_chart(fig_mensal, use_container_width=True)
+
+mens["Receita (R$)"] = mens["ValorNum"].apply(brl)
+st.dataframe(mens[["MêsNome","Receita (R$)"]], use_container_width=True)
+
+# =========================
+# 📊 Receita por Funcionário
 # =========================
 st.markdown("### 📊 Receita por Funcionário")
-if "Funcionário" in df_receita.columns:
-    df_func = df_receita.groupby("Funcionário")["ValorNum"].sum().reset_index().rename(columns={"ValorNum": "Valor"})
-    fig_func = px.bar(df_func, x="Funcionário", y="Valor", text_auto=True)
-    fig_func.update_layout(height=400, yaxis_title="Receita (R$)", showlegend=False)
-    st.plotly_chart(fig_func, use_container_width=True)
+if "Funcionário" in base_rec.columns:
+    df_func = (base_rec.groupby("Funcionário")["ValorNum"].sum()
+               .reset_index().rename(columns={"ValorNum":"Valor"})
+               .sort_values("Valor", ascending=False))
+    fig = px.bar(df_func, x="Funcionário", y="Valor", text_auto=True, template="plotly_dark")
+    fig.update_layout(height=400, yaxis_title="Receita (R$)", showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("A coluna **Funcionário** não existe na base atual.")
-
-st.markdown("### 🧾 Receita por Tipo")
-df_tipo = df_receita.copy()
-if "Serviço" in df_tipo.columns:
-    df_tipo["Tipo"] = df_tipo["Serviço"].apply(
-        lambda x: "Combo" if "combo" in str(x).lower()
-        else "Produto" if any(k in str(x).lower() for k in ["gel", "produto"])
-        else "Serviço"
-    )
-    df_pizza = df_tipo.groupby("Tipo")["ValorNum"].sum().reset_index().rename(columns={"ValorNum": "Valor"})
-    fig_pizza = px.pie(df_pizza, values="Valor", names="Tipo", title="Distribuição de Receita")
-    fig_pizza.update_traces(textinfo="percent+label")
-    st.plotly_chart(fig_pizza, use_container_width=True)
+    st.info("A coluna **Funcionário** não existe na base.")
 
 # =========================
-# TOP 10 CLIENTES (excluindo nomes genéricos)
+# 🥇 Top 10 Clientes — usando Qtd_Atendimentos por Cliente+Data
 # =========================
-st.markdown("### 🥇 Top 10 Clientes")
-nomes_excluir = ["boliviano", "brasileiro", "menino"]
+st.markdown("### 🥇 Top 10 Clientes (Feminino)")
+nomes_excluir = ["boliviano","brasileiro","menino"]
 
-cnt = df.groupby("Cliente")["Serviço"].count().rename("Qtd_Serviços") if "Serviço" in df.columns else pd.Series(dtype=int)
-val = df_receita.groupby("Cliente")["ValorNum"].sum().rename("Valor") if "ValorNum" in df_receita.columns else pd.Series(dtype=float)
+qtd_atend = atendimentos_por_cliente(base)                  # <<< regra aplicada
+val_por_cliente = base_rec.groupby("Cliente")["ValorNum"].sum()
 
-df_top = pd.concat([cnt, val], axis=1).reset_index().fillna(0)
+df_top = pd.concat(
+    [qtd_atend.rename("Qtd_Atendimentos"), val_por_cliente.rename("Valor")],
+    axis=1
+).fillna(0).reset_index()
+
+df_top = df_top[df_top["Cliente"].astype(str).str.strip() != ""]
 df_top = df_top[~df_top["Cliente"].str.lower().isin(nomes_excluir)]
-df_top = df_top.sort_values(by="Valor", ascending=False).head(10)
-df_top["Valor Formatado"] = df_top["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-st.dataframe(df_top[["Cliente", "Qtd_Serviços", "Valor Formatado"]], use_container_width=True)
+df_top = df_top.sort_values(["Valor","Qtd_Atendimentos"], ascending=False).head(10)
+df_top["Valor Formatado"] = df_top["Valor"].apply(brl)
 
-st.markdown("---")
+st.dataframe(df_top[["Cliente","Qtd_Atendimentos","Valor Formatado"]], use_container_width=True)
 
-# =========================
-# SINCRONIZAÇÃO: FEMININO -> clientes_status_feminino
-# =========================
-st.subheader("🔁 Sincronização de clientes (Feminino → clientes_status_feminino)")
-
-def normalizar_nome(s):
-    return str(s).strip()
-
-def montar_df_upsert(df_fem_base: pd.DataFrame, df_status_fem: pd.DataFrame) -> pd.DataFrame:
-    # clientes únicos da base feminina
-    clientes_base = (
-        df_fem_base["Cliente"]
-        .dropna()
-        .astype(str)
-        .map(normalizar_nome)
-        .unique()
-        .tolist()
-        if "Cliente" in df_fem_base.columns else []
-    )
-    existentes = set(df_status_fem["Cliente_norm"].dropna().astype(str).tolist())
-    novos = [c for c in clientes_base if c and c not in existentes]
-
-    if not novos:
-        return pd.DataFrame(columns=df_status_fem.columns)
-
-    # monta linhas padrão para novos clientes
-    colunas = list(df_status_fem.columns)
-    # garantias mínimas
-    for col in ["Cliente", "Cliente_norm", "Status", "Imagem", "Observação"]:
-        if col not in colunas:
-            colunas.append(col)
-
-    linhas = []
-    for c in novos:
-        linha = {k: "" for k in colunas}
-        linha["Cliente"] = c
-        linha["Cliente_norm"] = c
-        linha["Status"] = "Ativo"
-        linha["Imagem"] = ""        # deixe vazio; você pode preencher depois
-        linha["Observação"] = ""
-        linhas.append(linha)
-    return pd.DataFrame(linhas)[colunas]
-
-if st.button("🚀 Sincronizar clientes (Feminino → clientes_status_feminino)"):
-    try:
-        base_fem = carregar_base(ABA_FEM_BASE)
-        status_fem_atual = carregar_status(ABA_STATUS_FEM)
-
-        df_novos = montar_df_upsert(base_fem, status_fem_atual)
-        if df_novos.empty:
-            st.success("Tudo certo! Nenhum cliente novo para adicionar.")
-        else:
-            ss = conectar_sheets()
-            ws = ss.worksheet(ABA_STATUS_FEM)
-
-            # reconstroi status atual sem a coluna auxiliar Cliente_norm para gravar "limpo"
-            status_fem_limpo = status_fem_atual.drop(columns=["Cliente_norm"], errors="ignore")
-            df_novos_limpo = df_novos.drop(columns=["Cliente_norm"], errors="ignore")
-
-            # concatena mantendo ordem de colunas
-            colunas_final = list(status_fem_limpo.columns)
-            df_final = pd.concat(
-                [status_fem_limpo, df_novos_limpo.reindex(columns=colunas_final)],
-                ignore_index=True
-            )
-
-            # limpa aba e grava novamente
-            ws.clear()
-            set_with_dataframe(ws, df_final, include_index=False, include_column_header=True, resize=True)
-
-            st.success(f"Clientes adicionados: {len(df_novos)}")
-    except Exception as e:
-        st.error(f"Falha na sincronização: {e}")
-
-st.caption("Criado por JPaulo ✨ | Base: Masculino/Feminino unificáveis • Sincronização para clientes_status_feminino")
+st.caption("ℹ️ **Regra**: *Total de Atendimentos* e *Qtd_Atendimentos* contam **1 por Cliente + Data** (combos em várias linhas valem 1).")
