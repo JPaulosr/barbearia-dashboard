@@ -28,6 +28,7 @@ def _tz_now():
 
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
+    """Conecta no Google Sheets usando st.secrets['GCP_SERVICE_ACCOUNT']."""
     creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
     creds = Credentials.from_service_account_info(
         creds_info,
@@ -40,17 +41,19 @@ def _conectar_sheets():
     return gc
 
 @st.cache_data(ttl=300, show_spinner=False)
-def carregar_base(gc):
-    """Lê a 'Base de Dados' (masculino) direto do Google Sheets."""
+def carregar_base():
+    """Lê a 'Base de Dados' (masculino) direto do Google Sheets.
+    OBS: não recebe mais 'gc' para evitar UnhashableParamError no cache."""
+    gc = _conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-    # Remover colunas completamente vazias e linhas 100% vazias
+    # Remover colunas/linhas totalmente vazias
     df = df.dropna(how="all")
     if df.empty:
         return df
 
-    # Normalizar nomes de colunas (tira espaços/acentos simples)
+    # Normalizar nomes de colunas (tira espaços)
     df.columns = [str(c).strip() for c in df.columns]
 
     # Garantir colunas principais (se não existirem, cria vazias)
@@ -67,7 +70,6 @@ def carregar_base(gc):
         if isinstance(x, (datetime, pd.Timestamp)):
             return x.date()
         s = str(x).strip()
-        # Tenta dd/mm/yyyy
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"]:
             try:
                 return datetime.strptime(s, fmt).date()
@@ -82,9 +84,11 @@ def carregar_base(gc):
         if pd.isna(v):
             return 0.0
         s = str(v).strip().replace("R$", "").replace(" ", "")
-        s = s.replace(".", "").replace(",", ".") if s.count(",") == 1 and s.count(".") > 1 else s
-        # Se for "12,50" -> "12.50"
-        s = s.replace(",", ".")
+        # tratar "1.234,56" e "1234,56"
+        if "," in s and "." in s:
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", ".")
         try:
             return float(s)
         except Exception:
@@ -99,18 +103,13 @@ def carregar_base(gc):
     return df
 
 def filtrar_por_dia(df: pd.DataFrame, dia: date) -> pd.DataFrame:
-    if df.empty:
-        return df
-    if dia is None:
+    if df.empty or dia is None:
         return df.iloc[0:0]
     mask = (df["Data_norm"] == dia)
-    # Apenas base masculina: já estamos em 'Base de Dados' (masculino)
     return df.loc[mask].copy()
 
 def kpis_do_dia(df_dia: pd.DataFrame):
-    # Serviços realizados = linhas
-    servicos = len(df_dia)
-    # Clientes atendidos = únicos por Cliente (c/ regra de 11/05/2025 já atendida ao filtrar por dia)
+    servicos = len(df_dia)  # linhas
     clientes = df_dia["Cliente"].nunique() if not df_dia.empty else 0
     receita = float(df_dia["Valor_num"].sum()) if not df_dia.empty else 0.0
     ticket = (receita / clientes) if clientes > 0 else 0.0
@@ -124,22 +123,22 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
         "Data", "Cliente", "Serviço", "Valor", "Conta", "Funcionário",
         "Combo", "Tipo", "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
     ]
-    # Garantir colunas
     for c in cols_ordem:
         if c not in df.columns:
             df[c] = ""
-    # Ordenar por horário (quando existir), caindo para Cliente
+
+    df_out = df.copy()
+
+    # Ordenar por hora de início quando existir, senão por Cliente
     ord_cols = []
-    if "Hora Início" in df.columns:
+    if "Hora Início" in df_out.columns:
         ord_cols.append("Hora Início")
     ord_cols.append("Cliente")
-    df_out = df.copy()
     try:
         df_out = df_out.sort_values(by=ord_cols, ascending=[True] * len(ord_cols))
     except Exception:
         pass
 
-    # Formatar Data e Valor
     def fmt_data(d):
         if pd.isna(d): return ""
         if isinstance(d, (datetime, pd.Timestamp)): return d.strftime(DATA_FMT)
@@ -153,9 +152,7 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
 def gerar_excel(df_lin: pd.DataFrame, df_cli: pd.DataFrame) -> bytes:
     """Gera um único .xlsx com duas abas: Linhas e ResumoClientes."""
     with pd.ExcelWriter(io.BytesIO(), engine="xlsxwriter") as writer:
-        # Aba 1: Linhas
         df_lin.to_excel(writer, sheet_name="Linhas", index=False)
-        # Aba 2: Resumo por Cliente
         df_cli.to_excel(writer, sheet_name="ResumoClientes", index=False)
         writer.save()
         data = writer.book.filename.getvalue()
@@ -169,16 +166,15 @@ st.set_page_config(page_title="Atendimentos por Dia (Masculino)", page_icon="�
 st.title("📅 Atendimentos por Dia — Masculino")
 st.caption("Selecione um dia para ver todos os atendimentos do salão masculino, contagem de clientes e totais do dia.")
 
-gc = _conectar_sheets()
 with st.spinner("Carregando base masculina..."):
-    df_base = carregar_base(gc)
+    df_base = carregar_base()
 
 col_a, col_b = st.columns([1, 2])
 with col_a:
     hoje = _tz_now().date()
     dia_selecionado = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
 with col_b:
-    st.write("")  # espaçamento
+    st.write("")
 
 df_dia = filtrar_por_dia(df_base, dia_selecionado)
 
@@ -214,8 +210,10 @@ grp = (
     .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
 )
 grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
-st.dataframe(grp.rename(columns={"Cliente": "Cliente", "Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
-             use_container_width=True, hide_index=True)
+st.dataframe(
+    grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
+    use_container_width=True, hide_index=True
+)
 
 # Exportar
 st.markdown("### Exportar")
@@ -224,18 +222,31 @@ df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "V
 
 # CSV Linhas
 csv_lin = df_lin_export.to_csv(index=False).encode("utf-8-sig")
-st.download_button("⬇️ Baixar Linhas (CSV)", data=csv_lin, file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv", mime="text/csv")
+st.download_button(
+    "⬇️ Baixar Linhas (CSV)",
+    data=csv_lin,
+    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
+    mime="text/csv"
+)
 
 # CSV Resumo por Cliente
 csv_cli = df_cli_export.to_csv(index=False).encode("utf-8-sig")
-st.download_button("⬇️ Baixar Resumo por Cliente (CSV)", data=csv_cli, file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv", mime="text/csv")
+st.download_button(
+    "⬇️ Baixar Resumo por Cliente (CSV)",
+    data=csv_cli,
+    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
+    mime="text/csv"
+)
 
 # Excel com 2 abas
 try:
     xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
-    st.download_button("⬇️ Baixar Excel (Linhas + Resumo)", data=xlsx_bytes,
-                       file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.download_button(
+        "⬇️ Baixar Excel (Linhas + Resumo)",
+        data=xlsx_bytes,
+        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 except Exception as e:
     st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
 
