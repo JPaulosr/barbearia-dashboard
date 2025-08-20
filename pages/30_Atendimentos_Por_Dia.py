@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # 15_Atendimentos_Masculino_Por_Dia.py
 # Página: escolher um dia e ver TODOS os atendimentos (masculino),
-# com contagem de clientes atendidos, KPIs e exportação.
+# com contagem de clientes atendidos, KPIs, por funcionário e exportação.
 
 import streamlit as st
 import pandas as pd
@@ -19,6 +19,10 @@ SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"  # Masculino
 TZ = "America/Sao_Paulo"
 DATA_FMT = "%d/%m/%Y"
+
+# Nomes oficiais dos funcionários
+FUNC_JPAULO = "JPaulo"
+FUNC_VINICIUS = "Vinicius"
 
 # =========================
 # UTILS
@@ -42,28 +46,23 @@ def _conectar_sheets():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def carregar_base():
-    """Lê a 'Base de Dados' (masculino) direto do Google Sheets.
-    OBS: não recebe mais 'gc' para evitar UnhashableParamError no cache."""
+    """Lê a 'Base de Dados' (masculino) direto do Google Sheets."""
     gc = _conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-    # Remover colunas/linhas totalmente vazias
     df = df.dropna(how="all")
     if df.empty:
         return df
 
-    # Normalizar nomes de colunas (tira espaços)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Garantir colunas principais (se não existirem, cria vazias)
     for col in ["Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
                 "Funcionário", "Fase", "Hora Chegada", "Hora Início",
                 "Hora Saída", "Hora Saída do Salão", "Tipo"]:
         if col not in df.columns:
             df[col] = None
 
-    # Normalizar Data -> datetime.date
     def parse_data(x):
         if pd.isna(x):
             return None
@@ -79,12 +78,10 @@ def carregar_base():
 
     df["Data_norm"] = df["Data"].apply(parse_data)
 
-    # Normalizar Valor -> float
     def parse_valor(v):
         if pd.isna(v):
             return 0.0
         s = str(v).strip().replace("R$", "").replace(" ", "")
-        # tratar "1.234,56" e "1234,56"
         if "," in s and "." in s:
             s = s.replace(".", "").replace(",", ".")
         else:
@@ -96,7 +93,6 @@ def carregar_base():
 
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # String limpa para campos textuais principais
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
         df[col] = df[col].astype(str).fillna("").str.strip()
 
@@ -115,6 +111,14 @@ def kpis_do_dia(df_dia: pd.DataFrame):
     ticket = (receita / clientes) if clientes > 0 else 0.0
     return clientes, servicos, receita, ticket
 
+def kpis_por_funcionario(df_dia: pd.DataFrame, nome_func: str):
+    df_f = df_dia[df_dia["Funcionário"].str.casefold() == nome_func.casefold()].copy()
+    clientes = df_f["Cliente"].nunique() if not df_f.empty else 0
+    servicos = len(df_f)
+    receita = float(df_f["Valor_num"].sum()) if not df_f.empty else 0.0
+    ticket = (receita / clientes) if clientes > 0 else 0.0
+    return clientes, servicos, receita, ticket
+
 def format_moeda(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
@@ -128,8 +132,6 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = ""
 
     df_out = df.copy()
-
-    # Ordenar por hora de início quando existir, senão por Cliente
     ord_cols = []
     if "Hora Início" in df_out.columns:
         ord_cols.append("Hora Início")
@@ -150,7 +152,6 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
     return df_out[cols_ordem]
 
 def gerar_excel(df_lin: pd.DataFrame, df_cli: pd.DataFrame) -> bytes:
-    """Gera um único .xlsx com duas abas: Linhas e ResumoClientes."""
     with pd.ExcelWriter(io.BytesIO(), engine="xlsxwriter") as writer:
         df_lin.to_excel(writer, sheet_name="Linhas", index=False)
         df_cli.to_excel(writer, sheet_name="ResumoClientes", index=False)
@@ -182,14 +183,39 @@ if df_dia.empty:
     st.info("Nenhum atendimento encontrado para o dia selecionado.")
     st.stop()
 
-# KPIs
+# KPIs gerais do dia
 clientes, servicos, receita, ticket = kpis_do_dia(df_dia)
-
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("👥 Clientes atendidos", f"{clientes}")
 k2.metric("✂️ Serviços realizados", f"{servicos}")
 k3.metric("💰 Receita do dia", format_moeda(receita))
 k4.metric("🧾 Ticket médio", format_moeda(ticket))
+
+st.markdown("---")
+
+# >>> NOVO BLOCO: Por Funcionário
+st.subheader("Por Funcionário (dia selecionado)")
+c1, c2 = st.columns(2)
+
+# JPaulo
+cli_j, srv_j, rec_j, tkt_j = kpis_por_funcionario(df_dia, FUNC_JPAULO)
+with c1:
+    st.markdown(f"**{FUNC_JPAULO}**")
+    jj1, jj2, jj3, jj4 = st.columns(4)
+    jj1.metric("Clientes", f"{cli_j}")
+    jj2.metric("Serviços", f"{srv_j}")
+    jj3.metric("Receita", format_moeda(rec_j))
+    jj4.metric("Ticket", format_moeda(tkt_j))
+
+# Vinicius
+cli_v, srv_v, rec_v, tkt_v = kpis_por_funcionario(df_dia, FUNC_VINICIUS)
+with c2:
+    st.markdown(f"**{FUNC_VINICIUS}**")
+    vv1, vv2, vv3, vv4 = st.columns(4)
+    vv1.metric("Clientes", f"{cli_v}")
+    vv2.metric("Serviços", f"{srv_v}")
+    vv3.metric("Receita", format_moeda(rec_v))
+    vv4.metric("Ticket", format_moeda(tkt_v))
 
 st.markdown("---")
 
@@ -220,7 +246,6 @@ st.markdown("### Exportar")
 df_lin_export = df_exibe.copy()
 df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
 
-# CSV Linhas
 csv_lin = df_lin_export.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "⬇️ Baixar Linhas (CSV)",
@@ -229,7 +254,6 @@ st.download_button(
     mime="text/csv"
 )
 
-# CSV Resumo por Cliente
 csv_cli = df_cli_export.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "⬇️ Baixar Resumo por Cliente (CSV)",
@@ -238,7 +262,6 @@ st.download_button(
     mime="text/csv"
 )
 
-# Excel com 2 abas
 try:
     xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
     st.download_button(
@@ -250,4 +273,7 @@ try:
 except Exception as e:
     st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
 
-st.caption("• Contagem de clientes considera 1 atendimento por cliente no dia (as linhas de combo não duplicam o cliente). Receita é a soma dos valores do dia.")
+st.caption(
+    "• Clientes atendidos = clientes únicos no dia (linhas de combo não duplicam cliente). "
+    "• 'Por Funcionário' usa o campo **Funcionário** da base."
+)
