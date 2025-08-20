@@ -359,16 +359,21 @@ def carregar_listas():
     ss = conectar_sheets()
     ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
     ensure_headers(ws_base, BASE_COLS_ALL)
+
     df_list = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
     df_list.columns = [str(c).strip() for c in df_list.columns]
-    df_list = df_list.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
+    # 👇 correção: usar df_list.columns (antes estava df.columns)
+    df_list = df_list.loc[:, ~pd.Index(df_list.columns).duplicated(keep="first")]
+
     clientes = sorted([c for c in df_list.get("Cliente", "").astype(str).str.strip().unique() if c])
     combos  = sorted([c for c in df_list.get("Combo", "").astype(str).str.strip().unique() if c])
-    servs   = sorted([s for s in df_list.get("Serviço","").astype(str).str.strip().unique() if s])
-    contas_raw = [c for c in df_list.get("Conta","").astype(str).str.strip().unique() if c]
+    servs   = sorted([s for s in df_list.get("Serviço", "").astype(str).str.strip().unique() if s])
+
+    contas_raw = [c for c in df_list.get("Conta", "").astype(str).str.strip().unique() if c]
     base_contas = sorted([c for c in contas_raw if c.lower() != "fiado"])
     if "Nubank CNPJ" not in base_contas:
         base_contas.append("Nubank CNPJ")
+
     return clientes, combos, servs, base_contas
 
 def append_row(nome_aba, vals):
