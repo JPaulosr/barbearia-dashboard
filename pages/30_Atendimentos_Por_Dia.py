@@ -34,6 +34,21 @@ DATA_CORRETA = datetime(2025, 5, 11).date()
 def _tz_now():
     return datetime.now(pytz.timezone(TZ))
 
+def _fmt_data(d):
+    """Formata qualquer tipo (Timestamp/date/str) para dd/mm/aaaa."""
+    if pd.isna(d):
+        return ""
+    if isinstance(d, (pd.Timestamp, datetime)):
+        return d.strftime(DATA_FMT)
+    if isinstance(d, date):
+        return d.strftime(DATA_FMT)
+    # string “bruta”
+    try:
+        d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
+        return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
+    except Exception:
+        return str(d)
+
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
     """Conecta no Google Sheets usando st.secrets['GCP_SERVICE_ACCOUNT']."""
@@ -114,7 +129,10 @@ def contar_atendimentos_dia(df: pd.DataFrame) -> int:
     if df.empty:
         return 0
     # supõe que df contém um único dia
-    dia = df["Data_norm"].dropna().iloc[0]
+    d0 = df["Data_norm"].dropna()
+    if d0.empty:
+        return 0
+    dia = d0.iloc[0]
     if dia < DATA_CORRETA:
         # Antes do marco: cada linha = 1 atendimento
         return len(df)
@@ -165,13 +183,7 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         pass
 
-    def fmt_data(d):
-        if pd.isna(d): return ""
-        if isinstance(d, (datetime, pd.Timestamp)): return d.strftime(DATA_FMT)
-        if isinstance(d, date): return d.strftime(DATA_FMT)
-        return str(d)
-
-    df_out["Data"] = df_out["Data_norm"].apply(fmt_data)
+    df_out["Data"] = df_out["Data_norm"].apply(_fmt_data)
     df_out["Valor"] = df_out["Valor_num"].apply(format_moeda)
     return df_out[cols_ordem]
 
@@ -273,9 +285,10 @@ only_after_cut = st.checkbox(
 def contar_atendimentos_bloco(bloco: pd.DataFrame):
     if bloco.empty:
         return 0, 0
-    dia = bloco["Data_norm"].dropna().iloc[0]
-    if pd.isna(dia):
+    d0 = bloco["Data_norm"].dropna()
+    if d0.empty:
         return 0, len(bloco)
+    dia = d0.iloc[0]
     if dia < DATA_CORRETA:
         clientes = len(bloco)               # antes do marco
     else:
@@ -294,6 +307,9 @@ for dia, bloco in df_base.groupby("Data_norm"):
     lista.append({"Data": dia, "Clientes únicos": cli_h, "Serviços": srv_h})
 
 df_hist = pd.DataFrame(lista).sort_values("Data")
+# Garante tipo datetime para gráficos (sem usar .dt depois)
+if not df_hist.empty:
+    df_hist["Data"] = pd.to_datetime(df_hist["Data"], errors="coerce")
 
 # Destaque do recorde e Top 5
 if not df_hist.empty:
@@ -301,7 +317,7 @@ if not df_hist.empty:
     top_idx = df_hist["Clientes únicos"].idxmax()
     top_dia = df_hist.loc[top_idx]
     st.success(
-        f"📅 Recorde: **{top_dia['Data'].strftime('%d/%m/%Y')}** — "
+        f"📅 Recorde: **{_fmt_data(top_dia['Data'])}** — "
         f"**{int(top_dia['Clientes únicos'])} clientes** e **{int(top_dia['Serviços'])} serviços**."
     )
 
@@ -309,28 +325,33 @@ if not df_hist.empty:
     df_top5 = df_hist.sort_values(
         ["Clientes únicos", "Serviços", "Data"],
         ascending=[False, False, False]
-    ).head(5)
+    ).head(5).copy()
+    df_top5["Data_fmt"] = df_top5["Data"].apply(_fmt_data)
 
     col_t1, col_t2 = st.columns([1,1])
     with col_t1:
         st.markdown("**🏆 Top 5 dias (por clientes)**")
         st.dataframe(
-            df_top5.assign(Data=df_top5["Data"].dt.strftime("%d/%m/%Y")),
+            df_top5[["Data_fmt", "Clientes únicos", "Serviços"]]
+                   .rename(columns={"Data_fmt": "Data"}),
             use_container_width=True, hide_index=True
         )
 
     with col_t2:
         fig_top = px.bar(
-            df_top5.assign(Data=df_top5["Data"].dt.strftime("%d/%m/%Y")),
-            x="Data", y="Clientes únicos", text="Clientes únicos",
+            df_top5,
+            x="Data_fmt", y="Clientes únicos", text="Clientes únicos",
             title="Top 5 — Clientes por dia"
         )
         st.plotly_chart(fig_top, use_container_width=True)
 
     # Tabela completa + gráfico de linha
     st.markdown("**Histórico completo**")
+    df_hist_show = df_hist.copy()
+    df_hist_show["Data_fmt"] = df_hist_show["Data"].apply(_fmt_data)
     st.dataframe(
-        df_hist.assign(Data=df_hist["Data"].dt.strftime("%d/%m/%Y")),
+        df_hist_show[["Data_fmt", "Clientes únicos", "Serviços"]]
+                    .rename(columns={"Data_fmt": "Data"}),
         use_container_width=True, hide_index=True
     )
 
