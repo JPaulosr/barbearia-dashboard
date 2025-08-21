@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Pagamento de comissão (linhas por DIA do atendimento)
-# Regras:
 # - Paga toda terça o período de terça→segunda anterior.
 # - Fiado só entra quando DataPagamento <= terça do pagamento.
 # - Em Despesas grava UMA LINHA POR DIA DO ATENDIMENTO (Data = data do serviço).
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
-# - Arredondamento opcional para preço cheio por serviço (tabela) com tolerância.
-# - Bloco extra: FIADOS A RECEBER (histórico — ainda NÃO pagos), com comissão futura.
-# - NÃO comissiona Caixinha (nem diária nem anual).
+# - Preço de TABELA para cartão (opcional) e arredondamento com tolerância.
+# - Caixinha NÃO entra na comissão.
 
 import streamlit as st
 import pandas as pd
@@ -29,15 +27,18 @@ ABA_DESPESAS = "Despesas"
 
 TZ = "America/Sao_Paulo"
 
-# Colunas esperadas na Base de Dados
+# Colunas existentes na sua planilha (inclui extras + caixinhas)
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
     "Funcionário", "Fase", "Tipo", "Período",
     # Fiado
     "StatusFiado", "IDLancFiado", "VencimentoFiado", "DataPagamento",
-    # Extras cartão (podem existir ou não)
-    "ValorBrutoRecebido", "ValorLiquidoRecebido", "TaxaCartaoValor",
-    "TaxaCartaoPct", "FormaPagDetalhe", "PagamentoID",
+    # Extras cartão / meta-dados
+    "ValorBrutoRecebido", "ValorLiquidoRecebido",
+    "TaxaCartaoValor", "TaxaCartaoPct",
+    "FormaPagDetalhe", "PagamentoID",
+    # Caixinhas
+    "CaixinhaDia", "CaixinhaFundo",
 ]
 
 # Colunas da aba Despesas
@@ -82,6 +83,10 @@ def _read_df(title: str) -> pd.DataFrame:
     df = get_as_dataframe(ws).fillna("")
     df.columns = [str(c).strip() for c in df.columns]
     df = df.dropna(how="all").replace({pd.NA: ""})
+    # Garante todas as colunas esperadas
+    for c in COLS_OFICIAIS:
+        if c not in df.columns:
+            df[c] = ""
     return df
 
 def _write_df(title: str, df: pd.DataFrame):
@@ -95,40 +100,13 @@ def _write_df(title: str, df: pd.DataFrame):
 def br_now():
     return datetime.now(pytz.timezone(TZ))
 
-# ---- PARSER ROBUSTO DE DATA ----
-def parse_br_date(x):
-    """Aceita dd/mm/aaaa, yyyy-mm-dd, Timestamp/datetime e serial do Excel."""
-    if isinstance(x, (datetime, pd.Timestamp)):
-        try:
-            return pd.to_datetime(x).to_pydatetime()
-        except Exception:
-            pass
-
-    s = str(x).strip()
-    if not s:
-        return None
-
+def parse_br_date(s: str):
+    s = (s or "").strip()
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(s, fmt)
         except Exception:
             pass
-
-    try:
-        dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
-        if pd.notna(dt):
-            return dt.to_pydatetime()
-    except Exception:
-        pass
-
-    try:
-        n = float(s)
-        if n > 59:
-            base = datetime(1899, 12, 30)  # Excel base
-            return base + timedelta(days=int(n))
-    except Exception:
-        pass
-
     return None
 
 def to_br_date(dt: datetime):
@@ -163,16 +141,15 @@ def garantir_colunas(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             df[c] = ""
     return df
 
-def s_lower(s):
+def s_lower(s: pd.Series):
     return s.astype(str).str.strip().str.lower()
 
 def is_cartao(conta: str) -> bool:
     c = (conta or "").strip().lower()
-    padrao = r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos|pagseguro|sumup|cielo|stone|rede|getnet|nubank)"
+    padrao = r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos|pagseguro|mercado\s*pago|sumup|cielo|stone|getnet|nubank)"
     return bool(re.search(padrao, c))
 
 def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bool) -> float:
-    """Se habilitado, aproxima para valor CHEIO de tabela quando dentro da tolerância."""
     if not habilitado:
         return valor
     cheio = VALOR_TABELA.get((servico or "").strip())
@@ -190,8 +167,7 @@ st.set_page_config(layout="wide")
 st.title("💈 Pagamento de Comissão — Vinicius (1 linha por DIA do atendimento)")
 
 # Carrega base
-base = _read_df(ABA_DADOS)
-base = garantir_colunas(base, COLS_OFICIAIS).copy()
+base = _read_df(ABA_DADOS).copy()
 
 # Inputs (linha 1)
 colA, colB, colC = st.columns([1,1,1])
@@ -240,22 +216,44 @@ reprocessar_terca = st.checkbox(
     help="Marque se você apagou as linhas em Despesas e quer gravar novamente esta terça."
 )
 
-# Conjunto Vinicius (e sem caixinha)
+# ============ Pré-filtros ============
+# Vinicius apenas
 dfv = base[s_lower(base["Funcionário"]) == "vinicius"].copy()
 
-# Excluir explicitamente Caixinha (por segurança, em Serviço OU Tipo)
-mask_caixinha = s_lower(dfv["Serviço"]).str.contains("caixinha") | s_lower(dfv["Tipo"]).str.contains("caixinha")
-dfv = dfv[~mask_caixinha].copy()
-
-# Filtrar produtos se necessário
+# Produtos: inclui só se marcado
 if not incluir_produtos:
     dfv = dfv[s_lower(dfv["Tipo"]) == "serviço"]
 
+# EXCLUIR caixinhas da comissão
+mask_caixinha = (
+    (s_lower(dfv["Conta"]) == "caixinha") |
+    (s_lower(dfv["Tipo"]) == "caixinha") |
+    (s_lower(dfv["Serviço"]) == "caixinha")
+)
+dfv = dfv[~mask_caixinha].copy()
+
+# Datas auxiliares
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
+dfv["_dt_pagto"] = dfv["DataPagamento"].apply(parse_br_date)
 
 # Janela terça→segunda (anterior à terça de pagamento)
 ini, fim = janela_terca_a_segunda(terca_pagto)
 st.info(f"Janela desta folha: **{to_br_date(ini)} a {to_br_date(fim)}** (terça→segunda)")
+
+# Counters para debug rápido
+total_linhas_vini = len(dfv)
+na_janela = dfv[(dfv["_dt_serv"].notna()) & (dfv["_dt_serv"] >= ini) & (dfv["_dt_serv"] <= fim)]
+nao_fiado = na_janela[(s_lower(na_janela["StatusFiado"]) == "") | (s_lower(na_janela["StatusFiado"]) == "nao")]
+fiado_all = dfv[(s_lower(dfv["StatusFiado"]) != "") | (s_lower(dfv["IDLancFiado"]) != "")]
+fiados_ok = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"] <= terca_pagto)]
+fiados_pend_all = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)]
+
+st.caption(
+    f"Linhas do Vinicius na base (já sem caixinha): {total_linhas_vini} "
+    f"| Na janela (não fiado): {len(nao_fiado)} "
+    f"| Fiados liberados até a terça: {len(fiados_ok)} "
+    f"| Fiados pendentes: {len(fiados_pend_all)}"
+)
 
 # 1) Itens da SEMANA NÃO FIADO
 mask_semana = (
@@ -267,12 +265,10 @@ mask_semana = (
 semana_df = dfv[mask_semana].copy()
 
 # 2) Fiados liberados até a terça (independe da data do serviço)
-df_fiados = dfv[(s_lower(dfv["StatusFiado"]) != "") | (s_lower(dfv["IDLancFiado"]) != "")]
-df_fiados["_dt_pagto"] = df_fiados["DataPagamento"].apply(parse_br_date)
-fiados_liberados = df_fiados[(df_fiados["_dt_pagto"].notna()) & (df_fiados["_dt_pagto"] <= terca_pagto)].copy()
+fiados_liberados = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"] <= terca_pagto)].copy()
 
-# 3) NOVO BLOCO — Fiados pendentes (histórico, ainda não pagos)
-fiados_pendentes = df_fiados[(df_fiados["_dt_pagto"].isna()) | (df_fiados["_dt_pagto"] > terca_pagto)].copy()
+# 3) Fiados pendentes (histórico, ainda não pagos)
+fiados_pendentes = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)].copy()
 
 # Cache de comissões já pagas (por RefID)
 cache = _read_df(ABA_COMISSOES_CACHE)
@@ -285,21 +281,11 @@ if reprocessar_terca:
 else:
     ja_pagos = set(cache["RefID"].astype(str).tolist())
 
-# ---- Diagnóstico rápido
-st.caption(
-    f"Linhas do Vinicius na base (já sem caixinha): {len(dfv)} | "
-    f"Na janela (não fiado): {len(semana_df)} | "
-    f"Fiados liberados até a terça: {len(fiados_liberados)} | "
-    f"Fiados pendentes: {len(fiados_pendentes)}"
-)
-
 # Função base de cálculo
-def montar_valor_base(df):
+def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        df["Valor_num"] = []
-        df["Competência"] = []
-        df["Valor_base_comissao"] = []
-        return df
+        return df.assign(Valor_num=[], Competência=[], Valor_base_comissao=[])
+    df = df.copy()
     df["Valor_num"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
     df["Competência"] = df["Data"].apply(competencia_from_data_str)
 
@@ -333,8 +319,9 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
 
     ed_cols = ["Data", "Cliente", "Serviço", "Valor_base_comissao", "Competência", "RefID"]
     ed = df[ed_cols].rename(columns={"Valor_base_comissao": "Valor (para comissão)"})
-    ed["% Comissão"] = perc_padrao
-    ed["Comissão (R$)"] = (ed["Valor (para comissão)"] * ed["% Comissão"] / 100.0).round(2)
+    ed["% Comissão"] = float(perc_padrao)
+    ed["Comissão (R$)"] = (pd.to_numeric(ed["Valor (para comissão)"], errors="coerce").fillna(0.0) *
+                           pd.to_numeric(ed["% Comissão"], errors="coerce").fillna(0.0) / 100.0).round(2)
     ed = ed.reset_index(drop=True)
 
     edited = st.data_editor(
@@ -348,7 +335,7 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
         }
     )
 
-    total = float(edited["Comissão (R$)"].sum())
+    total = float(pd.to_numeric(edited["Comissão (R$)"], errors="coerce").fillna(0.0).sum())
     merged = df.merge(edited[["RefID", "% Comissão", "Comissão (R$)"]], on="RefID", how="left")
     merged["ComissaoValor"] = pd.to_numeric(merged["Comissão (R$)"], errors="coerce").fillna(0.0)
 
@@ -356,10 +343,7 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
     return merged, total
 
 semana_grid, total_semana = preparar_grid(semana_df, "Semana (terça→segunda) — NÃO FIADO", "semana")
-
-fiados_liberados_grid, total_fiados = preparar_grid(
-    fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados"
-)
+fiados_liberados_grid, total_fiados = preparar_grid(fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados")
 
 # ------- NOVO: TABELA (somente leitura) — FIADOS A RECEBER -------
 st.subheader("📌 Fiados a receber (histórico — ainda NÃO pagos)")
@@ -367,12 +351,14 @@ if fiados_pendentes.empty:
     st.info("Nenhum fiado pendente no momento.")
     total_fiados_pend = 0.0
 else:
-    fiados_pendentes = montar_valor_base(fiados_pendentes)
-    vis = fiados_pendentes[["Data", "Cliente", "Serviço", "Valor", "Valor_base_comissao"]].rename(
-        columns={"Valor_base_comissao": "Valor (para comissão)"}
+    vis = montar_valor_base(fiados_pendentes)[["Data", "Cliente", "Serviço", "Valor", "Valor_base_comissao"]].rename(
+        columns={"Valor": "Valor original", "Valor_base_comissao": "Valor (para comissão)"}
     ).copy()
-    vis["% Comissão"] = perc_padrao
-    vis["Comissão (R$)"] = (pd.to_numeric(vis["Valor (para comissão)"], errors="coerce").fillna(0.0) * vis["% Comissão"] / 100.0).round(2)
+    vis["% Comissão"] = float(perc_padrao)
+    vis["Comissão (R$)"] = (
+        pd.to_numeric(vis["Valor (para comissão)"], errors="coerce").fillna(0.0) *
+        pd.to_numeric(vis["% Comissão"], errors="coerce").fillna(0.0) / 100.0
+    ).round(2)
     total_fiados_pend = float(vis["Comissão (R$)"].sum())
 
     st.dataframe(
@@ -409,7 +395,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                     "RefID": r["RefID"],
                     "PagoEm": to_br_date(br_now()),
                     "TerçaPagamento": to_br_date(terca_pagto),
-                    "ValorComissao": f'{r["ComissaoValor"]:.2f}'.replace(".", ","),
+                    "ValorComissao": f'{float(r["ComissaoValor"]):.2f}'.replace(".", ","),
                     "Competencia": r.get("Competência", ""),
                     "Observacao": f'{r.get("Cliente","")} | {r.get("Serviço","")} | {r.get("Data","")}',
                 })
@@ -446,9 +432,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                         return datetime.strptime(s, fmt)
                     except Exception:
                         pass
-                # fallback parse
-                dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
-                return None if pd.isna(dt) else dt.to_pydatetime()
+                return None
 
             pagos["_dt"] = pagos["Data"].apply(_norm_dt)
             pagos = pagos[pagos["_dt"].notna()].copy()
