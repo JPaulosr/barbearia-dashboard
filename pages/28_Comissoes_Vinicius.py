@@ -622,19 +622,17 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
             st.info("Nada novo para gravar em Despesas (tudo já lançado).")
 
         # 6) Telegram (resumo do pagamento)
+                # 6) Telegram (resumo do pagamento)
         if enviar_tg:
             texto = build_text_resumo(
                 period_ini=ini, period_fim=fim,
-                total_comissao_hoje=float(total_comissao_hoje),
+                valor_nao_fiado=float(total_semana),
+                valor_fiado_liberado=float(total_fiados),
+                valor_caixinha=float(total_caixinha if pagar_caixinha else 0.0),
                 total_futuros=float(total_fiados_pend),
-                pagar_caixinha=bool(pagar_caixinha),
-                total_cx=float(total_caixinha if pagar_caixinha else 0.0),
                 df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
-                total_fiado_pago_hoje=float(total_fiados),
                 qtd_fiado_pago_hoje=int(qtd_fiados_hoje)
             )
-            if dest_vini:
-                tg_send_html(texto, _get_chat_vini())
-            if dest_jp:
-                tg_send_html(texto, _get_chat_jp())
+            if dest_vini: tg_send_html(texto, _get_chat_vini())
+            if dest_jp:   tg_send_html(texto, _get_chat_jp())
         st.success("Processo concluído ✅")
