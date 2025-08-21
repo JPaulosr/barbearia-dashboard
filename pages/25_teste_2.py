@@ -61,7 +61,7 @@ def _fmt_data(d):
 
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
-    """Conecta no Google Sheets usando st.secrets['GCP_SERVICE_ACCOUNT']."""
+    """Conecta no Google Sheets usando st.secrets['GCP_SERVICE_ACCOUNT'].""" 
     creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
     creds = Credentials.from_service_account_info(
         creds_info,
@@ -221,12 +221,12 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
 
 def gerar_excel(df_lin: pd.DataFrame, df_cli: pd.DataFrame) -> bytes:
     """Gera um .xlsx com duas abas: Linhas e ResumoClientes."""
-    with pd.ExcelWriter(io.BytesIO(), engine="xlsxwriter") as writer:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         df_lin.to_excel(writer, sheet_name="Linhas", index=False)
         df_cli.to_excel(writer, sheet_name="ResumoClientes", index=False)
-        writer.save()
-        data = writer.book.filename.getvalue()
-    return data
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ---------- Helpers Sheets: criar/pegar coluna "Conferido" e atualizar/excluir ----------
 def _get_ws_and_headers():
@@ -321,7 +321,7 @@ with c2:
     st.markdown(f"**{FUNC_VINICIUS}**")
     vv1, vv2, vv3, vv4 = st.columns(4)
     vv1.metric("Clientes", f"{cli_v}")
-    vv2.metric("Serviços", f"{srv_v})
+    vv2.metric("Serviços", f"{srv_v}")
     vv3.metric("Receita", format_moeda(rec_v))
     vv4.metric("Ticket", format_moeda(tkt_v))
 
