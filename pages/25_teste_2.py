@@ -44,7 +44,6 @@ def _fmt_data(d):
         return d.strftime(DATA_FMT)
     if isinstance(d, date):
         return d.strftime(DATA_FMT)
-    # string “bruta”
     try:
         d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
         return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
@@ -54,7 +53,7 @@ def _fmt_data(d):
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
     """Conecta no Google Sheets usando st.secrets['GCP_SERVICE_ACCOUNT'].
-       IMPORTANTE: escopo de escrita para permitir marcar conferido e excluir."""
+       Escopo de ESCRITA para marcar conferido e excluir linhas."""
     creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
     creds = Credentials.from_service_account_info(
         creds_info,
@@ -67,21 +66,23 @@ def _conectar_sheets():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def carregar_base():
-    """Lê a 'Base de Dados' (masculino) direto do Google Sheets e preserva o índice
-       original para mapear a linha real do Sheets (SheetRow = index + 2)."""
+    """Lê a 'Base de Dados' (masculino) direto do Google Sheets.
+       Preserva o índice para mapear a linha real do Sheets (SheetRow = index + 2)."""
     gc = _conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
 
-    # get_as_dataframe alinha com as linhas do Sheets (header na 1ª linha).
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-    # NÃO resetar o index para preservar a correspondência com o número da linha no Sheets.
     df = df.dropna(how="all")
-    if df.empty:
-        df = pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame(columns=[
+            "Data","Serviço","Valor","Conta","Cliente","Combo",
+            "Funcionário","Fase","Hora Chegada","Hora Início",
+            "Hora Saída","Hora Saída do Salão","Tipo","Conferido","SheetRow",
+            "Data_norm","Valor_num"
+        ])
 
     # SheetRow = índice do pandas + 2 (1 = header, 2 = primeira linha de dados)
-    # Como não resetamos o índice, removidos continuam preservando seus índices originais.
     df["SheetRow"] = df.index + 2
 
     # Normaliza nomes de colunas
@@ -97,8 +98,10 @@ def carregar_base():
 
     # Parse de datas
     def parse_data(x):
-        if pd.isna(x): return None
-        if isinstance(x, (datetime, pd.Timestamp)): return x.date()
+        if pd.isna(x):
+            return None
+        if isinstance(x, (datetime, pd.Timestamp)):
+            return x.date()
         s = str(x).strip()
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"]:
             try:
@@ -111,7 +114,8 @@ def carregar_base():
 
     # Parse de valores
     def parse_valor(v):
-        if pd.isna(v): return 0.0
+        if pd.isna(v):
+            return 0.0
         s = str(v).strip().replace("R$", "").replace(" ", "")
         if "," in s and "." in s:
             s = s.replace(".", "").replace(",", ".")
@@ -124,11 +128,11 @@ def carregar_base():
 
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # Normaliza strings
+    # Normaliza strings (corrigido: usar .str.strip(), não .strip())
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
-    if col not in df.columns:
-        df[col] = ""
-    df[col] = df[col].astype(str).fillna("").str.strip()
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].astype(str).fillna("").str.strip()
 
     # Normaliza Conferido para bool
     def to_bool(x):
@@ -149,17 +153,14 @@ def contar_atendimentos_dia(df: pd.DataFrame) -> int:
     """Aplica a regra de 11/05/2025 para contar atendimentos do bloco (um único dia)."""
     if df.empty:
         return 0
-    # supõe que df contém um único dia
     d0 = df["Data_norm"].dropna()
     if d0.empty:
         return 0
     dia = d0.iloc[0]
     if dia < DATA_CORRETA:
-        # Antes do marco: cada linha = 1 atendimento
-        return len(df)
+        return len(df)  # Antes do marco: cada linha = 1 atendimento
     else:
-        # Depois do marco: 1 atendimento por Cliente + Data
-        return df.groupby(["Cliente", "Data_norm"]).ngroups
+        return df.groupby(["Cliente", "Data_norm"]).ngroups  # Depois: 1 por Cliente+Data
 
 def kpis(df: pd.DataFrame):
     if df.empty:
@@ -210,12 +211,11 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
 
 def gerar_excel(df_lin: pd.DataFrame, df_cli: pd.DataFrame) -> bytes:
     """Gera um .xlsx com duas abas: Linhas e ResumoClientes."""
-    with pd.ExcelWriter(io.BytesIO(), engine="xlsxwriter") as writer:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         df_lin.to_excel(writer, sheet_name="Linhas", index=False)
         df_cli.to_excel(writer, sheet_name="ResumoClientes", index=False)
-        writer.save()
-        data = writer.book.filename.getvalue()
-    return data
+    return buffer.getvalue()
 
 # ============== Helpers de atualização/exclusão no Sheets ==============
 def _ensure_conferido_column(ws):
@@ -245,8 +245,7 @@ def marcar_conferido(sheet, ws, updates):
     for u in updates:
         r = u["row"]
         rngs.append(f"{rowcol_to_a1(r, col_conf)}:{rowcol_to_a1(r, col_conf)}")
-        vals.append([[ "TRUE" if u["value"] else "FALSE" ]])
-    # Faz batch update para minimizar chamadas
+        vals.append([["TRUE" if u["value"] else "FALSE"]])
     data = [{"range": r, "values": v} for r, v in zip(rngs, vals)]
     sheet.values_batch_update(data)
 
@@ -341,13 +340,11 @@ st.markdown("---")
 # -------------------------
 st.subheader("📈 Histórico — Dias com mais atendimentos")
 
-# Opção para ocultar dias anteriores a DATA_CORRETA (evita poluição visual)
 only_after_cut = st.checkbox(
     f"Mostrar apenas a partir de {DATA_CORRETA.strftime('%d/%m/%Y')}",
     value=True
 )
 
-# Função para contar clientes e serviços por dia com a regra de corte
 def contar_atendimentos_bloco(bloco: pd.DataFrame):
     if bloco.empty:
         return 0, 0
@@ -356,30 +353,26 @@ def contar_atendimentos_bloco(bloco: pd.DataFrame):
         return 0, len(bloco)
     dia = d0.iloc[0]
     if dia < DATA_CORRETA:
-        clientes = len(bloco)               # antes do marco
+        clientes = len(bloco)
     else:
-        clientes = bloco.groupby(["Cliente", "Data_norm"]).ngroups  # depois do marco
+        clientes = bloco.groupby(["Cliente", "Data_norm"]).ngroups
     servicos = len(bloco)
     return clientes, servicos
 
-# Monta histórico
 lista = []
-for dia, bloco in df_base.groupby("Data_norm"):
-    if pd.isna(dia):
+for dia_val, bloco in df_base.groupby("Data_norm"):
+    if pd.isna(dia_val):
         continue
-    if only_after_cut and dia < DATA_CORRETA:
+    if only_after_cut and dia_val < DATA_CORRETA:
         continue
     cli_h, srv_h = contar_atendimentos_bloco(bloco)
-    lista.append({"Data": dia, "Clientes únicos": cli_h, "Serviços": srv_h})
+    lista.append({"Data": dia_val, "Clientes únicos": cli_h, "Serviços": srv_h})
 
 df_hist = pd.DataFrame(lista).sort_values("Data")
-# Garante tipo datetime para gráficos (sem usar .dt depois)
 if not df_hist.empty:
     df_hist["Data"] = pd.to_datetime(df_hist["Data"], errors="coerce")
 
-# Destaque do recorde e Top 5
 if not df_hist.empty:
-    # Recorde (mais clientes)
     top_idx = df_hist["Clientes únicos"].idxmax()
     top_dia = df_hist.loc[top_idx]
     st.success(
@@ -387,22 +380,20 @@ if not df_hist.empty:
         f"**{int(top_dia['Clientes únicos'])} clientes** e **{int(top_dia['Serviços'])} serviços**."
     )
 
-    # Top 5 por clientes (desempate por serviços e data recency)
     df_top5 = df_hist.sort_values(
         ["Clientes únicos", "Serviços", "Data"],
         ascending=[False, False, False]
     ).head(5).copy()
     df_top5["Data_fmt"] = df_top5["Data"].apply(_fmt_data)
 
-    col_t1, col_t2 = st.columns([1,1])
+    col_t1, col_t2 = st.columns([1, 1])
     with col_t1:
         st.markdown("**🏆 Top 5 dias (por clientes)**")
         st.dataframe(
             df_top5[["Data_fmt", "Clientes únicos", "Serviços"]]
-                   .rename(columns={"Data_fmt": "Data"}),
+                .rename(columns={"Data_fmt": "Data"}),
             use_container_width=True, hide_index=True
         )
-
     with col_t2:
         fig_top = px.bar(
             df_top5,
@@ -411,13 +402,12 @@ if not df_hist.empty:
         )
         st.plotly_chart(fig_top, use_container_width=True)
 
-    # Tabela completa + gráfico de linha
     st.markdown("**Histórico completo**")
     df_hist_show = df_hist.copy()
     df_hist_show["Data_fmt"] = df_hist_show["Data"].apply(_fmt_data)
     st.dataframe(
         df_hist_show[["Data_fmt", "Clientes únicos", "Serviços"]]
-                    .rename(columns={"Data_fmt": "Data"}),
+            .rename(columns={"Data_fmt": "Data"}),
         use_container_width=True, hide_index=True
     )
 
@@ -486,23 +476,22 @@ except Exception as e:
 st.markdown("---")
 st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
 
-# Garante que colunas existam e prepara a visão editável
 df_conf = df_dia.copy()
 if "Conferido" not in df_conf.columns:
     df_conf["Conferido"] = False
-# Colunas úteis na conferência
+
 df_conf_view = df_conf[[
     "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
 ]].copy()
 df_conf_view["Excluir"] = False  # coluna auxiliar para exclusão
 
-st.caption("Edite a coluna **Conferido** e/ou marque **Excluir** nas linhas desejadas. Depois clique em **Aplicar mudanças**.")
+st.caption("Edite **Conferido** e/ou marque **Excluir** nas linhas desejadas. Depois clique em **Aplicar mudanças**.")
 edited = st.data_editor(
     df_conf_view,
     use_container_width=True,
     hide_index=True,
     column_config={
-        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Número da linha real no Sheets", disabled=True),
+        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Nº da linha real no Sheets", disabled=True),
         "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
         "Serviço": st.column_config.TextColumn("Serviço", disabled=True),
         "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
@@ -514,7 +503,7 @@ edited = st.data_editor(
     key="editor_conferencia"
 )
 
-colA, colB = st.columns([1,1])
+colA, colB = st.columns([1, 1])
 with colA:
     aplicar = st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary")
 with colB:
@@ -526,10 +515,8 @@ if aplicar:
         sh = gc.open_by_key(SHEET_ID)
         ws = sh.worksheet(ABA_DADOS)
 
-        # 1) Atualiza Conferido
-        # Compara valores editados vs. originais
+        # Atualiza Conferido
         conf_updates = []
-        # Original mapeado por SheetRow -> bool
         orig_by_row = df_conf.set_index("SheetRow")["Conferido"].to_dict()
         for _, r in edited.iterrows():
             rownum = int(r["SheetRow"])
@@ -537,11 +524,10 @@ if aplicar:
             old_val = bool(orig_by_row.get(rownum, False))
             if new_val != old_val:
                 conf_updates.append({"row": rownum, "value": new_val})
-
         if conf_updates:
             marcar_conferido(sh, ws, conf_updates)
 
-        # 2) Excluir linhas (se houver)
+        # Excluir linhas
         rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(r["Excluir"])]
         if rows_to_delete:
             excluir_linhas(ws, rows_to_delete)
