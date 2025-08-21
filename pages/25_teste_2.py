@@ -37,26 +37,21 @@ def _tz_now():
     return datetime.now(pytz.timezone(TZ))
 
 def _fmt_data(d):
-    """Formata qualquer tipo (Timestamp/date/str) para dd/mm/aaaa."""
     if pd.isna(d):
         return ""
     if isinstance(d, (pd.Timestamp, datetime)):
         return d.strftime(DATA_FMT)
     if isinstance(d, date):
         return d.strftime(DATA_FMT)
-    try:
-        d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
-        return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
-    except Exception:
-        return str(d)
+    d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
+    return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
 
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
-    """Conecta no Google Sheets usando st.secrets['GCP_SERVICE_ACCOUNT'].
-       Escopo de ESCRITA para marcar conferido e excluir linhas."""
-    creds_info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    """Escopo de ESCRITA para marcar conferido e excluir linhas."""
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
     creds = Credentials.from_service_account_info(
-        creds_info,
+        info,
         scopes=[
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -66,8 +61,7 @@ def _conectar_sheets():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def carregar_base():
-    """Lê a 'Base de Dados' (masculino) direto do Google Sheets.
-       Preserva o índice para mapear a linha real do Sheets (SheetRow = index + 2)."""
+    """Lê a 'Base de Dados' e preserva o índice para mapear a linha real do Sheets."""
     gc = _conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
@@ -75,20 +69,13 @@ def carregar_base():
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
     df = df.dropna(how="all")
     if df is None or df.empty:
-        return pd.DataFrame(columns=[
-            "Data","Serviço","Valor","Conta","Cliente","Combo",
-            "Funcionário","Fase","Hora Chegada","Hora Início",
-            "Hora Saída","Hora Saída do Salão","Tipo","Conferido","SheetRow",
-            "Data_norm","Valor_num"
-        ])
+        return pd.DataFrame()
 
-    # SheetRow = índice do pandas + 2 (1 = header, 2 = primeira linha de dados)
+    # Mapeia linha física do Sheets (header=1 → primeira linha de dados é 2)
     df["SheetRow"] = df.index + 2
 
-    # Normaliza nomes de colunas
+    # Normaliza nomes e garante colunas
     df.columns = [str(c).strip() for c in df.columns]
-
-    # Garante colunas esperadas
     cols = ["Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
             "Funcionário", "Fase", "Hora Chegada", "Hora Início",
             "Hora Saída", "Hora Saída do Salão", "Tipo", "Conferido"]
@@ -98,10 +85,8 @@ def carregar_base():
 
     # Parse de datas
     def parse_data(x):
-        if pd.isna(x):
-            return None
-        if isinstance(x, (datetime, pd.Timestamp)):
-            return x.date()
+        if pd.isna(x): return None
+        if isinstance(x, (datetime, pd.Timestamp)): return x.date()
         s = str(x).strip()
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"]:
             try:
@@ -109,13 +94,11 @@ def carregar_base():
             except Exception:
                 pass
         return None
-
     df["Data_norm"] = df["Data"].apply(parse_data)
 
     # Parse de valores
     def parse_valor(v):
-        if pd.isna(v):
-            return 0.0
+        if pd.isna(v): return 0.0
         s = str(v).strip().replace("R$", "").replace(" ", "")
         if "," in s and "." in s:
             s = s.replace(".", "").replace(",", ".")
@@ -125,66 +108,48 @@ def carregar_base():
             return float(s)
         except Exception:
             return 0.0
-
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # Normaliza strings (corrigido: usar .str.strip(), não .strip())
+    # Limpeza de strings (usar .str.strip())
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
         if col not in df.columns:
             df[col] = ""
         df[col] = df[col].astype(str).fillna("").str.strip()
 
-    # Normaliza Conferido para bool
+    # Conferido → bool
     def to_bool(x):
-        if isinstance(x, bool):
-            return x
+        if isinstance(x, bool): return x
         s = str(x).strip().lower()
         return s in ("1", "true", "sim", "ok", "y", "yes")
     df["Conferido"] = df["Conferido"].apply(to_bool)
 
     return df
 
-def filtrar_por_dia(df: pd.DataFrame, dia: date) -> pd.DataFrame:
-    if df.empty or dia is None:
-        return df.iloc[0:0]
+def filtrar_por_dia(df, dia):
+    if df.empty or dia is None: return df.iloc[0:0]
     return df[df["Data_norm"] == dia].copy()
 
-def contar_atendimentos_dia(df: pd.DataFrame) -> int:
-    """Aplica a regra de 11/05/2025 para contar atendimentos do bloco (um único dia)."""
-    if df.empty:
-        return 0
+def contar_atendimentos_dia(df):
+    if df.empty: return 0
     d0 = df["Data_norm"].dropna()
-    if d0.empty:
-        return 0
+    if d0.empty: return 0
     dia = d0.iloc[0]
     if dia < DATA_CORRETA:
-        return len(df)  # Antes do marco: cada linha = 1 atendimento
-    else:
-        return df.groupby(["Cliente", "Data_norm"]).ngroups  # Depois: 1 por Cliente+Data
+        return len(df)
+    return df.groupby(["Cliente", "Data_norm"]).ngroups
 
-def kpis(df: pd.DataFrame):
-    if df.empty:
-        return 0, 0, 0.0, 0.0
+def kpis(df):
+    if df.empty: return 0, 0, 0.0, 0.0
     clientes = contar_atendimentos_dia(df)
     servicos = len(df)
     receita = float(df["Valor_num"].sum())
     ticket = (receita / clientes) if clientes > 0 else 0.0
     return clientes, servicos, receita, ticket
 
-def kpis_por_funcionario(df_dia: pd.DataFrame, nome_func: str):
-    df_f = df_dia[df_dia["Funcionário"].str.casefold() == nome_func.casefold()].copy()
-    if df_f.empty:
-        return 0, 0, 0.0, 0.0
-    clientes = contar_atendimentos_dia(df_f)
-    servicos = len(df_f)
-    receita = float(df_f["Valor_num"].sum())
-    ticket = (receita / clientes) if clientes > 0 else 0.0
-    return clientes, servicos, receita, ticket
-
-def format_moeda(v: float) -> str:
+def format_moeda(v):
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
+def preparar_tabela_exibicao(df):
     cols_ordem = [
         "Data", "Cliente", "Serviço", "Valor", "Conta", "Funcionário",
         "Combo", "Tipo", "Hora Chegada", "Hora Início", "Hora Saída", "Hora Saída do Salão"
@@ -192,72 +157,50 @@ def preparar_tabela_exibicao(df: pd.DataFrame) -> pd.DataFrame:
     for c in cols_ordem:
         if c not in df.columns:
             df[c] = ""
-
-    df_out = df.copy()
-
-    # Ordena por hora de início (quando houver) e cliente
+    out = df.copy()
     ord_cols = []
-    if "Hora Início" in df_out.columns:
-        ord_cols.append("Hora Início")
+    if "Hora Início" in out.columns: ord_cols.append("Hora Início")
     ord_cols.append("Cliente")
     try:
-        df_out = df_out.sort_values(by=ord_cols, ascending=[True] * len(ord_cols))
+        out = out.sort_values(by=ord_cols, ascending=[True] * len(ord_cols))
     except Exception:
         pass
+    out["Data"] = out["Data_norm"].apply(_fmt_data)
+    out["Valor"] = out["Valor_num"].apply(format_moeda)
+    return out[cols_ordem]
 
-    df_out["Data"] = df_out["Data_norm"].apply(_fmt_data)
-    df_out["Valor"] = df_out["Valor_num"].apply(format_moeda)
-    return df_out[cols_ordem]
+def gerar_excel(df_lin, df_cli):
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
+        df_lin.to_excel(w, sheet_name="Linhas", index=False)
+        df_cli.to_excel(w, sheet_name="ResumoClientes", index=False)
+    return buf.getvalue()
 
-def gerar_excel(df_lin: pd.DataFrame, df_cli: pd.DataFrame) -> bytes:
-    """Gera um .xlsx com duas abas: Linhas e ResumoClientes."""
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-        df_lin.to_excel(writer, sheet_name="Linhas", index=False)
-        df_cli.to_excel(writer, sheet_name="ResumoClientes", index=False)
-    return buffer.getvalue()
-
-# ============== Helpers de atualização/exclusão no Sheets ==============
+# ===== helpers Sheets =====
 def _ensure_conferido_column(ws):
+    """Garante coluna 'Conferido' e retorna o índice (1-based)."""
     headers = ws.row_values(1)
     if not headers:
-        return None, None
+        raise RuntimeError("Cabeçalho vazio no Sheets.")
     if "Conferido" in headers:
-        col = headers.index("Conferido") + 1
-        return headers, col
-    # se não existir, criar uma nova coluna "Conferido" ao final
+        return headers.index("Conferido") + 1
     col = len(headers) + 1
     ws.update_cell(1, col, "Conferido")
-    return ws.row_values(1), col
+    return col
 
-def marcar_conferido(sheet, ws, updates):
-    """
-    updates: lista de dicts {"row": SheetRow, "value": True/False}
-    """
-    if not updates:
-        return
-    headers, col_conf = _ensure_conferido_column(ws)
-    if not col_conf:
-        st.warning("Não foi possível localizar/criar a coluna 'Conferido'.")
-        return
-    rngs = []
-    vals = []
+def _update_conferido(ws, updates):
+    """Atualiza 1 a 1 para evitar payload inválido."""
+    if not updates: return
+    col_conf = _ensure_conferido_column(ws)
     for u in updates:
-        r = u["row"]
-        rngs.append(f"{rowcol_to_a1(r, col_conf)}:{rowcol_to_a1(r, col_conf)}")
-        vals.append([["TRUE" if u["value"] else "FALSE"]])
-    data = [{"range": r, "values": v} for r, v in zip(rngs, vals)]
-    sheet.values_batch_update(data)
+        row = int(u["row"])
+        val = "TRUE" if u["value"] else "FALSE"
+        ws.update_cell(row, col_conf, val)
 
-def excluir_linhas(ws, rows_to_delete):
-    """
-    Deleta as linhas no Sheets. IMPORTANTE: deletar em ordem decrescente.
-    """
-    if not rows_to_delete:
-        return
-    for r in sorted(rows_to_delete, reverse=True):
+def _delete_rows(ws, rows):
+    for r in sorted(set(rows), reverse=True):
         try:
-            ws.delete_rows(r)
+            ws.delete_rows(int(r))
         except Exception as e:
             st.warning(f"Falha ao excluir linha {r}: {e}")
 
@@ -271,55 +214,50 @@ st.caption("KPIs do dia, comparativo por funcionário e histórico dos dias com 
 with st.spinner("Carregando base masculina..."):
     df_base = carregar_base()
 
-# -------------------------
 # Seletor de dia
-# -------------------------
 hoje = _tz_now().date()
 dia_selecionado = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
 df_dia = filtrar_por_dia(df_base, dia_selecionado)
-
 if df_dia.empty:
     st.info("Nenhum atendimento encontrado para o dia selecionado.")
     st.stop()
 
-# -------------------------
-# KPIs do dia
-# -------------------------
+# KPIs
 cli, srv, rec, tkt = kpis(df_dia)
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("👥 Clientes atendidos", f"{cli}")
-k2.metric("✂️ Serviços realizados", f"{srv}")
-k3.metric("💰 Receita do dia", format_moeda(rec))
-k4.metric("🧾 Ticket médio", format_moeda(tkt))
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("👥 Clientes atendidos", f"{cli}")
+c2.metric("✂️ Serviços realizados", f"{srv}")
+c3.metric("💰 Receita do dia", format_moeda(rec))
+c4.metric("🧾 Ticket médio", format_moeda(tkt))
 
 st.markdown("---")
 
-# -------------------------
-# Por Funcionário (dia)
-# -------------------------
+# Por funcionário (métricas)
 st.subheader("📊 Por Funcionário (dia selecionado)")
-
 df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
 df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
 
-cli_j, srv_j, rec_j, tkt_j = kpis(df_j)
-cli_v, srv_v, rec_v, tkt_v = kpis(df_v)
+def _kpis_func(df_): 
+    return kpis(df_)
 
-c1, c2 = st.columns(2)
-with c1:
+cli_j, srv_j, rec_j, tkt_j = _kpis_func(df_j)
+cli_v, srv_v, rec_v, tkt_v = _kpis_func(df_v)
+
+f1, f2 = st.columns(2)
+with f1:
     st.markdown(f"**{FUNC_JPAULO}**")
-    jj1, jj2, jj3, jj4 = st.columns(4)
-    jj1.metric("Clientes", f"{cli_j}")
-    jj2.metric("Serviços", f"{srv_j}")
-    jj3.metric("Receita", format_moeda(rec_j))
-    jj4.metric("Ticket", format_moeda(tkt_j))
-with c2:
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Clientes", f"{cli_j}")
+    a2.metric("Serviços", f"{srv_j}")
+    a3.metric("Receita", format_moeda(rec_j))
+    a4.metric("Ticket", format_moeda(tkt_j))
+with f2:
     st.markdown(f"**{FUNC_VINICIUS}**")
-    vv1, vv2, vv3, vv4 = st.columns(4)
-    vv1.metric("Clientes", f"{cli_v}")
-    vv2.metric("Serviços", f"{srv_v}")
-    vv3.metric("Receita", format_moeda(rec_v))
-    vv4.metric("Ticket", format_moeda(tkt_v))
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Clientes", f"{cli_v}")
+    b2.metric("Serviços", f"{srv_v}")
+    b3.metric("Receita", format_moeda(rec_v))
+    b4.metric("Ticket", format_moeda(tkt_v))
 
 # Gráfico comparativo (Clientes x Serviços)
 df_comp = pd.DataFrame([
@@ -333,11 +271,70 @@ fig = px.bar(
 )
 st.plotly_chart(fig, use_container_width=True)
 
+# ========================================================
+# 🔎 MODO DE CONFERÊNCIA (logo após o comparativo)
+# ========================================================
 st.markdown("---")
+st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
+
+df_conf = df_dia.copy()
+if "Conferido" not in df_conf.columns:
+    df_conf["Conferido"] = False
+
+df_conf_view = df_conf[[
+    "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
+]].copy()
+df_conf_view["Excluir"] = False
+
+st.caption("Edite **Conferido** e/ou marque **Excluir**. Depois clique em **Aplicar mudanças**.")
+edited = st.data_editor(
+    df_conf_view,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Nº real no Sheets", disabled=True),
+        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
+        "Serviço": st.column_config.TextColumn("Serviço", disabled=True),
+        "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
+        "Valor": st.column_config.TextColumn("Valor", disabled=True),
+        "Conta": st.column_config.TextColumn("Conta", disabled=True),
+        "Conferido": st.column_config.CheckboxColumn("Conferido"),
+        "Excluir": st.column_config.CheckboxColumn("Excluir"),
+    },
+    key="editor_conferencia"
+)
+
+if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
+    try:
+        gc = _conectar_sheets()
+        sh = gc.open_by_key(SHEET_ID)
+        ws = sh.worksheet(ABA_DADOS)
+
+        # Atualiza 'Conferido' 1 a 1 (payload simples e estável)
+        orig_by_row = df_conf.set_index("SheetRow")["Conferido"].to_dict()
+        updates = []
+        for _, r in edited.iterrows():
+            rownum = int(r["SheetRow"])
+            new_val = bool(r["Conferido"])
+            old_val = bool(orig_by_row.get(rownum, False))
+            if new_val != old_val:
+                updates.append({"row": rownum, "value": new_val})
+        _update_conferido(ws, updates)
+
+        # Exclui linhas marcadas
+        rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(r["Excluir"])]
+        _delete_rows(ws, rows_to_delete)
+
+        st.success("Alterações aplicadas com sucesso!")
+        st.experimental_rerun()
+
+    except Exception as e:
+        st.error(f"Falha ao aplicar mudanças: {e}")
 
 # -------------------------
 # Histórico — Dias com mais atendimentos
 # -------------------------
+st.markdown("---")
 st.subheader("📈 Histórico — Dias com mais atendimentos")
 
 only_after_cut = st.checkbox(
@@ -345,28 +342,23 @@ only_after_cut = st.checkbox(
     value=True
 )
 
-def contar_atendimentos_bloco(bloco: pd.DataFrame):
-    if bloco.empty:
-        return 0, 0
+def contar_atendimentos_bloco(bloco):
+    if bloco.empty: return 0, 0
     d0 = bloco["Data_norm"].dropna()
-    if d0.empty:
-        return 0, len(bloco)
+    if d0.empty: return 0, len(bloco)
     dia = d0.iloc[0]
     if dia < DATA_CORRETA:
         clientes = len(bloco)
     else:
         clientes = bloco.groupby(["Cliente", "Data_norm"]).ngroups
-    servicos = len(bloco)
-    return clientes, servicos
+    return clientes, len(bloco)
 
 lista = []
-for dia_val, bloco in df_base.groupby("Data_norm"):
-    if pd.isna(dia_val):
-        continue
-    if only_after_cut and dia_val < DATA_CORRETA:
-        continue
+for dval, bloco in df_base.groupby("Data_norm"):
+    if pd.isna(dval): continue
+    if only_after_cut and dval < DATA_CORRETA: continue
     cli_h, srv_h = contar_atendimentos_bloco(bloco)
-    lista.append({"Data": dia_val, "Clientes únicos": cli_h, "Serviços": srv_h})
+    lista.append({"Data": dval, "Clientes únicos": cli_h, "Serviços": srv_h})
 
 df_hist = pd.DataFrame(lista).sort_values("Data")
 if not df_hist.empty:
@@ -386,18 +378,17 @@ if not df_hist.empty:
     ).head(5).copy()
     df_top5["Data_fmt"] = df_top5["Data"].apply(_fmt_data)
 
-    col_t1, col_t2 = st.columns([1, 1])
-    with col_t1:
+    ct1, ct2 = st.columns([1, 1])
+    with ct1:
         st.markdown("**🏆 Top 5 dias (por clientes)**")
         st.dataframe(
             df_top5[["Data_fmt", "Clientes únicos", "Serviços"]]
                 .rename(columns={"Data_fmt": "Data"}),
             use_container_width=True, hide_index=True
         )
-    with col_t2:
+    with ct2:
         fig_top = px.bar(
-            df_top5,
-            x="Data_fmt", y="Clientes únicos", text="Clientes únicos",
+            df_top5, x="Data_fmt", y="Clientes únicos", text="Clientes únicos",
             title="Top 5 — Clientes por dia"
         )
         st.plotly_chart(fig_top, use_container_width=True)
@@ -434,6 +425,7 @@ grp = (
     .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
 )
 grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
+
 st.dataframe(
     grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
     use_container_width=True, hide_index=True
@@ -443,18 +435,15 @@ st.markdown("### Exportar")
 df_lin_export = df_exibe.copy()
 df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
 
-csv_lin = df_lin_export.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "⬇️ Baixar Linhas (CSV)",
-    data=csv_lin,
+    data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
     file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
     mime="text/csv"
 )
-
-csv_cli = df_cli_export.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "⬇️ Baixar Resumo por Cliente (CSV)",
-    data=csv_cli,
+    data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
     file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
     mime="text/csv"
 )
@@ -469,74 +458,6 @@ try:
     )
 except Exception as e:
     st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
-
-# =========================
-# 🔎 MODO DE CONFERÊNCIA (marcar conferido / excluir linhas do dia)
-# =========================
-st.markdown("---")
-st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
-
-df_conf = df_dia.copy()
-if "Conferido" not in df_conf.columns:
-    df_conf["Conferido"] = False
-
-df_conf_view = df_conf[[
-    "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
-]].copy()
-df_conf_view["Excluir"] = False  # coluna auxiliar para exclusão
-
-st.caption("Edite **Conferido** e/ou marque **Excluir** nas linhas desejadas. Depois clique em **Aplicar mudanças**.")
-edited = st.data_editor(
-    df_conf_view,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Nº da linha real no Sheets", disabled=True),
-        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
-        "Serviço": st.column_config.TextColumn("Serviço", disabled=True),
-        "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
-        "Valor": st.column_config.TextColumn("Valor", disabled=True),
-        "Conta": st.column_config.TextColumn("Conta", disabled=True),
-        "Conferido": st.column_config.CheckboxColumn("Conferido"),
-        "Excluir": st.column_config.CheckboxColumn("Excluir"),
-    },
-    key="editor_conferencia"
-)
-
-colA, colB = st.columns([1, 1])
-with colA:
-    aplicar = st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary")
-with colB:
-    st.info("A gravação atualiza **Conferido** e exclui as linhas marcadas em **Excluir**.")
-
-if aplicar:
-    try:
-        gc = _conectar_sheets()
-        sh = gc.open_by_key(SHEET_ID)
-        ws = sh.worksheet(ABA_DADOS)
-
-        # Atualiza Conferido
-        conf_updates = []
-        orig_by_row = df_conf.set_index("SheetRow")["Conferido"].to_dict()
-        for _, r in edited.iterrows():
-            rownum = int(r["SheetRow"])
-            new_val = bool(r["Conferido"])
-            old_val = bool(orig_by_row.get(rownum, False))
-            if new_val != old_val:
-                conf_updates.append({"row": rownum, "value": new_val})
-        if conf_updates:
-            marcar_conferido(sh, ws, conf_updates)
-
-        # Excluir linhas
-        rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(r["Excluir"])]
-        if rows_to_delete:
-            excluir_linhas(ws, rows_to_delete)
-
-        st.success("Alterações aplicadas com sucesso!")
-        st.experimental_rerun()
-
-    except Exception as e:
-        st.error(f"Falha ao aplicar mudanças: {e}")
 
 st.caption(
     "• Contagem de clientes aplica a regra: antes de 11/05/2025 cada linha=1 atendimento; "
