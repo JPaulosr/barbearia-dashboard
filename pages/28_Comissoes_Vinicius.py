@@ -4,7 +4,7 @@
 # - Trava anti-duplicação oficial via coluna RefID na própria aba Despesas (cria automaticamente + backfill).
 # - Telegram: usa as mesmas chaves das outras páginas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID_*).
 # - Botão 📲 Reenviar resumo (sem gravar).
-# - Mostra no Telegram: 🏦 Fiado pago hoje (valor e quantidade de itens).
+# - Mostra no Telegram separado: NÃO fiado, fiados liberados, caixinha, total e pendentes.
 # - **Sem** a regra "usar preço de tabela no cartão": apenas arredondamento por tolerância.
 
 import streamlit as st
@@ -27,7 +27,7 @@ ABA_COMISSOES_CACHE = "comissoes_cache"
 ABA_DESPESAS = "Despesas"
 TZ = "America/Sao_Paulo"
 
-# Telegram (mesmas variáveis já usadas em outras páginas)
+# Telegram (fallbacks)
 TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 TELEGRAM_CHAT_ID_JPAULO_FALLBACK = "493747253"
 TELEGRAM_CHAT_ID_VINICIUS_FALLBACK = "-1001234567890"
@@ -42,11 +42,10 @@ COLS_OFICIAIS = [
     "CaixinhaDia", "CaixinhaFundo",
 ]
 
-# Em Despesas, RefID é a trava oficial
 COLS_DESPESAS_FIX = ["Data", "Prestador", "Descrição", "Valor", "Me Pag:", "RefID"]
 
 PERCENTUAL_PADRAO = 50.0
-VALOR_TABELA = {  # usado só para "snap" (arredondamento) com tolerância
+VALOR_TABELA = {
     "Corte": 25.00, "Barba": 15.00, "Sobrancelha": 7.00,
     "Luzes": 45.00, "Tintura": 20.00, "Alisamento": 40.00,
     "Gel": 10.00, "Pomada": 15.00,
@@ -89,21 +88,17 @@ def _write_df(title: str, df: pd.DataFrame):
 # =============================
 # HELPERS
 # =============================
-def br_now():
-    return datetime.now(pytz.timezone(TZ))
+def br_now(): return datetime.now(pytz.timezone(TZ))
 
 def parse_br_date(s: str):
     s = (s or "").strip()
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(s, fmt)
-        except Exception:
-            pass
+        try: return datetime.strptime(s, fmt)
+        except: pass
     return None
 
 def to_br_date(dt):
-    if dt is None or (hasattr(dt, "tz_localize") and pd.isna(dt)):
-        return ""
+    if dt is None or (hasattr(dt, "tz_localize") and pd.isna(dt)): return ""
     return pd.to_datetime(dt).strftime("%d/%m/%Y")
 
 def competencia_from_data_str(data_servico_str: str) -> str:
@@ -117,29 +112,22 @@ def janela_terca_a_segunda(terca_pagto: datetime):
 
 def garantir_colunas(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     for c in cols:
-        if c not in df.columns:
-            df[c] = ""
+        if c not in df.columns: df[c] = ""
     return df
 
-def s_lower(s: pd.Series):
-    return s.astype(str).str.strip().str.lower()
+def s_lower(s: pd.Series): return s.astype(str).str.strip().str.lower()
 
 def _to_float_brl(v) -> float:
     s = str(v).strip()
-    if not s:
-        return 0.0
+    if not s: return 0.0
     s = s.replace("R$", "").replace(" ", "")
-    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)  # milhares
+    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)
     s = s.replace(",", ".")
-    try:
-        return float(s)
-    except:
-        return 0.0
+    try: return float(s)
+    except: return 0.0
 
 def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bool) -> float:
-    """Se habilitado, 'cola' no preço da tabela quando estiver dentro da tolerância."""
-    if not habilitado:
-        return valor
+    if not habilitado: return valor
     cheio = VALOR_TABELA.get((servico or "").strip())
     if isinstance(cheio, (int, float)) and abs(valor - float(cheio)) <= tol:
         return float(cheio)
@@ -150,7 +138,6 @@ def format_brl(v: float) -> str:
     except: v = 0.0
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- RefIDs ---
 def _refid_despesa(data_br: str, prestador: str, descricao: str, valor_float: float, mepag: str) -> str:
     base = f"{data_br.strip()}|{prestador.strip().lower()}|{descricao.strip().lower()}|{valor_float:.2f}|{str(mepag).strip().lower()}"
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
@@ -160,86 +147,59 @@ def make_refid_atendimento(row: pd.Series) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 # =============================
-# TELEGRAM (usa as mesmas chaves do app)
+# TELEGRAM
 # =============================
-def _get_token() -> str:
-    try:
-        v = (st.secrets.get("TELEGRAM_TOKEN") or "").strip()
-        return v or TELEGRAM_TOKEN_FALLBACK
-    except Exception:
-        return TELEGRAM_TOKEN_FALLBACK
-
-def _get_chat_jp() -> str:
-    try:
-        v = (st.secrets.get("TELEGRAM_CHAT_ID_JPAULO") or "").strip()
-        return v or TELEGRAM_CHAT_ID_JPAULO_FALLBACK
-    except Exception:
-        return TELEGRAM_CHAT_ID_JPAULO_FALLBACK
-
-def _get_chat_vini() -> str:
-    try:
-        v = (st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS") or "").strip()
-        return v or TELEGRAM_CHAT_ID_VINICIUS_FALLBACK
-    except Exception:
-        return TELEGRAM_CHAT_ID_VINICIUS_FALLBACK
+def _get_token(): return (st.secrets.get("TELEGRAM_TOKEN","") or TELEGRAM_TOKEN_FALLBACK).strip()
+def _get_chat_jp(): return (st.secrets.get("TELEGRAM_CHAT_ID_JPAULO","") or TELEGRAM_CHAT_ID_JPAULO_FALLBACK).strip()
+def _get_chat_vini(): return (st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS","") or TELEGRAM_CHAT_ID_VINICIUS_FALLBACK).strip()
 
 def tg_send_html(text: str, chat_id: str) -> bool:
-    token = _get_token()
     try:
         r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
+            f"https://api.telegram.org/bot{_get_token()}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
             timeout=30
         )
-        js = r.json()
-        return bool(r.ok and js.get("ok"))
-    except Exception:
-        return False
+        return bool(r.ok and r.json().get("ok"))
+    except: return False
 
 # =============================
-# RESUMO (HTML para Telegram)
+# RESUMO (HTML Telegram) — NOVO
 # =============================
-def contar_clientes_e_servicos(df_list):
-    if not any(d is not None and not d.empty for d in df_list):
-        return 0, {}
-    df_all = pd.concat([d for d in df_list if d is not None and not d.empty], ignore_index=True)
-    num_clientes = df_all["Cliente"].astype(str).str.strip().str.lower().nunique() if "Cliente" in df_all.columns else 0
-    serv_counts = df_all["Serviço"].astype(str).str.strip().value_counts().to_dict() if "Serviço" in df_all.columns else {}
-    return num_clientes, serv_counts
-
 def build_text_resumo(period_ini, period_fim,
-                      total_comissao_hoje,          # comissão de hoje (sem caixinha)
-                      total_futuros,                # comissão futura (fiados pendentes)
-                      pagar_caixinha, total_cx,     # caixinha
-                      df_semana, df_fiados, df_pend,
-                      total_fiado_pago_hoje=0.0,    # comissão vinda de fiados pagos hoje
-                      qtd_fiado_pago_hoje=0):       # qtde de itens de fiado pagos hoje
-    clientes, servs = contar_clientes_e_servicos([df_semana, df_fiados])
-    serv_lin = ", ".join([f"{k}×{v}" for k, v in servs.items()]) if servs else "—"
+                      valor_nao_fiado, valor_fiado_liberado, valor_caixinha,
+                      total_futuros, df_semana, df_fiados, df_pend,
+                      qtd_fiado_pago_hoje=0):
+    clientes, servs = 0, {}
+    if any(d is not None and not d.empty for d in [df_semana, df_fiados]):
+        df_all = pd.concat([d for d in [df_semana, df_fiados] if d is not None and not d.empty], ignore_index=True)
+        clientes = df_all["Cliente"].astype(str).str.strip().str.lower().nunique() if "Cliente" in df_all.columns else 0
+        servs = df_all["Serviço"].astype(str).str.strip().value_counts().to_dict() if "Serviço" in df_all.columns else {}
+    serv_lin = ", ".join([f"{k}×{v}" for k,v in servs.items()]) if servs else "—"
+
     qtd_pend = int(len(df_pend)) if df_pend is not None else 0
     clientes_pend = df_pend["Cliente"].astype(str).str.strip().str.lower().nunique() if df_pend is not None and not df_pend.empty else 0
     dt_min = to_br_date(pd.to_datetime(df_pend["_dt_serv"], errors="coerce").min()) if df_pend is not None and "_dt_serv" in df_pend.columns and not df_pend.empty else "—"
+
+    total_geral = float(valor_nao_fiado) + float(valor_fiado_liberado) + float(valor_caixinha or 0.0)
 
     linhas = [
         f"💈 <b>Resumo — Vinícius</b>  ({to_br_date(period_ini)} → {to_br_date(period_fim)})",
         f"👥 Clientes: <b>{clientes}</b>",
         f"✂️ Serviços: <b>{serv_lin}</b>",
-        f"🧾 Comissão de hoje: <b>{format_brl(total_comissao_hoje)}</b>",
+        f"🧾 Nesta terça — <b>NÃO fiado</b>: <b>{format_brl(valor_nao_fiado)}</b>",
+        f"🧾 Nesta terça — <b>fiados liberados</b>: <b>{format_brl(valor_fiado_liberado)}</b>",
     ]
-    if total_fiado_pago_hoje and total_fiado_pago_hoje > 0:
-        if qtd_fiado_pago_hoje and qtd_fiado_pago_hoje > 0:
-            linhas.append(f"🏦 Fiado pago hoje: <b>{format_brl(total_fiado_pago_hoje)}</b> • <i>{qtd_fiado_pago_hoje} item(ns)</i>")
-        else:
-            linhas.append(f"🏦 Fiado pago hoje: <b>{format_brl(total_fiado_pago_hoje)}</b>")
-
-    if pagar_caixinha and total_cx > 0:
-        linhas.append(f"🎁 Caixinha de hoje: <b>{format_brl(total_cx)}</b>")
-        linhas.append(f"💵 Total GERAL pago hoje: <b>{format_brl(total_comissao_hoje + total_cx)}</b>")
-
+    if valor_caixinha and float(valor_caixinha) > 0:
+        linhas.append(f"🎁 Caixinha de hoje: <b>{format_brl(valor_caixinha)}</b>")
+    if qtd_fiado_pago_hoje > 0:
+        linhas.append(f"🏦 Fiado pago hoje: <i>{qtd_fiado_pago_hoje} item(ns)</i>")
+    linhas.append(f"💵 <b>Total GERAL pago hoje</b>: <b>{format_brl(total_geral)}</b>")
     linhas.append(f"🕒 Comissão futura (fiados pendentes): <b>{format_brl(total_futuros)}</b>")
     if qtd_pend > 0:
         linhas.append(f"   • {qtd_pend} itens • {clientes_pend} clientes • mais antigo: {dt_min}")
     return "\n".join(linhas)
+
 
 # =============================
 # UI
