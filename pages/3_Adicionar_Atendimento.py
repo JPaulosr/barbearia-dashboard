@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Comissão por DIA + Caixinha
-# - Gera UMA linha por DIA em Despesas (comissão e, opcionalmente, caixinha).
-# - Trava anti-duplicação OFICIAL via coluna RefID na própria aba Despesas (cria automaticamente + backfill).
+# - UMA linha por DIA em Despesas (comissão e, opcionalmente, caixinha).
+# - Trava anti-duplicação oficial via coluna RefID na própria aba Despesas (cria automaticamente + backfill).
 # - Telegram: usa as mesmas chaves das outras páginas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID_*).
 # - Botão 📲 Reenviar resumo (sem gravar).
+# - Mostra no Telegram: 🏦 Fiado pago hoje (valor e quantidade de itens).
 
 import streamlit as st
 import pandas as pd
@@ -208,8 +209,13 @@ def contar_clientes_e_servicos(df_list):
     serv_counts = df_all["Serviço"].astype(str).str.strip().value_counts().to_dict() if "Serviço" in df_all.columns else {}
     return num_clientes, serv_counts
 
-def build_text_resumo(period_ini, period_fim, total_comissao_hoje, total_futuros,
-                      pagar_caixinha, total_cx, df_semana, df_fiados, df_pend) -> str:
+def build_text_resumo(period_ini, period_fim,
+                      total_comissao_hoje,          # comissão de hoje (sem caixinha)
+                      total_futuros,                # comissão futura (fiados pendentes)
+                      pagar_caixinha, total_cx,     # caixinha
+                      df_semana, df_fiados, df_pend,
+                      total_fiado_pago_hoje=0.0,    # NOVO: comissão vinda de fiados pagos hoje
+                      qtd_fiado_pago_hoje=0):       # NOVO: qtde de itens de fiado pagos hoje
     clientes, servs = contar_clientes_e_servicos([df_semana, df_fiados])
     serv_lin = ", ".join([f"{k}×{v}" for k, v in servs.items()]) if servs else "—"
     qtd_pend = int(len(df_pend)) if df_pend is not None else 0
@@ -222,9 +228,18 @@ def build_text_resumo(period_ini, period_fim, total_comissao_hoje, total_futuros
         f"✂️ Serviços: <b>{serv_lin}</b>",
         f"🧾 Comissão de hoje: <b>{format_brl(total_comissao_hoje)}</b>",
     ]
+
+    # NOVO bloco: quanto de fiado entrou hoje (comissão desses fiados)
+    if total_fiado_pago_hoje and total_fiado_pago_hoje > 0:
+        if qtd_fiado_pago_hoje and qtd_fiado_pago_hoje > 0:
+            linhas.append(f"🏦 Fiado pago hoje: <b>{format_brl(total_fiado_pago_hoje)}</b> • <i>{qtd_fiado_pago_hoje} item(ns)</i>")
+        else:
+            linhas.append(f"🏦 Fiado pago hoje: <b>{format_brl(total_fiado_pago_hoje)}</b>")
+
     if pagar_caixinha and total_cx > 0:
         linhas.append(f"🎁 Caixinha de hoje: <b>{format_brl(total_cx)}</b>")
         linhas.append(f"💵 Total GERAL pago hoje: <b>{format_brl(total_comissao_hoje + total_cx)}</b>")
+
     linhas.append(f"🕒 Comissão futura (fiados pendentes): <b>{format_brl(total_futuros)}</b>")
     if qtd_pend > 0:
         linhas.append(f"   • {qtd_pend} itens • {clientes_pend} clientes • mais antigo: {dt_min}")
@@ -465,6 +480,11 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
 semana_grid, total_semana = preparar_grid(semana_df, "Semana (terça→segunda) — NÃO FIADO", "semana")
 fiados_liberados_grid, total_fiados = preparar_grid(fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados")
 
+# NOVO: quantidade de itens de fiado pagos hoje
+qtd_fiados_hoje = 0
+if fiados_liberados_grid is not None and not fiados_liberados_grid.empty:
+    qtd_fiados_hoje = int(len(fiados_liberados_grid))
+
 # ------- TABELA — FIADOS A RECEBER -------
 st.subheader("📌 Fiados a receber (histórico — ainda NÃO pagos)")
 if _futuros_mb.empty:
@@ -526,7 +546,9 @@ if st.button("📲 Reenviar resumo (sem gravar)"):
         total_futuros=float(total_fiados_pend),
         pagar_caixinha=bool(pagar_caixinha),
         total_cx=float(total_caixinha if pagar_caixinha else 0.0),
-        df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes
+        df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
+        total_fiado_pago_hoje=float(total_fiados),         # NOVO
+        qtd_fiado_pago_hoje=int(qtd_fiados_hoje)           # NOVO
     )
     enviados = []
     if dest_vini:
@@ -672,7 +694,9 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                     total_futuros=float(total_fiados_pend),
                     pagar_caixinha=bool(pagar_caixinha),
                     total_cx=float(total_caixinha if pagar_caixinha else 0.0),
-                    df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes
+                    df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
+                    total_fiado_pago_hoje=float(total_fiados),        # NOVO
+                    qtd_fiado_pago_hoje=int(qtd_fiados_hoje)          # NOVO
                 )
                 if dest_vini: tg_send_html(texto, _get_chat_vini())
                 if dest_jp:   tg_send_html(texto, _get_chat_jp())
