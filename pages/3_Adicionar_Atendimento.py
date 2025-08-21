@@ -264,7 +264,7 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
         return tg_send(caption, chat_id=chat)
 
 # =========================
-# CARD – resumo/histórico + BLOCO CARTÃO
+# CARD – resumo/histórico + BLOCO CARTÃO + BLOCO CAIXINHA
 # =========================
 def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     d = df_all[
@@ -379,6 +379,31 @@ def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
     ]
     return "\n".join(linhas)
 
+def _secao_caixinha(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
+    """Monta a seção de caixinhas (dia, fundo e total) para o cliente/data."""
+    d = df_all[
+        (df_all["Cliente"].astype(str).str.strip() == cliente) &
+        (df_all["Data"].astype(str).str.strip() == data_str)
+    ].copy()
+    if d.empty:
+        return ""
+
+    v_dia = pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
+    v_fundo = pd.to_numeric(d.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
+    total = float(v_dia + v_fundo)
+
+    if total <= 0:
+        return ""
+
+    linhas = [
+        "------------------------------",
+        "💝 <b>Caixinha</b>",
+        f"Dia: <b>{_fmt_brl(v_dia)}</b>",
+        f"Fundo: <b>{_fmt_brl(v_fundo)}</b>",
+        f"Total: <b>{_fmt_brl(total)}</b>",
+    ]
+    return "\n".join(linhas)
+
 def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
                          append_sections: list[str] | None = None):
     d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
@@ -436,18 +461,29 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
     return base
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
+    # quando não recebemos servico/valor, montamos a partir da base do dia
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
+        # trata como combo se já veio um combo explicitamente OU se o texto tem "+"
         is_combo = bool(combo and str(combo).strip())
-        servico_label = (f"{servico} (Combo)" if is_combo and "+" in str(servico)
-                         else f"{servico} (Simples)" if not is_combo else f"{servico} (Combo)")
+        eh_combo = is_combo or ("+" in str(servico))
+        servico_label = f"{servico} (Combo)" if eh_combo else f"{servico} (Simples)"
         valor_total = float(valor)
+        # ainda assim pegamos o período do resumo do dia
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
+    # Blocos extras (cartão e caixinha)
     sec_cartao = _secao_pag_cartao(df_all, cliente, data_str)
-    extras_base = [sec_cartao] if sec_cartao else []
+    sec_caixa  = _secao_caixinha(df_all, cliente, data_str)
 
+    extras_base = []
+    if sec_cartao:
+        extras_base.append(sec_cartao)
+    if sec_caixa:
+        extras_base.append(sec_caixa)
+
+    # Seções extras para JP (histórico anual e por serviço)
     ano = _ano_from_date_str(data_str)
     extras_jp = extras_base.copy()
     if ano is not None:
@@ -465,24 +501,33 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         append_sections=extras_jp
     )
 
+    # destino
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
-        if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else:    tg_send(caption_jp, chat_id=chat_jp)
+        if foto:
+            tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:
+            tg_send(caption_jp, chat_id=chat_jp)
         return
 
     if funcionario == "Vinicius":
         chat_v = _get_chat_id_vini()
-        if foto: tg_send_photo(foto, caption_base, chat_id=chat_v)
-        else:    tg_send(caption_base, chat_id=chat_v)
+        if foto:
+            tg_send_photo(foto, caption_base, chat_id=chat_v)
+        else:
+            tg_send(caption_base, chat_id=chat_v)
         chat_jp = _get_chat_id_jp()
-        if foto: tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else:    tg_send(caption_jp, chat_id=chat_jp)
+        if foto:
+            tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:
+            tg_send(caption_jp, chat_id=chat_jp)
         return
 
     destino = _chat_id_por_func(funcionario)
-    if foto: tg_send_photo(foto, caption_base, chat_id=destino)
-    else:    tg_send(caption_base, chat_id=destino)
+    if foto:
+        tg_send_photo(foto, caption_base, chat_id=destino)
+    else:
+        tg_send(caption_base, chat_id=destino)
 
 # =========================
 # VALORES DE SERVIÇO
@@ -853,6 +898,8 @@ if not modo_lote:
                 df_final = pd.concat([df_all, pd.DataFrame([nova_cx])], ignore_index=True)
                 salvar_base(df_final)
                 st.success(f"💝 Caixinha registrada para {cliente} no dia {data}.")
+                # notifica no Telegram já incluindo a seção de caixinha
+                enviar_card(df_final, cliente, funcionario, data, servico="Caixinha", valor=0.0, combo="")
 
 # =========================
 # MODO LOTE AVANÇADO
