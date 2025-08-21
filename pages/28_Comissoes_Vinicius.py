@@ -488,29 +488,23 @@ def _backfill_refid_em_despesas(despesas_df: pd.DataFrame) -> pd.DataFrame:
 if st.button("📲 Reenviar resumo (sem gravar)"):
     texto = build_text_resumo(
         period_ini=ini, period_fim=fim,
-        total_comissao_hoje=float(total_comissao_hoje),
-        total_futuros=float(total_fiados_pend),
-        pagar_caixinha=bool(pagar_caixinha),
-        total_cx=float(total_caixinha if pagar_caixinha else 0.0),
+        valor_nao_fiado=float(total_semana),                 # NÃO fiado
+        valor_fiado_liberado=float(total_fiados),            # fiados liberados
+        valor_caixinha=float(total_caixinha if pagar_caixinha else 0.0),
+        total_futuros=float(total_fiados_pend),              # pendentes
         df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
-        total_fiado_pago_hoje=float(total_fiados),
         qtd_fiado_pago_hoje=int(qtd_fiados_hoje)
     )
     enviados = []
-    if dest_vini:
-        enviados.append(("Vinícius", tg_send_html(texto, _get_chat_vini())))
-    if dest_jp:
-        enviados.append(("JPaulo", tg_send_html(texto, _get_chat_jp())))
+    if dest_vini: enviados.append(("Vinícius", tg_send_html(texto, _get_chat_vini())))
+    if dest_jp:   enviados.append(("JPaulo",   tg_send_html(texto, _get_chat_jp())))
     if not enviados:
         st.info("Marque ao menos um destino (Vinícius/JPaulo) para reenviar.")
     else:
         ok_total = all(ok for _, ok in enviados)
-        if ok_total:
-            st.success("Resumo reenviado com sucesso ✅")
-        else:
-            falhas = ", ".join([nome for nome, ok in enviados if not ok])
-            st.warning(f"Resumo reenviado, mas houve falha em: {falhas}")
-
+        st.success("Resumo reenviado com sucesso ✅" if ok_total else
+                   f"Resumo reenviado, mas houve falha em: {', '.join([n for n, ok in enviados if not ok])}")
+        
 # =============================
 # ✅ CONFIRMAR E GRAVAR
 # =============================
