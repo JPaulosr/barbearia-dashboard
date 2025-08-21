@@ -348,7 +348,38 @@ fiados_pendentes = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_p
 # ================================
 # FIADOS PENDENTES — NORMALIZA + TOTAIS (antes de qualquer uso)
 # ================================
-fiados_pendentes = (fiados_pendentes or pd.DataFrame()).copy() if 'fiados_pendentes' in locals() else pd.DataFrame()
+# === FIADOS PENDENTES: normaliza e calcula TUDO AQUI (antes de qualquer uso) ===
+if 'fiados_pendentes' not in locals() or fiados_pendentes is None:
+    fiados_pendentes = pd.DataFrame()
+else:
+    fiados_pendentes = fiados_pendentes.copy()
+
+# garante colunas mínimas e _dt_serv
+if fiados_pendentes.empty:
+    fiados_pendentes = pd.DataFrame(columns=["Data", "Cliente", "Serviço", "_dt_serv"])
+else:
+    if "_dt_serv" not in fiados_pendentes.columns:
+        fiados_pendentes["_dt_serv"] = fiados_pendentes["Data"].apply(parse_br_date)
+
+# base para % comissão nos pendentes (reuso adiante)
+_futuros_mb = montar_valor_base(fiados_pendentes).copy()
+_futuros_mb["% Comissão"] = float(perc_padrao)
+_futuros_mb["Comissão (R$)"] = (
+    pd.to_numeric(_futuros_mb["Valor_base_comissao"], errors="coerce").fillna(0.0) * float(perc_padrao) / 100.0
+).round(2)
+
+# totais/indicadores
+total_fiados_pend = float(_futuros_mb["Comissão (R$)"].sum())
+qtd_fiados_pend = int(len(fiados_pendentes))
+clientes_fiados_pend = (
+    fiados_pendentes["Cliente"].astype(str).str.strip().str.lower().nunique()
+    if not fiados_pendentes.empty else 0
+)
+_dt_min_pend = pd.to_datetime(fiados_pendentes["_dt_serv"], errors="coerce").min() if not fiados_pendentes.empty else None
+_dt_max_pend = pd.to_datetime(fiados_pendentes["_dt_serv"], errors="coerce").max() if not fiados_pendentes.empty else None
+min_str = to_br_date(_dt_min_pend) if pd.notna(_dt_min_pend) else "—"
+max_str = to_br_date(_dt_max_pend) if pd.notna(_dt_max_pend) else "—"
+
 if not fiados_pendentes.empty:
     if "_dt_serv" not in fiados_pendentes.columns:
         fiados_pendentes["_dt_serv"] = fiados_pendentes["Data"].apply(parse_br_date)
