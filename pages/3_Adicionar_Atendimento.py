@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Comissão por DIA + Caixinha
 # - Gera UMA linha por DIA em Despesas (comissão e, opcionalmente, caixinha).
-# - Trava anti-duplicação OFICIAL via coluna RefID na própria aba Despesas (com backfill).
-# - Telegram: usa o mesmo módulo/credenciais do 11_Adicionar_Atendimento.py (parse_mode=HTML).
-# - Cache (comissoes_cache) é histórico; trava não depende dele.
+# - Trava anti-duplicação OFICIAL via coluna RefID na própria aba Despesas (cria automaticamente + backfill).
+# - Telegram: usa as mesmas chaves das outras páginas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID_*).
+# - Botão 📲 Reenviar resumo (sem gravar).
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,6 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import pytz
-import unicodedata
 
 # =============================
 # CONFIG
@@ -26,12 +25,11 @@ ABA_COMISSOES_CACHE = "comissoes_cache"
 ABA_DESPESAS = "Despesas"
 TZ = "America/Sao_Paulo"
 
-# --- Telegram (mesmo padrão do 11_Adicionar_Atendimento.py) ---
-TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
-TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
-TELEGRAM_CHAT_ID_VINICIUS_CONST = "-1002953102982"
+# Telegram (mesmas variáveis já usadas em outras páginas)
+TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
+TELEGRAM_CHAT_ID_JPAULO_FALLBACK = "493747253"
+TELEGRAM_CHAT_ID_VINICIUS_FALLBACK = "-1001234567890"
 
-# Colunas base (dados)
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
     "Funcionário", "Fase", "Tipo", "Período",
@@ -42,7 +40,7 @@ COLS_OFICIAIS = [
     "CaixinhaDia", "CaixinhaFundo",
 ]
 
-# Despesas tem RefID oficial
+# Em Despesas, RefID é a trava oficial
 COLS_DESPESAS_FIX = ["Data", "Prestador", "Descrição", "Valor", "Me Pag:", "RefID"]
 
 PERCENTUAL_PADRAO = 50.0
@@ -87,7 +85,7 @@ def _write_df(title: str, df: pd.DataFrame):
     set_with_dataframe(ws, df, include_index=False, include_column_header=True)
 
 # =============================
-# UTILS & HELPERS
+# HELPERS
 # =============================
 def br_now():
     return datetime.now(pytz.timezone(TZ))
@@ -163,49 +161,44 @@ def make_refid_atendimento(row: pd.Series) -> str:
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 # =============================
-# TELEGRAM (compatível com 11_Adicionar_Atendimento.py)
+# TELEGRAM (usando as mesmas chaves já existentes no app)
 # =============================
-def _norm_key(s: str) -> str:
-    return unicodedata.normalize("NFKC", str(s or "").strip()).casefold()
-
-def _get_secret(name: str, default: str | None = None) -> str | None:
+def _get_token() -> str:
     try:
-        val = st.secrets.get(name)
-        val = (val or "").strip()
-        if val:
-            return val
+        v = (st.secrets.get("TELEGRAM_TOKEN") or "").strip()
+        return v or TELEGRAM_TOKEN_FALLBACK
     except Exception:
-        pass
-    return (default or "").strip() or None
+        return TELEGRAM_TOKEN_FALLBACK
 
-def _get_token() -> str | None:
-    return _get_secret("TELEGRAM_TOKEN", TELEGRAM_TOKEN_CONST)
-
-def _get_chat_id_jp() -> str | None:
-    return _get_secret("TELEGRAM_CHAT_ID_JPAULO", TELEGRAM_CHAT_ID_JPAULO_CONST)
-
-def _get_chat_id_vini() -> str | None:
-    return _get_secret("TELEGRAM_CHAT_ID_VINICIUS", TELEGRAM_CHAT_ID_VINICIUS_CONST)
-
-def _check_tg_ready(token: str | None, chat_id: str | None) -> bool:
-    return bool((token or "").strip() and (chat_id or "").strip())
-
-def tg_send(text: str, chat_id: str | None = None) -> bool:
-    token = _get_token()
-    chat = chat_id or _get_chat_id_jp()
-    if not _check_tg_ready(token, chat):
-        return False
+def _get_chat_jp() -> str:
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-        r = requests.post(url, json=payload, timeout=30)
+        v = (st.secrets.get("TELEGRAM_CHAT_ID_JPAULO") or "").strip()
+        return v or TELEGRAM_CHAT_ID_JPAULO_FALLBACK
+    except Exception:
+        return TELEGRAM_CHAT_ID_JPAULO_FALLBACK
+
+def _get_chat_vini() -> str:
+    try:
+        v = (st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS") or "").strip()
+        return v or TELEGRAM_CHAT_ID_VINICIUS_FALLBACK
+    except Exception:
+        return TELEGRAM_CHAT_ID_VINICIUS_FALLBACK
+
+def tg_send_html(text: str, chat_id: str) -> bool:
+    token = _get_token()
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+            timeout=30
+        )
         js = r.json()
         return bool(r.ok and js.get("ok"))
     except Exception:
         return False
 
 # =============================
-# RESUMO (formato HTML para Telegram)
+# RESUMO (HTML para Telegram)
 # =============================
 def contar_clientes_e_servicos(df_list):
     if not any(d is not None and not d.empty for d in df_list):
@@ -425,10 +418,7 @@ cache = _read_df(ABA_COMISSOES_CACHE)
 cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
 cache = garantir_colunas(cache, cache_cols)
 terca_str = to_br_date(terca_pagto)
-if reprocessar_terca:
-    ja_pagos = set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
-else:
-    ja_pagos = set(cache["RefID"].astype(str).tolist())
+ja_pagos = set(cache["RefID"].astype(str).tolist()) if not reprocessar_terca else set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
 
 # ------- GRADES EDITÁVEIS -------
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
@@ -506,7 +496,7 @@ st.success(f"**{format_brl(total_geral_hoje)}**  "
            f"{'(inclui caixinha)' if pagar_caixinha and total_caixinha>0 else '(sem caixinha)'}")
 
 # =============================
-# BACKFILL RefID em DESPESAS
+# BACKFILL RefID em DESPESAS (cria coluna automaticamente)
 # =============================
 def _backfill_refid_em_despesas(despesas_df: pd.DataFrame) -> pd.DataFrame:
     despesas_df = garantir_colunas(despesas_df.copy(), COLS_DESPESAS_FIX)
@@ -524,11 +514,37 @@ def _backfill_refid_em_despesas(despesas_df: pd.DataFrame) -> pd.DataFrame:
             continue
         valf = _to_float_brl(valtxt)
         despesas_df.at[idx, "RefID"] = _refid_despesa(data_br, prest, desc, valf, mepag)
-
     return despesas_df
 
 # =============================
-# CONFIRMAR E GRAVAR
+# 📲 Botão REENVIAR RESUMO (sem gravar)
+# =============================
+if st.button("📲 Reenviar resumo (sem gravar)"):
+    texto = build_text_resumo(
+        period_ini=ini, period_fim=fim,
+        total_comissao_hoje=float(total_comissao_hoje),
+        total_futuros=float(total_fiados_pend),
+        pagar_caixinha=bool(pagar_caixinha),
+        total_cx=float(total_caixinha if pagar_caixinha else 0.0),
+        df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes
+    )
+    enviados = []
+    if dest_vini:
+        enviados.append(("Vinícius", tg_send_html(texto, _get_chat_vini())))
+    if dest_jp:
+        enviados.append(("JPaulo", tg_send_html(texto, _get_chat_jp())))
+    if not enviados:
+        st.info("Marque ao menos um destino (Vinícius/JPaulo) para reenviar.")
+    else:
+        ok_total = all(ok for _, ok in enviados)
+        if ok_total:
+            st.success("Resumo reenviado com sucesso ✅")
+        else:
+            falhas = ", ".join([nome for nome, ok in enviados if not ok])
+            st.warning(f"Resumo reenviado, mas houve falha em: {falhas}")
+
+# =============================
+# ✅ CONFIRMAR E GRAVAR
 # =============================
 if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens como pagos"):
     if (semana_grid is None or semana_grid.empty) and (fiados_liberados_grid is None or fiados_liberados_grid.empty) and not (pagar_caixinha and total_caixinha > 0):
@@ -557,7 +573,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
         cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
-        # 2) Lê Despesas e garante RefID em todas as linhas (backfill)
+        # 2) Lê Despesas e garante RefID em todas as linhas (cria coluna + backfill)
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = _backfill_refid_em_despesas(despesas_df)
 
@@ -648,8 +664,8 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
             despesas_final = despesas_final[colunas_finais]
             _write_df(ABA_DESPESAS, despesas_final)
 
-            # 5) Telegram — usa a mesma rotina do 11_Adicionar_Atendimento.py
-            if enviar_tg:
+            # 5) Telegram — somente se houve gravação e estiver marcado
+            if enviar_tg and (dest_vini or dest_jp):
                 texto = build_text_resumo(
                     period_ini=ini, period_fim=fim,
                     total_comissao_hoje=float(total_comissao_hoje),
@@ -658,20 +674,16 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                     total_cx=float(total_caixinha if pagar_caixinha else 0.0),
                     df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes
                 )
-                ok1 = True
-                ok2 = True
-                if dest_vini: ok1 = tg_send(texto, chat_id=_get_chat_id_vini())
-                if dest_jp:   ok2 = tg_send(texto, chat_id=_get_chat_id_jp())
-                if not (ok1 and ok2):
-                    st.warning("⚠️ Falha ao enviar para algum destino do Telegram (verifique tokens/IDs).")
+                if dest_vini: tg_send_html(texto, _get_chat_vini())
+                if dest_jp:   tg_send_html(texto, _get_chat_jp())
 
             st.success(
                 f"🎉 Pagamento registrado!\n"
                 f"- Comissão (dias): {linhas_comissao}\n"
                 f"- Caixinha (dias com valor): {linhas_caixinha}\n"
-                f"- Gravadas em <b>{ABA_DESPESAS}</b>: {len(novas_linhas)} nova(s) linha(s)\n"
+                f"- Gravadas em {ABA_DESPESAS}: {len(novas_linhas)} nova(s) linha(s)\n"
                 f"- Ignoradas por duplicidade (RefID): {ignoradas}\n"
-                f"- Itens marcados no <b>{ABA_COMISSOES_CACHE}</b>: {len(novos_cache)}"
+                f"- Cache histórico atualizado: {len(novos_cache)} item(ns)"
             )
             st.balloons()
         else:
