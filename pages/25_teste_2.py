@@ -126,7 +126,9 @@ def carregar_base():
 
     # Normaliza strings
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
-        df[col] = df[col].astype(str).fillna("").strip()
+    if col not in df.columns:
+        df[col] = ""
+    df[col] = df[col].astype(str).fillna("").str.strip()
 
     # Normaliza Conferido para bool
     def to_bool(x):
