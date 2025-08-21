@@ -462,13 +462,14 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None):
     if servico is None or valor is None:
-        servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
-    else:
-        is_combo = bool(combo and str(combo).strip())
-        servico_label = (f"{servico} (Combo)" if is_combo and "+" in str(servico)
-                         else f"{servico} (Simples)" if not is_combo else f"{servico} (Combo)"))
-        valor_total = float(valor)
-        _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
+    servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
+else:
+    is_combo = bool(combo and str(combo).strip())
+    # se já veio com "+", também tratamos como combo
+    eh_combo = is_combo or ("+" in str(servico))
+    servico_label = f"{servico} (Combo)" if eh_combo else f"{servico} (Simples)"
+    valor_total = float(valor)
+    _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
     # Blocos extras
     sec_cartao = _secao_pag_cartao(df_all, cliente, data_str)
