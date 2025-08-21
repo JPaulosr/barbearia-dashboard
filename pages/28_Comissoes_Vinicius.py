@@ -629,5 +629,58 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
 
         # 4) Caixinha por dia (se marcado)
         linhas_caixinha = 0
-        if pagar_caixinha && total_caixinha > 0:  # NOTE: Python "and", não "&&"
-            pass
+        if pagar_caixinha and total_caixinha > 0:
+            # Agrupar valores de caixinha por DIA dentro da janela
+            cx_df = base_jan_vini.copy()
+            cx_df["TotalCxDia"] = cx_df["CaixinhaDia_num"] + cx_df["CaixinhaFundo_num"] + cx_df["CaixinhaRow_num"]
+            cx_df = cx_df.groupby("Data", dropna=False)["TotalCxDia"].sum().reset_index()
+            cx_df["TotalCxDia"] = pd.to_numeric(cx_df["TotalCxDia"], errors="coerce").fillna(0.0)
+            cx_df = cx_df[cx_df["TotalCxDia"] > 0]
+
+            for _, r in cx_df.iterrows():
+                data_br = str(r["Data"]).strip()
+                valf = float(r["TotalCxDia"])
+                valor_txt = f'R$ {valf:.2f}'.replace(".", ",")
+                desc_txt = f"{descricao_cx} — Pago em {to_br_date(terca_pagto)}"
+                refid = _refid_despesa(data_br, "Vinicius (Caixinha)", desc_txt, valf, meio_pag_cx)
+                linhas.append({
+                    "Data": data_br,
+                    "Prestador": "Vinicius (Caixinha)",
+                    "Descrição": desc_txt,
+                    "Valor": valor_txt,
+                    "Me Pag:": meio_pag_cx,
+                    "RefID": refid
+                })
+            linhas_caixinha = len(cx_df)
+
+        # 5) Dedup por RefID e grava em Despesas
+        if linhas:
+            novos = pd.DataFrame(linhas, columns=COLS_DESPESAS_FIX)
+            despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
+            ref_exist = set(despesas_df["RefID"].astype(str).tolist())
+            novos = novos[~novos["RefID"].isin(ref_exist)].copy()
+            if not novos.empty:
+                despesas_upd = pd.concat([despesas_df[COLS_DESPESAS_FIX], novos], ignore_index=True)
+                _write_df(ABA_DESPESAS, despesas_upd)
+            st.success(f"Gravado em Despesas: {len(novos)} novas linha(s).  "
+                       f"(Comissão: {linhas_comissao}; Caixinha: {linhas_caixinha})")
+        else:
+            st.info("Nada novo para gravar em Despesas (tudo já lançado).")
+
+        # 6) Telegram (resumo do pagamento)
+        if enviar_tg:
+            texto = build_text_resumo(
+                period_ini=ini, period_fim=fim,
+                total_comissao_hoje=float(total_comissao_hoje),
+                total_futuros=float(total_fiados_pend),
+                pagar_caixinha=bool(pagar_caixinha),
+                total_cx=float(total_caixinha if pagar_caixinha else 0.0),
+                df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
+                total_fiado_pago_hoje=float(total_fiados),
+                qtd_fiado_pago_hoje=int(qtd_fiados_hoje)
+            )
+            if dest_vini:
+                tg_send_html(texto, _get_chat_vini())
+            if dest_jp:
+                tg_send_html(texto, _get_chat_jp())
+        st.success("Processo concluído ✅")
