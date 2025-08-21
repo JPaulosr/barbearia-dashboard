@@ -5,7 +5,7 @@
 # - Em Despesas grava UMA LINHA POR DIA DO ATENDIMENTO (Data = data do serviço).
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
 # - Preço de TABELA para cartão (opcional) e arredondamento com tolerância.
-# - Caixinha NÃO entra na comissão.
+# - Caixinha NÃO entra na comissão, mas agora é exibida em cards.
 
 import streamlit as st
 import pandas as pd
@@ -160,6 +160,23 @@ def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bo
 def format_brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+def _to_float_brl(v) -> float:
+    """
+    Converte strings como 'R$ 10,00' ou '10,00' ou '10.00' para float 10.0.
+    Vazio/erro -> 0.0
+    """
+    s = str(v).strip()
+    if not s:
+        return 0.0
+    s = s.replace("R$", "").replace(" ", "")
+    # remove separador de milhar '.'
+    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)
+    s = s.replace(",", ".")
+    try:
+        return float(s)
+    except:
+        return 0.0
+
 # =============================
 # UI
 # =============================
@@ -224,13 +241,13 @@ dfv = base[s_lower(base["Funcionário"]) == "vinicius"].copy()
 if not incluir_produtos:
     dfv = dfv[s_lower(dfv["Tipo"]) == "serviço"]
 
-# EXCLUIR caixinhas da comissão
-mask_caixinha = (
+# EXCLUIR linhas cujo próprio lançamento é 'caixinha' (não entra na comissão)
+mask_caixinha_lanc = (
     (s_lower(dfv["Conta"]) == "caixinha") |
     (s_lower(dfv["Tipo"]) == "caixinha") |
     (s_lower(dfv["Serviço"]) == "caixinha")
 )
-dfv = dfv[~mask_caixinha].copy()
+dfv = dfv[~mask_caixinha_lanc].copy()
 
 # Datas auxiliares
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
@@ -240,7 +257,59 @@ dfv["_dt_pagto"] = dfv["DataPagamento"].apply(parse_br_date)
 ini, fim = janela_terca_a_segunda(terca_pagto)
 st.info(f"Janela desta folha: **{to_br_date(ini)} a {to_br_date(fim)}** (terça→segunda)")
 
-# Counters para debug rápido
+# -------- NOVO BLOCO: CAIXINHA (exibição) --------
+# A caixinha pode estar lançada:
+# (a) como linha "Caixinha" (Conta/Tipo/Serviço = caixinha); e/ou
+# (b) como valores nas colunas CaixinhaDia / CaixinhaFundo junto de um serviço.
+base["_dt_serv"] = base["Data"].apply(parse_br_date)
+mask_vini = s_lower(base["Funcionário"]) == "vinicius"
+mask_janela = base["_dt_serv"].notna() & (base["_dt_serv"] >= ini) & (base["_dt_serv"] <= fim)
+
+base_jan_vini = base[mask_vini & mask_janela].copy()
+
+# Somatórios de colunas
+base_jan_vini["CaixinhaDia_num"] = base_jan_vini["CaixinhaDia"].apply(_to_float_brl)
+base_jan_vini["CaixinhaFundo_num"] = base_jan_vini["CaixinhaFundo"].apply(_to_float_brl)
+total_cx_dia_cols = float(base_jan_vini["CaixinhaDia_num"].sum())
+total_cx_fundo_cols = float(base_jan_vini["CaixinhaFundo_num"].sum())
+
+# Somar linhas diretamente lançadas como 'caixinha'
+mask_caixinha_rows = (
+    (s_lower(base_jan_vini["Conta"]) == "caixinha") |
+    (s_lower(base_jan_vini["Tipo"]) == "caixinha") |
+    (s_lower(base_jan_vini["Serviço"]) == "caixinha")
+)
+
+# Se houver linhas de caixinha, considerar valores dessas linhas em 'Valor'
+total_cx_rows = 0.0
+if mask_caixinha_rows.any():
+    total_cx_rows = float(pd.to_numeric(
+        base_jan_vini.loc[mask_caixinha_rows, "Valor"].apply(_to_float_brl),
+        errors="coerce"
+    ).fillna(0.0).sum())
+
+# Total consolidado de caixinha na janela
+total_caixinha = total_cx_dia_cols + total_cx_fundo_cols + total_cx_rows
+
+# ---- UI: Cards da caixinha ----
+cx1, cx2, cx3 = st.columns(3)
+with cx1:
+    st.metric("🎁 Caixinha do Dia (janela)", format_brl(total_cx_dia_cols))
+with cx2:
+    st.metric("🎁 Caixinha do Fundo (janela)", format_brl(total_cx_fundo_cols))
+with cx3:
+    st.metric("🎁 Caixinha total (janela)", format_brl(total_caixinha))
+
+mostrar_det = st.checkbox("Mostrar detalhes da caixinha na janela (tabela)", value=False)
+if mostrar_det:
+    det_cols = ["Data", "Cliente", "Serviço", "Conta", "Tipo", "CaixinhaDia", "CaixinhaFundo", "Valor"]
+    det_df = base_jan_vini[det_cols].copy()
+    # Apenas linhas que têm caixinha em colunas OU são linhas de caixinha
+    mask_has_cols = (base_jan_vini["CaixinhaDia_num"] > 0) | (base_jan_vini["CaixinhaFundo_num"] > 0)
+    det_df = det_df[mask_has_cols | mask_caixinha_rows].copy()
+    st.dataframe(det_df.reset_index(drop=True), use_container_width=True)
+
+# -------- CONTADORES/DEBUG --------
 total_linhas_vini = len(dfv)
 na_janela = dfv[(dfv["_dt_serv"].notna()) & (dfv["_dt_serv"] >= ini) & (dfv["_dt_serv"] <= fim)]
 nao_fiado = na_janela[(s_lower(na_janela["StatusFiado"]) == "") | (s_lower(na_janela["StatusFiado"]) == "nao")]
@@ -249,7 +318,7 @@ fiados_ok = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"]
 fiados_pend_all = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)]
 
 st.caption(
-    f"Linhas do Vinicius na base (já sem caixinha): {total_linhas_vini} "
+    f"Linhas do Vinicius na base (já sem linha-lançamento de caixinha): {total_linhas_vini} "
     f"| Na janela (não fiado): {len(nao_fiado)} "
     f"| Fiados liberados até a terça: {len(fiados_ok)} "
     f"| Fiados pendentes: {len(fiados_pend_all)}"
@@ -286,7 +355,7 @@ def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.assign(Valor_num=[], Competência=[], Valor_base_comissao=[])
     df = df.copy()
-    df["Valor_num"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+    df["Valor_num"] = pd.to_numeric(df["Valor"].apply(_to_float_brl), errors="coerce").fillna(0.0)
     df["Competência"] = df["Data"].apply(competencia_from_data_str)
 
     def _base_valor(row):
@@ -345,7 +414,7 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
 semana_grid, total_semana = preparar_grid(semana_df, "Semana (terça→segunda) — NÃO FIADO", "semana")
 fiados_liberados_grid, total_fiados = preparar_grid(fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados")
 
-# ------- NOVO: TABELA (somente leitura) — FIADOS A RECEBER -------
+# ------- TABELA (somente leitura) — FIADOS A RECEBER -------
 st.subheader("📌 Fiados a receber (histórico — ainda NÃO pagos)")
 if fiados_pendentes.empty:
     st.info("Nenhum fiado pendente no momento.")
