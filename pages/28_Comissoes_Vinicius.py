@@ -6,7 +6,7 @@
 # - Evita duplicidades via sheet "comissoes_cache" com RefID por atendimento.
 # - Preço de TABELA para cartão (opcional) e arredondamento com tolerância.
 # - Caixinha NÃO entra na comissão; pode ser paga junto (opção).
-# - ✅ NOVO: Envia recibo/resumo para o Telegram ao registrar.
+# - Envia resumo no Telegram no formato do exemplo (clientes, serviços, totais).
 
 import streamlit as st
 import pandas as pd
@@ -30,11 +30,11 @@ ABA_DESPESAS = "Despesas"
 TZ = "America/Sao_Paulo"
 
 # Telegram fallbacks (serão substituídos por st.secrets, se existirem)
-TG_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
-TG_CHAT_JPAULO_FALLBACK = "493747253"
-TG_CHAT_VINICIUS_FALLBACK = "-1001234567890"
+TG_TOKEN_FALLBACK = "SEU_TOKEN_AQUI"
+TG_CHAT_JPAULO_FALLBACK = "SEU_CHATID_PESSOAL"
+TG_CHAT_VINICIUS_FALLBACK = "SEU_CHATID_VINICIUS_OU_CANAL"
 
-# Colunas existentes na sua planilha (inclui extras + caixinhas)
+# Colunas existentes na planilha (inclui extras + caixinhas)
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
     "Funcionário", "Fase", "Tipo", "Período",
@@ -54,7 +54,7 @@ COLS_DESPESAS_FIX = ["Data", "Prestador", "Descrição", "Valor", "Me Pag:"]
 # Percentual padrão da comissão
 PERCENTUAL_PADRAO = 50.0
 
-# Tabela de preços (valores CHEIOS por serviço)
+# Tabela de preços (valores cheios por serviço)
 VALOR_TABELA = {
     "Corte": 25.00,
     "Barba": 15.00,
@@ -125,6 +125,7 @@ def competencia_from_data_str(data_servico_str: str) -> str:
     return dt.strftime("%m/%Y")
 
 def janela_terca_a_segunda(terca_pagto: datetime):
+    # terça de pagamento paga a semana ANTERIOR (terça→segunda)
     inicio = terca_pagto - timedelta(days=7)  # terça anterior
     fim = inicio + timedelta(days=6)          # segunda
     return inicio, fim
@@ -154,6 +155,19 @@ def is_cartao(conta: str) -> bool:
     padrao = r"(cart|cart[ãa]o|cr[eé]dito|d[eé]bito|maquin|pos|pagseguro|mercado\s*pago|sumup|cielo|stone|getnet|nubank)"
     return bool(re.search(padrao, c))
 
+def _to_float_brl(v) -> float:
+    """Converte 'R$ 10,00'/'10,00'/'10.00' para 10.0. Vazio/erro -> 0.0"""
+    s = str(v).strip()
+    if not s:
+        return 0.0
+    s = s.replace("R$", "").replace(" ", "")
+    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)  # milhar
+    s = s.replace(",", ".")
+    try:
+        return float(s)
+    except:
+        return 0.0
+
 def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bool) -> float:
     if not habilitado:
         return valor
@@ -165,19 +179,7 @@ def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bo
 def format_brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def _to_float_brl(v) -> float:
-    s = str(v).strip()
-    if not s:
-        return 0.0
-    s = s.replace("R$", "").replace(" ", "")
-    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)
-    s = s.replace(",", ".")
-    try:
-        return float(s)
-    except:
-        return 0.0
-
-# ========= TELEGRAM =========
+# ---- Telegram helpers ----
 def _get_telegram_creds():
     token = TG_TOKEN_FALLBACK
     chat_jp = TG_CHAT_JPAULO_FALLBACK
@@ -191,44 +193,37 @@ def _get_telegram_creds():
         pass
     return token, chat_jp, chat_vn
 
-def tg_send_message(token: str, chat_id: str, html_text: str):
+def tg_send_text(token: str, chat_id: str, text: str):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": html_text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
     try:
-        r = requests.post(url, data=payload, timeout=15)
-        ok = r.status_code == 200 and r.json().get("ok", False)
-        if not ok:
+        r = requests.post(url, data={"chat_id": chat_id, "text": text, "disable_web_page_preview": True}, timeout=15)
+        if not (r.status_code == 200 and r.json().get("ok", False)):
             st.warning(f"Telegram falhou para {chat_id}: {r.text[:200]}")
-        return ok
     except Exception as e:
         st.warning(f"Erro Telegram para {chat_id}: {e}")
-        return False
 
-def build_html_recibo(dt_terca, total_semana, total_fiados, total_caixinha, linhas_comissao, linhas_caixinha, meio_pag, meio_pag_cx):
-    data_str = to_br_date(dt_terca)
-    tot_terca = total_semana + total_fiados
-    html = []
-    html.append(f"<b>Pagamento — Vinícius</b> (terça {data_str})")
-    html.append("────────────────────")
-    html.append(f"• Comissão (semana): <b>{format_brl(total_semana)}</b>")
-    html.append(f"• Fiados liberados: <b>{format_brl(total_fiados)}</b>")
-    html.append(f"• <i>Total comissão</i>: <b>{format_brl(tot_terca)}</b>")
-    if total_caixinha > 0:
-        html.append("—")
-        html.append(f"• Caixinha (janela): <b>{format_brl(total_caixinha)}</b>")
-    html.append("────────────────────")
-    linha_comis = f"📄 Lançado em <b>Despesas</b> (comissão): <b>{linhas_comissao}</b> linha(s) — Me Pag: <b>{meio_pag}</b>"
-    html.append(linha_comis)
-    if total_caixinha > 0:
-        linha_cx = f"💬 Lançado em <b>Despesas</b> (caixinha): <b>{linhas_caixinha}</b> linha(s) — Me Pag: <b>{meio_pag_cx}</b>"
-        html.append(linha_cx)
-    html.append("✅ Pagamento registrado.")
-    return "\n".join(html)
+def contar_clientes_e_servicos(df_list):
+    """Recebe [semana_df, fiados_liberados] e devolve (num_clientes, dict_servicos)."""
+    if not any(d is not None and not d.empty for d in df_list):
+        return 0, {}
+    df_all = pd.concat([d for d in df_list if d is not None and not d.empty], ignore_index=True)
+    num_clientes = df_all["Cliente"].astype(str).str.strip().str.lower().nunique() if "Cliente" in df_all.columns else 0
+    serv_counts = (df_all["Serviço"].astype(str).str.strip().value_counts().to_dict()) if "Serviço" in df_all.columns else {}
+    return num_clientes, serv_counts
+
+def build_text_resumo(period_ini, period_fim, total_comissao_hoje, total_futuros, pagar_caixinha, total_cx, df_semana, df_fiados):
+    clientes, servs = contar_clientes_e_servicos([df_semana, df_fiados])
+    serv_lin = ", ".join([f"{k}×{v}" for k, v in servs.items()]) if servs else "—"
+    linhas = []
+    linhas.append(f"💈 Resumo — Vinícius  ({to_br_date(period_ini)} → {to_br_date(period_fim)})")
+    linhas.append(f"👥 Clientes: {clientes}")
+    linhas.append(f"✂️ Serviços: {serv_lin}")
+    linhas.append(f"🧾 Comissão de hoje: {format_brl(total_comissao_hoje)}")
+    if pagar_caixinha and total_cx > 0:
+        linhas.append(f"🎁 Caixinha de hoje: {format_brl(total_cx)}")
+        linhas.append(f"💵 Total GERAL pago hoje: {format_brl(total_comissao_hoje + total_cx)}")
+    linhas.append(f"🕒 Comissão futura (fiados pendentes): {format_brl(total_futuros)}")
+    return "\n".join(linhas)
 
 # =============================
 # UI
@@ -279,7 +274,7 @@ with col_r1:
 with col_r2:
     tol_reais = st.number_input("Tolerância (R$)", value=2.00, step=0.50, min_value=0.0)
 
-# ⚙️ Opções da CAIXINHA + Telegram
+# ⚙️ Opções da CAIXINHA & Telegram
 st.markdown("### 🎁 Caixinha & 📲 Telegram")
 pagar_caixinha = st.checkbox("Pagar caixinha nesta terça (lançar em Despesas por DIA)", value=True)
 meio_pag_cx = st.selectbox(
@@ -289,7 +284,7 @@ meio_pag_cx = st.selectbox(
 )
 descricao_cx = st.text_input("Descrição (para DESPESAS — caixinha)", value="Caixinha Vinícius")
 
-enviar_tg = st.checkbox("Enviar recibo no Telegram ao registrar", value=True)
+enviar_tg = st.checkbox("Enviar resumo no Telegram ao registrar", value=True)
 dest_vini = st.checkbox("Enviar para canal do Vinícius", value=True)
 dest_jp = st.checkbox("Enviar cópia para JPaulo (privado)", value=True)
 
@@ -305,6 +300,7 @@ dfv = base[s_lower(base["Funcionário"]) == "vinicius"].copy()
 if not incluir_produtos:
     dfv = dfv[s_lower(dfv["Tipo"]) == "serviço"]
 
+# EXCLUIR linhas de 'caixinha' da comissão
 mask_caixinha_lanc = (
     (s_lower(dfv["Conta"]) == "caixinha") |
     (s_lower(dfv["Tipo"]) == "caixinha") |
@@ -315,6 +311,7 @@ dfv = dfv[~mask_caixinha_lanc].copy()
 dfv["_dt_serv"] = dfv["Data"].apply(parse_br_date)
 dfv["_dt_pagto"] = dfv["DataPagamento"].apply(parse_br_date)
 
+# Janela terça→segunda (anterior à terça de pagamento)
 ini, fim = janela_terca_a_segunda(terca_pagto)
 st.info(f"Janela desta folha: **{to_br_date(ini)} a {to_br_date(fim)}** (terça→segunda)")
 
@@ -356,7 +353,7 @@ if mostrar_det:
     det_df = base_jan_vini.loc[has_cols | mask_caixinha_rows_all, det_cols].copy()
     st.dataframe(det_df.reset_index(drop=True), use_container_width=True)
 
-# -------- DEBUG --------
+# -------- CONTADORES/DEBUG --------
 total_linhas_vini = len(dfv)
 na_janela = dfv[(dfv["_dt_serv"].notna()) & (dfv["_dt_serv"] >= ini) & (dfv["_dt_serv"] <= fim)]
 nao_fiado = na_janela[(s_lower(na_janela["StatusFiado"]) == "") | (s_lower(na_janela["StatusFiado"]) == "nao")]
@@ -380,13 +377,13 @@ mask_semana = (
 )
 semana_df = dfv[mask_semana].copy()
 
-# 2) Fiados liberados
+# 2) Fiados liberados até a terça (independe da data do serviço)
 fiados_liberados = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"] <= terca_pagto)].copy()
 
-# 3) Fiados pendentes (histórico)
+# 3) Fiados pendentes (histórico, ainda não pagos)
 fiados_pendentes = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)].copy()
 
-# Cache de comissões já pagas
+# Cache de comissões já pagas (por RefID)
 cache = _read_df(ABA_COMISSOES_CACHE)
 cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
 cache = garantir_colunas(cache, cache_cols)
@@ -397,6 +394,7 @@ if reprocessar_terca:
 else:
     ja_pagos = set(cache["RefID"].astype(str).tolist())
 
+# Função base de cálculo da comissão
 def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.assign(Valor_num=[], Competência=[], Valor_base_comissao=[])
@@ -415,6 +413,7 @@ def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
     return df
 
+# ------- GRADE EDITÁVEL -------
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
     if df.empty:
         st.warning(f"Sem itens em **{titulo}**.")
@@ -481,16 +480,23 @@ else:
     )
     st.warning(f"Comissão futura (quando pagarem): **{format_brl(total_fiados_pend)}**")
 
-# ------- RESUMO DE MÉTRICAS -------
+# ------- RESUMO DE MÉTRICAS (com fiados e total geral) -------
+total_comissao_hoje = float(total_semana + total_fiados)
+total_geral_hoje = float(total_comissao_hoje + (total_caixinha if pagar_caixinha else 0.0))
+
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 with col_m1:
     st.metric("Nesta terça — NÃO fiado", format_brl(total_semana))
 with col_m2:
-    st.metric("Nesta terça — fiados liberados", format_brl(total_fiados))
+    st.metric("Nesta terça — fiados liberados (a pagar)", format_brl(total_fiados))
 with col_m3:
-    st.metric("Total desta terça (comissão)", format_brl(total_semana + total_fiados))
+    st.metric("Total desta terça (comissão)", format_brl(total_comissao_hoje))
 with col_m4:
-    st.metric("Caixinha a pagar (se marcado)", format_brl(total_caixinha))
+    st.metric("Caixinha (se marcado)", format_brl(total_caixinha))
+
+st.subheader("💵 Total GERAL a pagar nesta terça")
+st.success(f"**{format_brl(total_geral_hoje)}**  "
+           f"{'(inclui caixinha)' if pagar_caixinha and total_caixinha>0 else '(sem caixinha)'}")
 
 # =============================
 # CONFIRMAR E GRAVAR
@@ -599,20 +605,18 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
             # ======= Enviar Telegram (opcional) =======
             if enviar_tg:
                 token, chat_jp, chat_vn = _get_telegram_creds()
-                html_msg = build_html_recibo(
-                    terca_pagto,
-                    total_semana=float(total_semana),
-                    total_fiados=float(total_fiados),
-                    total_caixinha=float(total_caixinha if pagar_caixinha else 0.0),
-                    linhas_comissao=int(linhas_comissao),
-                    linhas_caixinha=int(linhas_caixinha if pagar_caixinha else 0),
-                    meio_pag=meio_pag,
-                    meio_pag_cx=meio_pag_cx
+                texto = build_text_resumo(
+                    period_ini=ini, period_fim=fim,
+                    total_comissao_hoje=float(total_comissao_hoje),
+                    total_futuros=float(total_fiados_pend),
+                    pagar_caixinha=bool(pagar_caixinha),
+                    total_cx=float(total_caixinha if pagar_caixinha else 0.0),
+                    df_semana=semana_df, df_fiados=fiados_liberados
                 )
                 if dest_vini:
-                    tg_send_message(token, chat_vn, html_msg)
+                    tg_send_text(token, chat_vn, texto)
                 if dest_jp:
-                    tg_send_message(token, chat_jp, html_msg)
+                    tg_send_text(token, chat_jp, texto)
 
             st.success(
                 f"🎉 Pagamento registrado!\n"
