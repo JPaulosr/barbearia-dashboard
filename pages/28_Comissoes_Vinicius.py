@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Comissão por DIA + Caixinha
-# - Gera UMA linha por DIA em Despesas (comissão e, opcionalmente, caixinha).
-# - Trava anti-duplicação OFICIAL via coluna RefID na própria aba Despesas.
-# - Backfill automático de RefID para lançamentos antigos.
-# - Cache (comissoes_cache) continua para histórico, mas não é necessário para a trava.
-# - Telegram com resumo do pagamento.
+# - UMA linha por DIA em Despesas (comissão e, opcionalmente, caixinha).
+# - Trava anti-duplicação oficial via coluna RefID na própria aba Despesas (cria automaticamente + backfill).
+# - Telegram: usa as mesmas chaves das outras páginas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID_*).
+# - Botão 📲 Reenviar resumo (sem gravar).
+# - Mostra no Telegram: 🏦 Fiado pago hoje (valor e quantidade de itens).
 
 import streamlit as st
 import pandas as pd
@@ -26,12 +26,11 @@ ABA_COMISSOES_CACHE = "comissoes_cache"
 ABA_DESPESAS = "Despesas"
 TZ = "America/Sao_Paulo"
 
-# Telegram fallbacks (substituídos por st.secrets['TELEGRAM'] se existir)
-TG_TOKEN_FALLBACK = "SEU_TOKEN_AQUI"
-TG_CHAT_JPAULO_FALLBACK = "SEU_CHATID_PESSOAL"
-TG_CHAT_VINICIUS_FALLBACK = "SEU_CHATID_VINICIUS_OU_CANAL"
+# Telegram (mesmas variáveis já usadas em outras páginas)
+TELEGRAM_TOKEN_FALLBACK = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
+TELEGRAM_CHAT_ID_JPAULO_FALLBACK = "493747253"
+TELEGRAM_CHAT_ID_VINICIUS_FALLBACK = "-1001234567890"
 
-# Colunas base (dados)
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
     "Funcionário", "Fase", "Tipo", "Período",
@@ -42,7 +41,7 @@ COLS_OFICIAIS = [
     "CaixinhaDia", "CaixinhaFundo",
 ]
 
-# Agora Despesas passa a ter RefID oficialmente
+# Em Despesas, RefID é a trava oficial
 COLS_DESPESAS_FIX = ["Data", "Prestador", "Descrição", "Valor", "Me Pag:", "RefID"]
 
 PERCENTUAL_PADRAO = 50.0
@@ -133,7 +132,7 @@ def _to_float_brl(v) -> float:
     if not s:
         return 0.0
     s = s.replace("R$", "").replace(" ", "")
-    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)  # remove milhares
+    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)  # milhares
     s = s.replace(",", ".")
     try:
         return float(s)
@@ -149,47 +148,59 @@ def snap_para_preco_cheio(servico: str, valor: float, tol: float, habilitado: bo
     return valor
 
 def format_brl(v: float) -> str:
+    try: v = float(v)
+    except: v = 0.0
     return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# ---- RefID de DESPESA (fonte de verdade) ----
+# --- RefIDs ---
 def _refid_despesa(data_br: str, prestador: str, descricao: str, valor_float: float, mepag: str) -> str:
-    """
-    Hash estável da linha de Despesas:
-    Data dd/mm/aaaa | Prestador | Descrição | Valor (float 2 casas) | Me Pag:
-    """
     base = f"{data_br.strip()}|{prestador.strip().lower()}|{descricao.strip().lower()}|{valor_float:.2f}|{str(mepag).strip().lower()}"
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
-# ---- RefID da comissão por atendimento (cache) ----
 def make_refid_atendimento(row: pd.Series) -> str:
     key = "|".join([str(row.get(k, "")).strip() for k in ["Cliente","Data","Serviço","Valor","Funcionário","Combo"]])
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
-# ---- Telegram ----
-def _get_telegram_creds():
-    token, chat_jp, chat_vn = TG_TOKEN_FALLBACK, TG_CHAT_JPAULO_FALLBACK, TG_CHAT_VINICIUS_FALLBACK
+# =============================
+# TELEGRAM (usando as mesmas chaves já existentes no app)
+# =============================
+def _get_token() -> str:
     try:
-        tg = st.secrets.get("TELEGRAM", {})
-        token = tg.get("TOKEN", token)
-        chat_jp = tg.get("CHAT_ID_JPAULO", chat_jp)
-        chat_vn = tg.get("CHAT_ID_VINICIUS", chat_vn)
+        v = (st.secrets.get("TELEGRAM_TOKEN") or "").strip()
+        return v or TELEGRAM_TOKEN_FALLBACK
     except Exception:
-        pass
-    return token, chat_jp, chat_vn
+        return TELEGRAM_TOKEN_FALLBACK
 
-def tg_send_text(token: str, chat_id: str, text: str):
-    if not token or not chat_id:
-        st.warning("⚠️ Credenciais do Telegram ausentes.")
-        return
+def _get_chat_jp() -> str:
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-            timeout=15
-        )
-    except Exception as e:
-        st.warning(f"Erro Telegram: {e}")
+        v = (st.secrets.get("TELEGRAM_CHAT_ID_JPAULO") or "").strip()
+        return v or TELEGRAM_CHAT_ID_JPAULO_FALLBACK
+    except Exception:
+        return TELEGRAM_CHAT_ID_JPAULO_FALLBACK
 
+def _get_chat_vini() -> str:
+    try:
+        v = (st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS") or "").strip()
+        return v or TELEGRAM_CHAT_ID_VINICIUS_FALLBACK
+    except Exception:
+        return TELEGRAM_CHAT_ID_VINICIUS_FALLBACK
+
+def tg_send_html(text: str, chat_id: str) -> bool:
+    token = _get_token()
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+            timeout=30
+        )
+        js = r.json()
+        return bool(r.ok and js.get("ok"))
+    except Exception:
+        return False
+
+# =============================
+# RESUMO (HTML para Telegram)
+# =============================
 def contar_clientes_e_servicos(df_list):
     if not any(d is not None and not d.empty for d in df_list):
         return 0, {}
@@ -198,8 +209,13 @@ def contar_clientes_e_servicos(df_list):
     serv_counts = df_all["Serviço"].astype(str).str.strip().value_counts().to_dict() if "Serviço" in df_all.columns else {}
     return num_clientes, serv_counts
 
-def build_text_resumo(period_ini, period_fim, total_comissao_hoje, total_futuros,
-                      pagar_caixinha, total_cx, df_semana, df_fiados, df_pend):
+def build_text_resumo(period_ini, period_fim,
+                      total_comissao_hoje,          # comissão de hoje (sem caixinha)
+                      total_futuros,                # comissão futura (fiados pendentes)
+                      pagar_caixinha, total_cx,     # caixinha
+                      df_semana, df_fiados, df_pend,
+                      total_fiado_pago_hoje=0.0,    # NOVO: comissão vinda de fiados pagos hoje
+                      qtd_fiado_pago_hoje=0):       # NOVO: qtde de itens de fiado pagos hoje
     clientes, servs = contar_clientes_e_servicos([df_semana, df_fiados])
     serv_lin = ", ".join([f"{k}×{v}" for k, v in servs.items()]) if servs else "—"
     qtd_pend = int(len(df_pend)) if df_pend is not None else 0
@@ -207,15 +223,24 @@ def build_text_resumo(period_ini, period_fim, total_comissao_hoje, total_futuros
     dt_min = to_br_date(pd.to_datetime(df_pend["_dt_serv"], errors="coerce").min()) if df_pend is not None and "_dt_serv" in df_pend.columns and not df_pend.empty else "—"
 
     linhas = [
-        f"💈 Resumo — Vinícius  ({to_br_date(period_ini)} → {to_br_date(period_fim)})",
-        f"👥 Clientes: {clientes}",
-        f"✂️ Serviços: {serv_lin}",
-        f"🧾 Comissão de hoje: {format_brl(total_comissao_hoje)}",
+        f"💈 <b>Resumo — Vinícius</b>  ({to_br_date(period_ini)} → {to_br_date(period_fim)})",
+        f"👥 Clientes: <b>{clientes}</b>",
+        f"✂️ Serviços: <b>{serv_lin}</b>",
+        f"🧾 Comissão de hoje: <b>{format_brl(total_comissao_hoje)}</b>",
     ]
+
+    # NOVO bloco: quanto de fiado entrou hoje (comissão desses fiados)
+    if total_fiado_pago_hoje and total_fiado_pago_hoje > 0:
+        if qtd_fiado_pago_hoje and qtd_fiado_pago_hoje > 0:
+            linhas.append(f"🏦 Fiado pago hoje: <b>{format_brl(total_fiado_pago_hoje)}</b> • <i>{qtd_fiado_pago_hoje} item(ns)</i>")
+        else:
+            linhas.append(f"🏦 Fiado pago hoje: <b>{format_brl(total_fiado_pago_hoje)}</b>")
+
     if pagar_caixinha and total_cx > 0:
-        linhas.append(f"🎁 Caixinha de hoje: {format_brl(total_cx)}")
-        linhas.append(f"💵 Total GERAL pago hoje: {format_brl(total_comissao_hoje + total_cx)}")
-    linhas.append(f"🕒 Comissão futura (fiados pendentes): {format_brl(total_futuros)}")
+        linhas.append(f"🎁 Caixinha de hoje: <b>{format_brl(total_cx)}</b>")
+        linhas.append(f"💵 Total GERAL pago hoje: <b>{format_brl(total_comissao_hoje + total_cx)}</b>")
+
+    linhas.append(f"🕒 Comissão futura (fiados pendentes): <b>{format_brl(total_futuros)}</b>")
     if qtd_pend > 0:
         linhas.append(f"   • {qtd_pend} itens • {clientes_pend} clientes • mais antigo: {dt_min}")
     return "\n".join(linhas)
@@ -279,7 +304,7 @@ enviar_tg = st.checkbox("Enviar resumo no Telegram ao registrar", value=True)
 dest_vini = st.checkbox("Enviar para canal do Vinícius", value=True)
 dest_jp = st.checkbox("Enviar cópia para JPaulo (privado)", value=True)
 
-# ✅ Reprocessar esta terça (apenas cache de comissão; Despesas tem trava própria via RefID)
+# ✅ Reprocessar esta terça (apenas cache histórico; Despesas tem trava própria)
 reprocessar_terca = st.checkbox("Reprocessar esta terça (regravar cache de comissão)", value=False)
 
 # ============ Pré-filtros da comissão ============
@@ -367,7 +392,7 @@ else:
     if "_dt_serv" not in fiados_pendentes.columns:
         fiados_pendentes["_dt_serv"] = fiados_pendentes["Data"].apply(parse_br_date)
 
-# ---- função de valor base (usada também nos grids)
+# ---- valor base p/ comissão
 def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.assign(Valor_num=[], Competência=[], Valor_base_comissao=[])
@@ -386,7 +411,7 @@ def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
     return df
 
-# calcula base e totais dos pendentes
+# Totais de fiados pendentes
 _futuros_mb = montar_valor_base(fiados_pendentes).copy()
 _futuros_mb["% Comissão"] = float(perc_padrao)
 _futuros_mb["Comissão (R$)"] = (
@@ -403,15 +428,12 @@ _dt_max_pend = pd.to_datetime(fiados_pendentes["_dt_serv"], errors="coerce").max
 min_str = to_br_date(_dt_min_pend) if pd.notna(_dt_min_pend) else "—"
 max_str = to_br_date(_dt_max_pend) if pd.notna(_dt_max_pend) else "—"
 
-# ------- Cache de comissões já pagas (somente histórico/relatório) -------
+# ------- Cache histórico -------
 cache = _read_df(ABA_COMISSOES_CACHE)
 cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
 cache = garantir_colunas(cache, cache_cols)
 terca_str = to_br_date(terca_pagto)
-if reprocessar_terca:
-    ja_pagos = set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
-else:
-    ja_pagos = set(cache["RefID"].astype(str).tolist())
+ja_pagos = set(cache["RefID"].astype(str).tolist()) if not reprocessar_terca else set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
 
 # ------- GRADES EDITÁVEIS -------
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
@@ -458,6 +480,11 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
 semana_grid, total_semana = preparar_grid(semana_df, "Semana (terça→segunda) — NÃO FIADO", "semana")
 fiados_liberados_grid, total_fiados = preparar_grid(fiados_liberados, "Fiados liberados (pagos até a terça)", "fiados_liberados")
 
+# NOVO: quantidade de itens de fiado pagos hoje
+qtd_fiados_hoje = 0
+if fiados_liberados_grid is not None and not fiados_liberados_grid.empty:
+    qtd_fiados_hoje = int(len(fiados_liberados_grid))
+
 # ------- TABELA — FIADOS A RECEBER -------
 st.subheader("📌 Fiados a receber (histórico — ainda NÃO pagos)")
 if _futuros_mb.empty:
@@ -489,17 +516,13 @@ st.success(f"**{format_brl(total_geral_hoje)}**  "
            f"{'(inclui caixinha)' if pagar_caixinha and total_caixinha>0 else '(sem caixinha)'}")
 
 # =============================
-# BACKFILL DE RefID EM DESPESAS (automático e seguro)
+# BACKFILL RefID em DESPESAS (cria coluna automaticamente)
 # =============================
 def _backfill_refid_em_despesas(despesas_df: pd.DataFrame) -> pd.DataFrame:
-    """ Assegura coluna RefID e preenche para linhas antigas sem RefID. """
     despesas_df = garantir_colunas(despesas_df.copy(), COLS_DESPESAS_FIX)
     faltando = despesas_df["RefID"].astype(str).str.strip() == ""
     if not faltando.any():
         return despesas_df
-
-    def _row_val_float(val_texto: str) -> float:
-        return _to_float_brl(val_texto)
 
     for idx, r in despesas_df[faltando].iterrows():
         data_br = str(r.get("Data","")).strip()
@@ -509,19 +532,47 @@ def _backfill_refid_em_despesas(despesas_df: pd.DataFrame) -> pd.DataFrame:
         mepag   = str(r.get("Me Pag:","")).strip()
         if not data_br or not prest or not desc or not valtxt:
             continue
-        valf = _row_val_float(valtxt)
+        valf = _to_float_brl(valtxt)
         despesas_df.at[idx, "RefID"] = _refid_despesa(data_br, prest, desc, valf, mepag)
-
     return despesas_df
 
 # =============================
-# CONFIRMAR E GRAVAR
+# 📲 Botão REENVIAR RESUMO (sem gravar)
+# =============================
+if st.button("📲 Reenviar resumo (sem gravar)"):
+    texto = build_text_resumo(
+        period_ini=ini, period_fim=fim,
+        total_comissao_hoje=float(total_comissao_hoje),
+        total_futuros=float(total_fiados_pend),
+        pagar_caixinha=bool(pagar_caixinha),
+        total_cx=float(total_caixinha if pagar_caixinha else 0.0),
+        df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
+        total_fiado_pago_hoje=float(total_fiados),         # NOVO
+        qtd_fiado_pago_hoje=int(qtd_fiados_hoje)           # NOVO
+    )
+    enviados = []
+    if dest_vini:
+        enviados.append(("Vinícius", tg_send_html(texto, _get_chat_vini())))
+    if dest_jp:
+        enviados.append(("JPaulo", tg_send_html(texto, _get_chat_jp())))
+    if not enviados:
+        st.info("Marque ao menos um destino (Vinícius/JPaulo) para reenviar.")
+    else:
+        ok_total = all(ok for _, ok in enviados)
+        if ok_total:
+            st.success("Resumo reenviado com sucesso ✅")
+        else:
+            falhas = ", ".join([nome for nome, ok in enviados if not ok])
+            st.warning(f"Resumo reenviado, mas houve falha em: {falhas}")
+
+# =============================
+# ✅ CONFIRMAR E GRAVAR
 # =============================
 if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens como pagos"):
     if (semana_grid is None or semana_grid.empty) and (fiados_liberados_grid is None or fiados_liberados_grid.empty) and not (pagar_caixinha and total_caixinha > 0):
         st.warning("Não há itens para pagar.")
     else:
-        # 1) Atualiza cache (comissão) — apenas histórico
+        # 1) Atualiza cache histórico (não interfere na trava)
         novos_cache = []
         for df_part in [semana_grid, fiados_liberados_grid]:
             if df_part is None or df_part.empty:
@@ -539,14 +590,12 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
         cache_df = _read_df(ABA_COMISSOES_CACHE)
         cache_cols = ["RefID","PagoEm","TerçaPagamento","ValorComissao","Competencia","Observacao"]
         cache_df = garantir_colunas(cache_df, cache_cols)
-
         if reprocessar_terca:
             cache_df = cache_df[cache_df["TerçaPagamento"] != to_br_date(terca_pagto)].copy()
-
         cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
-        # 2) Lê Despesas e garante RefID em todas as linhas existentes (backfill)
+        # 2) Lê Despesas e garante RefID em todas as linhas (cria coluna + backfill)
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = _backfill_refid_em_despesas(despesas_df)
 
@@ -575,7 +624,6 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
             pagos = pagos[pagos["_dt"].notna()].copy()
 
             por_dia = pagos.groupby(["Data","Competência"], dropna=False)["ComissaoValor"].sum().reset_index()
-
             for _, row in por_dia.iterrows():
                 data_serv = str(row["Data"]).strip()
                 comp      = str(row["Competência"]).strip()
@@ -619,7 +667,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                 })
             linhas_caixinha = int((cx_por_dia["ValorCxTotal"] > 0).sum())
 
-        # ===== TRAVA: usa RefID na própria Despesas =====
+        # ===== TRAVA: usa RefID em Despesas =====
         despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
         existentes = set(despesas_df["RefID"].astype(str).str.strip().tolist())
         novas_linhas = []
@@ -633,34 +681,34 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
 
         if novas_linhas:
             despesas_final = pd.concat([despesas_df, pd.DataFrame(novas_linhas)], ignore_index=True)
-            # Reordenar colunas: fixas primeiro
             colunas_finais = [c for c in COLS_DESPESAS_FIX if c in despesas_final.columns] + \
                              [c for c in despesas_final.columns if c not in COLS_DESPESAS_FIX]
             despesas_final = despesas_final[colunas_finais]
             _write_df(ABA_DESPESAS, despesas_final)
 
-            # 5) Telegram (apenas se houve novas linhas gravadas)
-            if enviar_tg:
-                token, chat_jp, chat_vn = _get_telegram_creds()
+            # 5) Telegram — somente se houve gravação e estiver marcado
+            if enviar_tg and (dest_vini or dest_jp):
                 texto = build_text_resumo(
                     period_ini=ini, period_fim=fim,
                     total_comissao_hoje=float(total_comissao_hoje),
                     total_futuros=float(total_fiados_pend),
                     pagar_caixinha=bool(pagar_caixinha),
                     total_cx=float(total_caixinha if pagar_caixinha else 0.0),
-                    df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes
+                    df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
+                    total_fiado_pago_hoje=float(total_fiados),        # NOVO
+                    qtd_fiado_pago_hoje=int(qtd_fiados_hoje)          # NOVO
                 )
-                if dest_vini: tg_send_text(token, chat_vn, texto)
-                if dest_jp:   tg_send_text(token, chat_jp, texto)
+                if dest_vini: tg_send_html(texto, _get_chat_vini())
+                if dest_jp:   tg_send_html(texto, _get_chat_jp())
 
             st.success(
                 f"🎉 Pagamento registrado!\n"
-                f"- Comissão: {linhas_comissao} linha(s) calculadas\n"
-                f"- Caixinha: {linhas_caixinha} dia(s) com valor\n"
-                f"- Gravadas em **{ABA_DESPESAS}**: {len(novas_linhas)} nova(s) linha(s)\n"
+                f"- Comissão (dias): {linhas_comissao}\n"
+                f"- Caixinha (dias com valor): {linhas_caixinha}\n"
+                f"- Gravadas em {ABA_DESPESAS}: {len(novas_linhas)} nova(s) linha(s)\n"
                 f"- Ignoradas por duplicidade (RefID): {ignoradas}\n"
-                f"- Itens marcados no **{ABA_COMISSOES_CACHE}**: {len(novos_cache)}"
+                f"- Cache histórico atualizado: {len(novos_cache)} item(ns)"
             )
             st.balloons()
         else:
-            st.warning("Nenhuma nova linha gravada em **Despesas** (todas já existiam pelo RefID).")
+            st.warning("Nenhuma nova linha gravada em Despesas (todas já existiam pelo RefID).")
