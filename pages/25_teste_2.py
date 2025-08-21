@@ -809,23 +809,87 @@ if not modo_lote:
                     combo=combo
                 )
 
-    # -------- SIMPLES --------
-    else:
-        st.subheader("✂️ Selecione o serviço e valor:")
-        servico = st.selectbox("Serviço", servicos_existentes)
-        valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
+    # -------- SIMPLES (um por vez) --------
+else:
+    st.subheader("✂️ Selecione o serviço e valor:")
+    servico = st.selectbox("Serviço", servicos_existentes)
+    valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
-        # 💝 Caixinhas
-        with st.expander("💝 Caixinhas (opcional)", expanded=False):
-            caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f", key="cx_dia_simples")
-            caixinha_fundo = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f", key="cx_fundo_simples")
+    # 💝 Caixinhas opcionais
+    with st.expander("💝 Caixinhas (opcional)", expanded=False):
+        caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
+        caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
 
-        if usar_cartao and not is_nao_cartao(conta):
-            liquido_total, bandeira, tipo_cartao, parcelas, _, _ = bloco_cartao_ui(valor)
+    # -------- SALVAR ATENDIMENTO NORMAL --------
+    if not st.session_state.simples_salvo and st.button("📁 Salvar Atendimento"):
+        servico_norm = _cap_first(servico)
+        if ja_existe_atendimento(cliente, data, servico_norm):
+            st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
         else:
-            liquido_total, bandeira, tipo_cartao, parcelas = None, "", "Crédito", 1
+            df_all, _ = carregar_base()
+            usar_cartao_efetivo = usar_cartao and not is_nao_cartao(conta)
 
-        if not st.session_state.simples_salvo and st.button("📁 Salvar Atendimento"):
+            nova = {
+                "Data": data,
+                "Serviço": servico_norm,
+                "Valor": valor,
+                "Conta": conta,
+                "Cliente": cliente,
+                "Combo": "",
+                "Funcionário": funcionario,
+                "Fase": fase,
+                "Tipo": tipo,
+                "Período": periodo_opcao,
+                "CaixinhaDia": caixinha_dia,
+                "CaixinhaFundo": caixinha_anual,
+            }
+            if usar_cartao_efetivo:
+                id_pag = gerar_pag_id("A")
+                bruto = float(valor)
+                liq = float(liquido_total or 0.0)
+                taxa_v = round(max(0.0, bruto - liq), 2)
+                taxa_pct = round((taxa_v / bruto * 100.0), 4) if bruto > 0 else 0.0
+                nova.update({
+                    "ValorBrutoRecebido": bruto,
+                    "ValorLiquidoRecebido": liq,
+                    "TaxaCartaoValor": taxa_v,
+                    "TaxaCartaoPct": taxa_pct,
+                    "FormaPagDetalhe": f"{bandeira or '-'} | {tipo_cartao} | {int(parcelas)}x",
+                    "PagamentoID": id_pag,
+                })
+
+            nova = _preencher_fiado_vazio(nova)
+            df_final = pd.concat([df_all, pd.DataFrame([nova])], ignore_index=True)
+            salvar_base(df_final)
+            st.session_state.simples_salvo = True
+            st.success(f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}.")
+            enviar_card(df_final, cliente, funcionario, data, servico=servico_norm, valor=float(nova["Valor"]), combo="")
+
+    # -------- SALVAR SÓ A CAIXINHA --------
+    if st.button("💝 Salvar SÓ a caixinha"):
+        if caixinha_dia <= 0 and caixinha_anual <= 0:
+            st.warning("⚠️ Informe algum valor de caixinha antes de salvar.")
+        else:
+            df_all, _ = carregar_base()
+            nova = {
+                "Data": data,
+                "Serviço": "Caixinha",
+                "Valor": 0.0,   # não entra no gasto como serviço
+                "Conta": conta,
+                "Cliente": cliente,
+                "Combo": "",
+                "Funcionário": funcionario,
+                "Fase": fase,
+                "Tipo": "Caixinha",
+                "Período": periodo_opcao,
+                "CaixinhaDia": caixinha_dia,
+                "CaixinhaFundo": caixinha_anual,
+            }
+            nova = _preencher_fiado_vazio(nova)
+            df_final = pd.concat([df_all, pd.DataFrame([nova])], ignore_index=True)
+            salvar_base(df_final)
+            st.success(f"💝 Caixinha registrada para {cliente} no dia {data}.")
+
             servico_norm = _cap_first(servico)
             if ja_existe_atendimento(cliente, data, servico_norm):
                 st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
