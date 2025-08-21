@@ -6,7 +6,7 @@
 # - Evita duplicidades via sheet "comissoes_cache" (RefID por atendimento).
 # - Preço de TABELA para cartão (opcional) e arredondamento com tolerância.
 # - Caixinha NÃO entra na comissão; pode ser paga junto (opção).
-# - Envia resumo no Telegram (clientes, serviços, comissão de hoje, caixinha e fiados pendentes).
+# - Envia resumo no Telegram (clientes, serviços, hoje, caixinha, futuro).
 
 import streamlit as st
 import pandas as pd
@@ -33,7 +33,7 @@ TG_TOKEN_FALLBACK = "SEU_TOKEN_AQUI"
 TG_CHAT_JPAULO_FALLBACK = "SEU_CHATID_PESSOAL"
 TG_CHAT_VINICIUS_FALLBACK = "SEU_CHATID_VINICIUS_OU_CANAL"
 
-# Colunas da planilha
+# Colunas
 COLS_OFICIAIS = [
     "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
     "Funcionário", "Fase", "Tipo", "Período",
@@ -100,8 +100,11 @@ def parse_br_date(s: str):
             pass
     return None
 
-def to_br_date(dt: datetime):
-    return dt.strftime("%d/%m/%Y")
+def to_br_date(dt):
+    if dt is None or (hasattr(dt, "tz_localize") and pd.isna(dt)):
+        return ""
+    # aceita datetime ou pandas Timestamp
+    return pd.to_datetime(dt).strftime("%d/%m/%Y")
 
 def competencia_from_data_str(data_servico_str: str) -> str:
     dt = parse_br_date(data_servico_str)
@@ -134,7 +137,8 @@ def _to_float_brl(v) -> float:
     if not s:
         return 0.0
     s = s.replace("R$", "").replace(" ", "")
-    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)  # remove milhar
+    # remove pontos de milhar
+    s = re.sub(r"\.(?=\d{3}(\D|$))", "", s)
     s = s.replace(",", ".")
     try:
         return float(s)
@@ -324,7 +328,7 @@ fiados_ok = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"]
 fiados_pend_all = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)]
 
 st.caption(
-    f"Linhas do Vinicius (sem 'caixinha' para comissão): {total_linhas_vini} | "
+    f"Linhas do Vinicius (sem 'caixinha' p/ comissão): {total_linhas_vini} | "
     f"Na janela (não fiado): {len(nao_fiado)} | "
     f"Fiados liberados: {len(fiados_ok)} | "
     f"Fiados pendentes: {len(fiados_pend_all)}"
@@ -342,51 +346,24 @@ semana_df = dfv[mask_semana].copy()
 # 2) Fiados liberados (pago até a terça)
 fiados_liberados = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"] <= terca_pagto)].copy()
 
-# 3) Fiados pendentes (ainda não pagos) — define já para uso abaixo
+# 3) Fiados pendentes (ainda não pagos)
 fiados_pendentes = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)].copy()
 
 # ================================
 # FIADOS PENDENTES — NORMALIZA + TOTAIS (antes de qualquer uso)
 # ================================
-# === FIADOS PENDENTES: normaliza e calcula TUDO AQUI (antes de qualquer uso) ===
 if 'fiados_pendentes' not in locals() or fiados_pendentes is None:
     fiados_pendentes = pd.DataFrame()
 else:
     fiados_pendentes = fiados_pendentes.copy()
 
-# garante colunas mínimas e _dt_serv
 if fiados_pendentes.empty:
     fiados_pendentes = pd.DataFrame(columns=["Data", "Cliente", "Serviço", "_dt_serv"])
 else:
     if "_dt_serv" not in fiados_pendentes.columns:
         fiados_pendentes["_dt_serv"] = fiados_pendentes["Data"].apply(parse_br_date)
 
-# base para % comissão nos pendentes (reuso adiante)
-_futuros_mb = montar_valor_base(fiados_pendentes).copy()
-_futuros_mb["% Comissão"] = float(perc_padrao)
-_futuros_mb["Comissão (R$)"] = (
-    pd.to_numeric(_futuros_mb["Valor_base_comissao"], errors="coerce").fillna(0.0) * float(perc_padrao) / 100.0
-).round(2)
-
-# totais/indicadores
-total_fiados_pend = float(_futuros_mb["Comissão (R$)"].sum())
-qtd_fiados_pend = int(len(fiados_pendentes))
-clientes_fiados_pend = (
-    fiados_pendentes["Cliente"].astype(str).str.strip().str.lower().nunique()
-    if not fiados_pendentes.empty else 0
-)
-_dt_min_pend = pd.to_datetime(fiados_pendentes["_dt_serv"], errors="coerce").min() if not fiados_pendentes.empty else None
-_dt_max_pend = pd.to_datetime(fiados_pendentes["_dt_serv"], errors="coerce").max() if not fiados_pendentes.empty else None
-min_str = to_br_date(_dt_min_pend) if pd.notna(_dt_min_pend) else "—"
-max_str = to_br_date(_dt_max_pend) if pd.notna(_dt_max_pend) else "—"
-
-if not fiados_pendentes.empty:
-    if "_dt_serv" not in fiados_pendentes.columns:
-        fiados_pendentes["_dt_serv"] = fiados_pendentes["Data"].apply(parse_br_date)
-else:
-    fiados_pendentes = pd.DataFrame(columns=["Data","Cliente","Serviço","_dt_serv"])
-
-# base para comissão futura
+# ---- função de valor base (usada também nos grids)
 def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.assign(Valor_num=[], Competência=[], Valor_base_comissao=[])
@@ -405,12 +382,12 @@ def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     df["Valor_base_comissao"] = df.apply(_base_valor, axis=1)
     return df
 
+# calcula base e totais dos pendentes (uma vez só)
 _futuros_mb = montar_valor_base(fiados_pendentes).copy()
 _futuros_mb["% Comissão"] = float(perc_padrao)
 _futuros_mb["Comissão (R$)"] = (
     pd.to_numeric(_futuros_mb["Valor_base_comissao"], errors="coerce").fillna(0.0) * float(perc_padrao) / 100.0
 ).round(2)
-
 total_fiados_pend = float(_futuros_mb["Comissão (R$)"].sum())
 qtd_fiados_pend = int(len(fiados_pendentes))
 clientes_fiados_pend = (
@@ -422,6 +399,16 @@ _dt_max_pend = pd.to_datetime(fiados_pendentes["_dt_serv"], errors="coerce").max
 min_str = to_br_date(_dt_min_pend) if pd.notna(_dt_min_pend) else "—"
 max_str = to_br_date(_dt_max_pend) if pd.notna(_dt_max_pend) else "—"
 
+# ------- Cache de comissões já pagas (para uso nos grids) -------
+cache = _read_df(ABA_COMISSOES_CACHE)
+cache_cols = ["RefID", "PagoEm", "TerçaPagamento", "ValorComissao", "Competencia", "Observacao"]
+cache = garantir_colunas(cache, cache_cols)
+terca_str = to_br_date(terca_pagto)
+if reprocessar_terca:
+    ja_pagos = set(cache[cache["TerçaPagamento"] != terca_str]["RefID"].astype(str).tolist())
+else:
+    ja_pagos = set(cache["RefID"].astype(str).tolist())
+
 # ------- GRADES EDITÁVEIS (semana & fiados liberados) -------
 def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
     if df.empty:
@@ -429,17 +416,6 @@ def preparar_grid(df: pd.DataFrame, titulo: str, key_prefix: str):
         return pd.DataFrame(), 0.0
     df = df.copy()
     df["RefID"] = df.apply(make_refid, axis=1)
-
-    # cache de pagamentos para não duplicar
-    cache = _read_df(ABA_COMISSOES_CACHE)
-    cache_cols = ["RefID","PagoEm","TerçaPagamento","ValorComissao","Competencia","Observacao"]
-    cache = garantir_colunas(cache, cache_cols)
-    terca_str_local = to_br_date(terca_pagto)
-    if reprocessar_terca:
-        ja_pagos = set(cache[cache["TerçaPagamento"] != terca_str_local]["RefID"].astype(str).tolist())
-    else:
-        ja_pagos = set(cache["RefID"].astype(str).tolist())
-
     df = df[~df["RefID"].isin(ja_pagos)]
     if df.empty:
         st.info(f"Todos os itens de **{titulo}** já foram pagos.")
