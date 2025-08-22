@@ -600,10 +600,13 @@ df_2025 = df_existente[df_existente["_dt"].dt.year == 2025]
 
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
+
+# Lista original
 servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
 
 # NOVO: garante que "Corte" sempre aparece como opção e no topo
 servicos_ui = list(dict.fromkeys(["Corte", *servicos_existentes]))
+
 contas_existentes = sorted([c for c in df_2025["Conta"].dropna().astype(str).str.strip().unique() if c])
 combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str.strip().unique() if c])
 
@@ -845,9 +848,13 @@ if not modo_lote:
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
 
-        # >>>>>> PADRÃO "Corte" (sem alterar lógica) <<<<<<
-        idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
-        servico = st.selectbox("Serviço", servicos_existentes, index=idx_corte, key="servico_um")
+        # usa lista com "Corte" garantido e chave nova para evitar conflito de estado
+        servico = st.selectbox(
+            "Serviço",
+            servicos_ui,
+            index=servicos_ui.index("Corte"),
+            key="servico_um_v2"
+        )
 
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
@@ -972,7 +979,7 @@ else:
                 st.image(foto_url, caption=cli, width=200)
 
             st.subheader(f"⚙️ Atendimento para {cli}")
-            sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
+            sug_conta, sug_periodo, sug_func = sugestões = sugestoes_do_cliente(
                 df_existente, cli, conta_global, periodo_global, funcionario_global
             )
 
@@ -1041,14 +1048,21 @@ else:
                                              [nm for (nm, _) in itens], key=f"alvo_{cli}")
 
             else:
-                # >>>>>> PADRÃO "Corte" (sem alterar lógica) <<<<<<
-                idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
-                st.selectbox(f"Serviço simples para {cli}", servicos_existentes, index=idx_corte, key=f"servico_{cli}")
+                # usa lista com "Corte" garantido e key nova por cliente
+                st.selectbox(
+                    f"Serviço simples para {cli}",
+                    servicos_ui,
+                    index=servicos_ui.index("Corte"),
+                    key=f"servico_{cli}_v2"
+                )
 
-                serv_cli = st.session_state.get(f"servico_{cli}", None)
-                st.number_input(f"{cli} - Valor do serviço",
-                                value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
-                                step=1.0, key=f"valor_{cli}_simples")
+                serv_cli = st.session_state.get(f"servico_{cli}_v2", None)
+                st.number_input(
+                    f"{cli} - Valor do serviço",
+                    value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
+                    step=1.0,
+                    key=f"valor_{cli}_simples"
+                )
                 if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                         c1, c2 = st.columns(2)
@@ -1157,7 +1171,7 @@ else:
                     funcionario_por_cliente[cli] = func_cli
 
                 else:
-                    serv_cli = st.session_state.get(f"servico_{cli}", None)
+                    serv_cli = st.session_state.get(f"servico_{cli}_v2", None)
                     serv_norm = _cap_first(serv_cli) if serv_cli else ""
                     if not serv_norm:
                         st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando."); continue
