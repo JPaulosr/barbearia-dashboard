@@ -707,9 +707,10 @@ if not modo_lote:
             )
 
         # 💝 Caixinhas (opcional)
-        with st.expander("💝 Caixinhas (opcional)", expanded=False):
-            caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
-            caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
+             with st.expander("💝 Caixinhas (opcional)", expanded=False):
+             caixinha_dia = st.number_input(
+             "Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f"
+            )
 
         # UI cartão + distribuição (apenas se marcado)
         liquido_total = None
