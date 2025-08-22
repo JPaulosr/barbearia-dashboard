@@ -962,7 +962,7 @@ else:
             # >>> Foto pequena no topo de cada cliente (width=128) <<<
             foto_url = get_foto_url(cli)
             if foto_url:
-                st.image(foto_url, caption=cli, width=128)
+                st.image(foto_url, caption=cli, width=250)
 
             st.subheader(f"⚙️ Atendimento para {cli}")
             sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
