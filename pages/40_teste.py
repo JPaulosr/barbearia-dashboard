@@ -601,6 +601,9 @@ df_2025 = df_existente[df_existente["_dt"].dt.year == 2025]
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
 servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
+
+# NOVO: garante que "Corte" sempre aparece como opção e no topo
+servicos_ui = list(dict.fromkeys(["Corte", *servicos_existentes]))
 contas_existentes = sorted([c for c in df_2025["Conta"].dropna().astype(str).str.strip().unique() if c])
 combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str.strip().unique() if c])
 
