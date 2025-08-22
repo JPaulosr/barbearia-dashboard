@@ -40,6 +40,9 @@ COLS_PAG_EXTRAS = [
 # Caixinhas (opcionais)
 COLS_CAIXINHAS = ["CaixinhaDia", "CaixinhaFundo"]
 
+# ➕ FOTO DO CLIENTE: fallback padrão (logo do salão)
+PHOTO_FALLBACK_URL = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
+
 # =========================
 # UTILS
 # =========================
@@ -197,7 +200,14 @@ def carregar_fotos_mapa():
         return {r["k"]: str(r["Foto"]).strip() for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
     except Exception:
         return {}
+
 FOTOS = carregar_fotos_mapa()
+
+# ➕ FOTO DO CLIENTE: helper para obter URL (com fallback)
+def get_foto_url(nome: str) -> str:
+    if not nome:
+        return PHOTO_FALLBACK_URL
+    return FOTOS.get(_norm(nome)) or PHOTO_FALLBACK_URL
 
 # =========================
 # TELEGRAM
@@ -630,12 +640,15 @@ fase = "Dono + funcionário"
 # MODO UM POR VEZ
 # =========================
 if not modo_lote:
-    cA, cB = st.columns(2)
+    # ➕ FOTO DO CLIENTE (prévia ao lado da seleção)
+    cA, cB = st.columns([2,1])
     with cA:
         cliente = st.selectbox("Nome do Cliente", clientes_existentes)
-    with cB:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
+    with cB:
+        foto_url = get_foto_url(cliente)
+        st.image(foto_url, caption=cliente if cliente else "Cliente", use_container_width=True)
 
     # Fallbacks para sugestões quando não há “padrões” na tela
     conta_fallback = (contas_existentes[0] if contas_existentes else "Carteira")
@@ -947,7 +960,13 @@ else:
 
     for cli in lista_final:
         with st.container(border=True):
-            st.subheader(f"⚙️ Atendimento para {cli}")
+            # ➕ FOTO DO CLIENTE no modo lote (miniatura à direita)
+            c1, c2 = st.columns([3,1])
+            with c1:
+                st.subheader(f"⚙️ Atendimento para {cli}")
+            with c2:
+                st.image(get_foto_url(cli), caption=cli, use_container_width=True)
+
             sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
                 df_existente, cli, conta_global, periodo_global, funcionario_global
             )
@@ -1001,11 +1020,11 @@ else:
                     # Cartão + distribuição
                     if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
-                            c1, c2 = st.columns(2)
-                            with c1:
+                            c1b, c2b = st.columns(2)
+                            with c1b:
                                 st.number_input(f"{cli} - Valor recebido (líquido)", value=float(total_padrao), step=1.0, key=f"liq_{cli}")
                                 st.selectbox(f"{cli} - Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0, key=f"bandeira_{cli}")
-                            with c2:
+                            with c2b:
                                 st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                                 st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
 
@@ -1024,11 +1043,11 @@ else:
                                 step=1.0, key=f"valor_{cli}_simples")
                 if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
-                        c1, c2 = st.columns(2)
-                        with c1:
+                        c1b, c2b = st.columns(2)
+                        with c1b:
                             st.number_input(f"{cli} - Valor recebido (líquido)", value=float(st.session_state.get(f"valor_{cli}_simples", 0.0)), step=1.0, key=f"liq_{cli}")
                             st.selectbox(f"{cli} - Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0, key=f"bandeira_{cli}")
-                        with c2:
+                        with c2b:
                             st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                             st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
 
