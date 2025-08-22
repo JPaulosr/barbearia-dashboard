@@ -743,6 +743,9 @@ if not modo_lote:
                 if usar_cartao_efetivo and dist_modo == "Concentrar em um serviço" and alvo_servico:
                     soma_outros = sum(v for k, v in valores_customizados.items() if k != alvo_servico)
 
+                # ✅ aplicar caixinha só na primeira linha do combo
+                caixa_aplicada = False
+
                 for s in combo.split("+"):
                     s2_raw = s.strip()
                     s2_norm = _cap_first(s2_raw)
@@ -773,12 +776,18 @@ if not modo_lote:
                         valor_para_base = bruto_i
                         extras = {}
 
+                    # ✅ caixinha apenas na primeira linha
+                    cx_dia_i = float(caixinha_dia or 0.0) if not caixa_aplicada else 0.0
+                    cx_fundo_i = float(caixinha_anual or 0.0) if not caixa_aplicada else 0.0
+                    if (cx_dia_i > 0) or (cx_fundo_i > 0):
+                        caixa_aplicada = True
+
                     linha = _preencher_fiado_vazio({
                         "Data": data, "Serviço": s2_norm,
                         "Valor": valor_para_base,
                         "Conta": conta, "Cliente": cliente, "Combo": combo,
                         "Funcionário": funcionario, "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
-                        "CaixinhaDia": caixinha_dia, "CaixinhaFundo": caixinha_anual,
+                        "CaixinhaDia": cx_dia_i, "CaixinhaFundo": cx_fundo_i,
                         **extras
                     })
                     novas.append(linha)
@@ -965,7 +974,7 @@ else:
                         s2 = s.strip()
                         val = st.number_input(f"{cli} - {s2} (padrão: R$ {obter_valor_servico(s2)})",
                                               value=obter_valor_servico(s2), step=1.0, key=f"valor_{cli}_{s2}")
-                        itens.append((s2, val))
+                        itens.append((s2, _cap_first(s2), float(val)))
                         total_padrao += float(val)
 
                     # Cartão + distribuição
@@ -984,7 +993,7 @@ else:
                                      horizontal=False, key=f"dist_{cli}")
                             if st.session_state.get(f"dist_{cli}", "Proporcional (padrão)") == "Concentrar em um serviço":
                                 st.selectbox(f"{cli} - Aplicar TODO o desconto/taxa em",
-                                             [nm for (nm, _) in itens], key=f"alvo_{cli}")
+                                             [nm for (nm, _, _) in itens], key=f"alvo_{cli}")
 
             else:
                 st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
@@ -1044,6 +1053,9 @@ else:
                     if use_card_cli and dist_modo == "Concentrar em um serviço" and alvo:
                         soma_outros = sum(val for (r, _, val) in itens if r != alvo)
 
+                    # ✅ caixinha apenas na primeira linha do combo (por cliente)
+                    caixa_aplicada_cli = False
+
                     for (s_raw, s_norm, bruto_i) in itens:
                         if use_card_cli and total_bruto > 0:
                             if dist_modo == "Concentrar em um serviço" and alvo:
@@ -1070,11 +1082,17 @@ else:
                             extras = {}
                             valor_para_base = bruto_i
 
+                        # ✅ só a primeira linha recebe caixinha
+                        cx_dia_i = float(cx_dia or 0.0) if not caixa_aplicada_cli else 0.0
+                        cx_anual_i = float(cx_anual or 0.0) if not caixa_aplicada_cli else 0.0
+                        if (cx_dia_i > 0) or (cx_anual_i > 0):
+                            caixa_aplicada_cli = True
+
                         novas.append(_preencher_fiado_vazio({
                             "Data": data, "Serviço": s_norm, "Valor": valor_para_base, "Conta": conta_cli,
                             "Cliente": cli, "Combo": combo_cli, "Funcionário": func_cli,
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
-                            "CaixinhaDia": cx_dia, "CaixinhaFundo": cx_anual, **extras
+                            "CaixinhaDia": cx_dia_i, "CaixinhaFundo": cx_anual_i, **extras
                         }))
 
                     if use_card_cli:
