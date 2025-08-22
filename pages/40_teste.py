@@ -647,7 +647,7 @@ if not modo_lote:
         # >>> Foto pequena aqui (width=128) <<<
         foto_url = get_foto_url(cliente)
         if foto_url:
-            st.image(foto_url, caption=(cliente or "Cliente"), width=200)
+            st.image(foto_url, caption=(cliente or "Cliente"), width=250)
 
     # Fallbacks para sugestões quando não há “padrões” na tela
     conta_fallback = (contas_existentes[0] if contas_existentes else "Carteira")
