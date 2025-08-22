@@ -841,8 +841,12 @@ if not modo_lote:
     # -------- SIMPLES (um por vez) --------
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
-        servico = st.selectbox("Serviço", servicos_existentes)
-        valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
+
+# Deixa "Corte" como padrão (se existir), sem quebrar a seleção depois
+idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
+servico = st.selectbox("Serviço", servicos_existentes, index=idx_corte, key="servico_um")
+
+valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
         # 💝 Caixinhas (opcional)
         with st.expander("💝 Caixinhas (opcional)", expanded=False):
