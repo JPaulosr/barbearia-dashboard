@@ -11,11 +11,6 @@ import pytz
 import unicodedata
 import requests
 from collections import Counter
-from io import BytesIO
-try:
-    from PIL import Image
-except Exception:
-    Image = None
 
 # =========================
 # CONFIG
@@ -44,14 +39,6 @@ COLS_PAG_EXTRAS = [
 
 # Caixinhas (opcionais)
 COLS_CAIXINHAS = ["CaixinhaDia", "CaixinhaFundo"]
-
-# FOTO: fallback padrão (logo do salão)
-PHOTO_FALLBACK_URL = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
-
-# TELEGRAM imagem compacta (miniatura pequena) e resize local
-LOGO_FALLBACK_URL = st.secrets.get("LOGO_FALLBACK_URL", "") or PHOTO_FALLBACK_URL
-TELEGRAM_COMPACT_IMAGE = bool(st.secrets.get("TELEGRAM_COMPACT_IMAGE", False))
-TG_MAX_SIDE = int(st.secrets.get("TG_MAX_SIDE", 480))  # lado máximo no resize local
 
 # =========================
 # UTILS
@@ -96,6 +83,7 @@ def is_nao_cartao(conta: str) -> bool:
     return any(t in s for t in tokens)
 
 def default_card_flag(conta: str) -> bool:
+    # Nubank CNPJ costuma ser transferência, então não marcar por padrão
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower().replace(" ", "")
     if "nubankcnpj" in s:
         return False
@@ -209,13 +197,14 @@ def carregar_fotos_mapa():
         return {r["k"]: str(r["Foto"]).strip() for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
     except Exception:
         return {}
-
 FOTOS = carregar_fotos_mapa()
 
-def get_foto_url(nome: str) -> str:
+def get_foto_url(nome: str) -> str | None:
+    """Retorna a URL da foto do cliente; None se não houver."""
     if not nome:
-        return PHOTO_FALLBACK_URL
-    return FOTOS.get(_norm(nome)) or PHOTO_FALLBACK_URL
+        return None
+    url = FOTOS.get(_norm(nome))
+    return url if (url and url.strip()) else None
 
 # =========================
 # TELEGRAM
@@ -277,60 +266,6 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
         js = r.json()
         if r.ok and js.get("ok"):
             return True
-        return tg_send(caption, chat_id=chat)
-    except Exception:
-        return tg_send(caption, chat_id=chat)
-
-# ------- ENVIO INTELIGENTE DE IMAGEM (resize + documento opcional) -------
-def _download_and_resize(url: str, max_side: int = TG_MAX_SIDE) -> BytesIO | None:
-    if Image is None:
-        return None
-    try:
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        im = Image.open(BytesIO(r.content)).convert("RGB")
-        im.thumbnail((max_side, max_side))
-        buf = BytesIO()
-        im.save(buf, format="JPEG", quality=85, optimize=True)
-        buf.seek(0)
-        return buf
-    except Exception:
-        return None
-
-def tg_send_image_smart(photo_url: str, caption: str, chat_id: str | None = None,
-                        compact: bool = False) -> bool:
-    """
-    - Tenta baixar e redimensionar a imagem localmente (peso menor).
-    - Se compact=True, envia como DOCUMENT (miniatura pequena).
-    - Fallbacks automáticos para URL e, por fim, texto.
-    """
-    token = _get_token()
-    chat = chat_id or _get_chat_id_jp()
-    if not _check_tg_ready(token, chat):
-        return False
-    try:
-        buf = _download_and_resize(photo_url, TG_MAX_SIDE)
-        endpoint = "sendDocument" if compact else "sendPhoto"
-        url = f"https://api.telegram.org/bot{token}/{endpoint}"
-
-        if buf is not None:
-            files = {"document" if compact else "photo": ("img.jpg", buf, "image/jpeg")}
-            data = {"chat_id": chat, "caption": caption, "parse_mode": "HTML"}
-            r = requests.post(url, data=data, files=files, timeout=30)
-            js = r.json()
-            if r.ok and js.get("ok"):
-                return True
-
-        # fallback: enviar via URL
-        if compact:
-            data = {"chat_id": chat, "document": photo_url, "caption": caption, "parse_mode": "HTML"}
-        else:
-            data = {"chat_id": chat, "photo": photo_url, "caption": caption, "parse_mode": "HTML"}
-        r = requests.post(url, data=data, timeout=30)
-        js = r.json()
-        if r.ok and js.get("ok"):
-            return True
-
         return tg_send(caption, chat_id=chat)
     except Exception:
         return tg_send(caption, chat_id=chat)
@@ -452,6 +387,7 @@ def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
     return "\n".join(linhas)
 
 def _secao_caixinha(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
+    """Monta a seção de caixinhas (dia, fundo e total) para o cliente/data."""
     d = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
@@ -459,6 +395,7 @@ def _secao_caixinha(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
     if d.empty:
         return ""
 
+    # Preferir linhas dedicadas de Caixinha (novo formato)
     d_cx = d[
         (d["Serviço"].astype(str).str.strip().str.casefold() == "caixinha") |
         (d["Tipo"].astype(str).str.strip().str.casefold() == "caixinha")
@@ -468,6 +405,7 @@ def _secao_caixinha(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
         v_dia = pd.to_numeric(d_cx.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
         v_fundo = pd.to_numeric(d_cx.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
     else:
+        # Compatibilidade com lançamentos antigos (caixinha nos serviços)
         v_dia = pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
         v_fundo = pd.to_numeric(d.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
 
@@ -545,10 +483,12 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
+        # trata como combo se já veio um combo explicitamente OU se o texto tem "+"
         is_combo = bool(combo and str(combo).strip())
         eh_combo = is_combo or ("+" in str(servico))
         servico_label = f"{servico} (Combo)" if eh_combo else f"{servico} (Simples)"
         valor_total = float(valor)
+        # ainda assim pegamos o período do resumo do dia
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
 
     # Blocos extras (cartão e caixinha)
@@ -568,6 +508,8 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
         extras_jp.extend([sec_hist, sec_serv])
 
+    foto = FOTOS.get(_norm(cliente))
+
     caption_base = make_card_caption_v2(
         df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
         append_sections=extras_base
@@ -577,25 +519,26 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         append_sections=extras_jp
     )
 
-    # SEMPRE enviar imagem: foto do cliente OU logo fallback
-    foto_url = FOTOS.get(_norm(cliente)) or LOGO_FALLBACK_URL
-    # Compacto só quando for logo (miniatura pequena). Se quiser sempre compacto, troque "is_logo" por "True".
-    is_logo = (foto_url == LOGO_FALLBACK_URL)
-    compact_flag = (TELEGRAM_COMPACT_IMAGE or is_logo)
-
+    # >>> Telegram permanece como estava originalmente <<<
+    ok = False
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
-        return tg_send_image_smart(foto_url, caption_jp, chat_id=chat_jp, compact=compact_flag)
+        if foto:
+            ok = tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:
+            ok = tg_send(caption_jp, chat_id=chat_jp)
+        return ok
 
     if funcionario == "Vinicius":
         chat_v = _get_chat_id_vini()
-        sent_v  = tg_send_image_smart(foto_url, caption_base, chat_id=chat_v, compact=compact_flag)
+        sent_v = tg_send_photo(foto, caption_base, chat_id=chat_v) if foto else tg_send(caption_base, chat_id=chat_v)
         chat_jp = _get_chat_id_jp()
-        sent_jp = tg_send_image_smart(foto_url, caption_jp,  chat_id=chat_jp, compact=compact_flag)
+        sent_jp = tg_send_photo(foto, caption_jp, chat_id=chat_jp) if foto else tg_send(caption_jp, chat_id=chat_jp)
         return bool(sent_v or sent_jp)
 
     destino = _chat_id_por_func(funcionario)
-    return tg_send_image_smart(foto_url, caption_base, chat_id=destino, compact=compact_flag)
+    ok = tg_send_photo(foto, caption_base, chat_id=destino) if foto else tg_send(caption_base, chat_id=destino)
+    return ok
 
 # =========================
 # VALORES DE SERVIÇO
@@ -683,10 +626,11 @@ if modo_lote:
     periodo_global = st.selectbox("Período do Atendimento (padrão)", ["Manhã", "Tarde", "Noite"])
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
 else:
+    # Defaults silenciosos (sem widgets visíveis no modo 1x)
     conta_global = None
     funcionario_global = None
     periodo_global = None
-    tipo = "Serviço"
+    tipo = "Serviço"  # padrão comum
 
 fase = "Dono + funcionário"
 
@@ -694,14 +638,18 @@ fase = "Dono + funcionário"
 # MODO UM POR VEZ
 # =========================
 if not modo_lote:
-    cA, cB = st.columns([2,1])
+    cA, cB = st.columns([2, 1])
     with cA:
         cliente = st.selectbox("Nome do Cliente", clientes_existentes)
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
     with cB:
-        st.image(get_foto_url(cliente), caption=cliente if cliente else "Cliente", use_container_width=True)
+        # >>> Foto pequena aqui (width=128) <<<
+        foto_url = get_foto_url(cliente)
+        if foto_url:
+            st.image(foto_url, caption=(cliente or "Cliente"), width=128)
 
+    # Fallbacks para sugestões quando não há “padrões” na tela
     conta_fallback = (contas_existentes[0] if contas_existentes else "Carteira")
     periodo_fallback = "Manhã"
     func_fallback = "JPaulo"
@@ -720,6 +668,7 @@ if not modo_lote:
                            ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
     )
 
+    # checkbox com trava para meios NÃO-cartão
     force_off = is_nao_cartao(conta)
     usar_cartao = st.checkbox(
         "Tratar como cartão (com taxa)?",
@@ -740,6 +689,7 @@ if not modo_lote:
         ult_combo = ultimo.get("Combo", "")
         combo = st.selectbox("Combo (último primeiro)", [""] + list(dict.fromkeys([ult_combo] + combos_existentes)))
 
+    # -------- COMBO (um por vez) --------
     if combo:
         st.subheader("💰 Edite os valores do combo antes de salvar:")
         valores_customizados = {}
@@ -750,10 +700,12 @@ if not modo_lote:
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
 
+        # 💝 Caixinhas (opcional)
         with st.expander("💝 Caixinhas (opcional)", expanded=False):
             caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
             caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
 
+        # UI cartão + distribuição (apenas se marcado)
         liquido_total = None
         bandeira = ""
         tipo_cartao = "Crédito"
@@ -863,6 +815,7 @@ if not modo_lote:
                         novas[idx_ajuste]["TaxaCartaoValor"] = tsel
                         novas[idx_ajuste]["TaxaCartaoPct"] = round(psel, 4)
 
+                # Linha única de caixinha (se houver)
                 if (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0:
                     novas.append(_preencher_fiado_vazio({
                         "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta,
@@ -885,11 +838,13 @@ if not modo_lote:
                     + (" 📲 Notificação enviada." if ok_tg else " ⚠️ Não consegui notificar no Telegram.")
                 )
 
+    # -------- SIMPLES (um por vez) --------
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
         servico = st.selectbox("Serviço", servicos_existentes)
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
+        # 💝 Caixinhas (opcional)
         with st.expander("💝 Caixinhas (opcional)", expanded=False):
             caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
             caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
@@ -915,6 +870,7 @@ if not modo_lote:
         if "simples_salvo" not in st.session_state:
             st.session_state.simples_salvo = False
 
+        # Salvar atendimento normal (com caixinha junto se houver)
         if not st.session_state.simples_salvo and st.button("📁 Salvar Atendimento"):
             servico_norm = _cap_first(servico)
             if ja_existe_atendimento(cliente, data, servico_norm):
@@ -947,7 +903,9 @@ if not modo_lote:
                     })
                 df_final = pd.concat([df_all, pd.DataFrame([nova])], ignore_index=True)
 
-                if (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0:
+                # Linha única de caixinha (se houver)
+                add_cx = (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0
+                if add_cx:
                     df_final = pd.concat([df_final, pd.DataFrame([_preencher_fiado_vazio({
                         "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta,
                         "Cliente": cliente, "Combo": "", "Funcionário": funcionario,
@@ -963,6 +921,7 @@ if not modo_lote:
                     + (" 📲 Notificação enviada." if ok_tg else " ⚠️ Não consegui notificar no Telegram.")
                 )
 
+        # Salvar SÓ a caixinha (sem relançar serviço)
         if st.button("💝 Salvar SÓ a caixinha"):
             if (caixinha_dia or 0) <= 0 and (caixinha_anual or 0) <= 0:
                 st.warning("⚠️ Informe algum valor de caixinha antes de salvar.")
@@ -1000,12 +959,12 @@ else:
 
     for cli in lista_final:
         with st.container(border=True):
-            c1, c2 = st.columns([3,1])
-            with c1:
-                st.subheader(f"⚙️ Atendimento para {cli}")
-            with c2:
-                st.image(get_foto_url(cli), caption=cli, use_container_width=True)
+            # >>> Foto pequena no topo de cada cliente (width=128) <<<
+            foto_url = get_foto_url(cli)
+            if foto_url:
+                st.image(foto_url, caption=cli, width=128)
 
+            st.subheader(f"⚙️ Atendimento para {cli}")
             sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
                 df_existente, cli, conta_global, periodo_global, funcionario_global
             )
@@ -1019,6 +978,7 @@ else:
                 key=f"conta_{cli}"
             )
 
+            # trava de cartão
             force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
 
             st.checkbox(
@@ -1029,10 +989,12 @@ else:
                 help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None),
             )
 
+            # Caixinhas no modo lote
             with st.expander(f"💝 Caixinhas de {cli} (opcional)", expanded=False):
                 st.number_input(f"{cli} - Caixinha do dia", value=0.0, step=1.0, format="%.2f", key=f"cx_dia_{cli}")
                 st.number_input(f"{cli} - Caixinha anual", value=0.0, step=1.0, format="%.2f", key=f"cx_anual_{cli}")
 
+            # uso efetivo (sem escrever no session_state do widget)
             use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
 
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
@@ -1053,13 +1015,14 @@ else:
                         itens.append((s2, val))
                         total_padrao += float(val)
 
+                    # Cartão + distribuição
                     if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
-                            c1b, c2b = st.columns(2)
-                            with c1b:
+                            c1, c2 = st.columns(2)
+                            with c1:
                                 st.number_input(f"{cli} - Valor recebido (líquido)", value=float(total_padrao), step=1.0, key=f"liq_{cli}")
                                 st.selectbox(f"{cli} - Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0, key=f"bandeira_{cli}")
-                            with c2b:
+                            with c2:
                                 st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                                 st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
 
@@ -1078,11 +1041,11 @@ else:
                                 step=1.0, key=f"valor_{cli}_simples")
                 if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
-                        c1b, c2b = st.columns(2)
-                        with c1b:
+                        c1, c2 = st.columns(2)
+                        with c1:
                             st.number_input(f"{cli} - Valor recebido (líquido)", value=float(st.session_state.get(f"valor_{cli}_simples", 0.0)), step=1.0, key=f"liq_{cli}")
                             st.selectbox(f"{cli} - Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0, key=f"bandeira_{cli}")
-                        with c2b:
+                        with c2:
                             st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                             st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
 
@@ -1215,6 +1178,7 @@ else:
                     clientes_salvos.add(cli)
                     funcionario_por_cliente[cli] = func_cli
 
+                # Caixinha 1x por cliente (se houver)
                 if (cx_dia or 0) > 0 or (cx_anual or 0) > 0:
                     novas.append(_preencher_fiado_vazio({
                         "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta_cli,
