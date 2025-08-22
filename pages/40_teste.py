@@ -842,11 +842,11 @@ if not modo_lote:
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
 
-# Deixa "Corte" como padrão (se existir), sem quebrar a seleção depois
-idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
-servico = st.selectbox("Serviço", servicos_existentes, index=idx_corte, key="servico_um")
+        # >>>>>> PADRÃO "Corte" (sem alterar lógica) <<<<<<
+        idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
+        servico = st.selectbox("Serviço", servicos_existentes, index=idx_corte, key="servico_um")
 
-valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
+        valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
         # 💝 Caixinhas (opcional)
         with st.expander("💝 Caixinhas (opcional)", expanded=False):
@@ -1038,13 +1038,14 @@ else:
                                              [nm for (nm, _) in itens], key=f"alvo_{cli}")
 
             else:
+                # >>>>>> PADRÃO "Corte" (sem alterar lógica) <<<<<<
                 idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
-st.selectbox(f"Serviço simples para {cli}", servicos_existentes, index=idx_corte, key=f"servico_{cli}")
+                st.selectbox(f"Serviço simples para {cli}", servicos_existentes, index=idx_corte, key=f"servico_{cli}")
 
-serv_cli = st.session_state.get(f"servico_{cli}", None)
-st.number_input(f"{cli} - Valor do serviço",
-                value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
-                step=1.0, key=f"valor_{cli}_simples")
+                serv_cli = st.session_state.get(f"servico_{cli}", None)
+                st.number_input(f"{cli} - Valor do serviço",
+                                value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
+                                step=1.0, key=f"valor_{cli}_simples")
                 if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                         c1, c2 = st.columns(2)
