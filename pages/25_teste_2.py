@@ -40,9 +40,6 @@ COLS_PAG_EXTRAS = [
 # Caixinhas (opcionais)
 COLS_CAIXINHAS = ["CaixinhaDia", "CaixinhaFundo"]
 
-# ➕ FOTO DO CLIENTE: fallback padrão (logo do salão)
-PHOTO_FALLBACK_URL = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
-
 # =========================
 # UTILS
 # =========================
@@ -86,7 +83,6 @@ def is_nao_cartao(conta: str) -> bool:
     return any(t in s for t in tokens)
 
 def default_card_flag(conta: str) -> bool:
-    # Nubank CNPJ costuma ser transferência, então não marcar por padrão
     s = unicodedata.normalize("NFKD", (conta or "")).encode("ascii","ignore").decode("ascii").lower().replace(" ", "")
     if "nubankcnpj" in s:
         return False
@@ -152,7 +148,6 @@ def carregar_base():
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(c).strip() for c in df.columns]
     df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
-    # garante todas as colunas
     for c in [*COLS_OFICIAIS, *COLS_FIADO, *COLS_PAG_EXTRAS, *COLS_CAIXINHAS]:
         if c not in df.columns:
             df[c] = ""
@@ -200,17 +195,16 @@ def carregar_fotos_mapa():
         return {r["k"]: str(r["Foto"]).strip() for _, r in tmp.iterrows() if str(r["Foto"]).strip()}
     except Exception:
         return {}
-
 FOTOS = carregar_fotos_mapa()
 
-# ➕ FOTO DO CLIENTE: helper para obter URL (com fallback)
-def get_foto_url(nome: str) -> str:
+def get_foto_url(nome: str) -> str | None:
     if not nome:
-        return PHOTO_FALLBACK_URL
-    return FOTOS.get(_norm(nome)) or PHOTO_FALLBACK_URL
+        return None
+    url = FOTOS.get(_norm(nome))
+    return url if (url and url.strip()) else None
 
 # =========================
-# TELEGRAM
+# TELEGRAM (sem mudanças)
 # =========================
 TELEGRAM_TOKEN_CONST = "8257359388:AAGayJElTPT0pQadtamVf8LoL7R6EfWzFGE"
 TELEGRAM_CHAT_ID_JPAULO_CONST = "493747253"
@@ -249,7 +243,7 @@ def tg_send(text: str, chat_id: str | None = None) -> bool:
     if not _check_tg_ready(token, chat):
         return False
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        url = f"https://api.telegram.org/bot{token}/sendMessage"}
         payload = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         r = requests.post(url, json=payload, timeout=30)
         js = r.json()
@@ -274,27 +268,20 @@ def tg_send_photo(photo_url: str, caption: str, chat_id: str | None = None) -> b
         return tg_send(caption, chat_id=chat)
 
 # =========================
-# CARD – resumo/histórico + BLOCO CARTÃO + BLOCO CAIXINHA
+# CARD e seções auxiliares (sem mudanças de lógica)
 # =========================
 def _resumo_do_dia(df_all: pd.DataFrame, cliente: str, data_str: str):
     d = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
     ].copy()
-
     d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
     servicos = [str(s).strip() for s in d["Serviço"].fillna("").tolist() if str(s).strip()]
     valor_total = float(d["Valor"].sum()) if not d.empty else 0.0
     is_combo = len(servicos) > 1 or (d["Combo"].fillna("").str.strip() != "").any()
-
-    if servicos:
-        label = " + ".join(servicos) + (" (Combo)" if is_combo else " (Simples)")
-    else:
-        label = "-"
-
+    label = " + ".join(servicos) + (" (Combo)" if is_combo else " (Simples)") if servicos else "-"
     periodo_vals = [p for p in d["Período"].astype(str).str.strip().tolist() if p]
     periodo_label = max(set(periodo_vals), key=periodo_vals.count) if periodo_vals else "-"
-
     return label, valor_total, is_combo, servicos, periodo_label
 
 def _ano_from_date_str(data_str: str) -> int | None:
@@ -308,39 +295,27 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     d = d.dropna(subset=["_dt"])
     d["ano"] = d["_dt"].dt.year
     d = d[d["ano"] == ano].copy()
-
     if d.empty:
         return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00", f"🧾 <b>{ano}: por serviço</b>\n—")
-
     d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
-
     total_ano = float(d["Valor"].sum())
     sec_hist = "📚 <b>Histórico por ano</b>\n" + f"{ano}: <b>{_fmt_brl(total_ano)}</b>"
-
     grp = (
-        d.dropna(subset=["Serviço"])
-         .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
-         .groupby("Serviço", as_index=False)
-         .agg(qtd=("Serviço", "count"), total=("Valor", "sum"))
-         .sort_values(["total", "qtd"], ascending=[False, False])
+        d.dropna(subset=["Serviço"]).assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
+         .groupby("Serviço", as_index=False).agg(qtd=("Serviço","count"), total=("Valor","sum"))
+         .sort_values(["total","qtd"], ascending=[False,False])
     )
-    linhas_serv = [
-        f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>{_fmt_brl(float(r['total']))}</b>"
-        for _, r in grp.iterrows()
-    ]
+    linhas_serv = [f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>{_fmt_brl(float(r['total']))}</b>" for _, r in grp.iterrows()]
     sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
-
     freq_dias = Counter()
-    for dia, bloco in d.groupby(d["_dt"].dt.date):
-        func_most = (bloco["Funcionário"].astype(str).str.strip()
-                     .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
-        if func_most in ["JPaulo", "Vinicius"]:
+    for _, bloco in d.groupby(d["_dt"].dt.date):
+        func_most = (bloco["Funcionário"].astype(str).str.strip().value_counts(dropna=False).idxmax() if not bloco.empty else "-")
+        if func_most in ["JPaulo","Vinicius"]:
             freq_dias[func_most] += 1
     if freq_dias:
-        ordem = ["JPaulo", "Vinicius"]
+        ordem = ["JPaulo","Vinicius"]
         linhas_func = [f"{f}: <b>{freq_dias.get(f,0)}</b> visita(s)" for f in ordem]
         sec_serv += "\n\n👥 <b>Frequência por funcionário</b>\n" + "\n".join(linhas_func)
-
     return sec_hist, sec_serv
 
 def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
@@ -348,41 +323,28 @@ def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
     ].copy()
-    if df.empty:
-        return ""
-
+    if df.empty: return ""
     df["_idx"] = df.index
     com_pid = df[df["PagamentoID"].astype(str).str.strip() != ""].copy()
-    if com_pid.empty:
-        return ""
-
+    if com_pid.empty: return ""
     latest_row = com_pid.loc[com_pid["_idx"].idxmax()]
     pid = str(latest_row["PagamentoID"]).strip()
     bloco = df[df["PagamentoID"].astype(str).str.strip() == pid].copy()
-
     bruto  = pd.to_numeric(bloco.get("ValorBrutoRecebido", 0), errors="coerce").fillna(0).sum()
     liqui  = pd.to_numeric(bloco.get("ValorLiquidoRecebido", 0), errors="coerce").fillna(0).sum()
     taxa_v = pd.to_numeric(bloco.get("TaxaCartaoValor", 0), errors="coerce").fillna(0).sum()
-    if liqui <= 0:
-        liqui = pd.to_numeric(bloco.get("Valor", 0), errors="coerce").fillna(0).sum()
+    if liqui <= 0: liqui = pd.to_numeric(bloco.get("Valor", 0), errors="coerce").fillna(0).sum()
     taxa_pct = (taxa_v / bruto * 100.0) if bruto > 0 else 0.0
-
     det = ""
     if "FormaPagDetalhe" in bloco.columns:
-        s = bloco["FormaPagDetalhe"].astype(str).str.strip()
-        s = s[s != ""]
-        if not s.empty:
-            det = s.iloc[0]
+        s = bloco["FormaPagDetalhe"].astype(str).str.strip(); s = s[s != ""]
+        if not s.empty: det = s.iloc[0]
     conta = ""
     if "Conta" in bloco.columns:
-        s2 = bloco["Conta"].astype(str).str.strip()
-        s2 = s2[s2 != ""]
-        if not s2.empty:
-            conta = s2.iloc[0]
-
+        s2 = bloco["Conta"].astype(str).str.strip(); s2 = s2[s2 != ""]
+        if not s2.empty: conta = s2.iloc[0]
     linhas = [
-        "------------------------------",
-        "💳 <b>Pagamento no cartão</b>",
+        "------------------------------","💳 <b>Pagamento no cartão</b>",
         f"Forma: <b>{conta or '-'}</b>{(' · ' + det) if det else ''}",
         f"Bruto: <b>{_fmt_brl(bruto)}</b> · Líquido: <b>{_fmt_brl(liqui)}</b>",
         f"Taxa total: <b>{_fmt_brl(taxa_v)} ({taxa_pct:.2f}%)</b>",
@@ -390,77 +352,50 @@ def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
     return "\n".join(linhas)
 
 def _secao_caixinha(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
-    """Monta a seção de caixinhas (dia, fundo e total) para o cliente/data."""
     d = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
     ].copy()
-    if d.empty:
-        return ""
-
-    # Preferir linhas dedicadas de Caixinha (novo formato)
+    if d.empty: return ""
     d_cx = d[
         (d["Serviço"].astype(str).str.strip().str.casefold() == "caixinha") |
         (d["Tipo"].astype(str).str.strip().str.casefold() == "caixinha")
     ].copy()
-
     if not d_cx.empty:
         v_dia = pd.to_numeric(d_cx.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
         v_fundo = pd.to_numeric(d_cx.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
     else:
-        # Compatibilidade com lançamentos antigos (caixinha nos serviços)
         v_dia = pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
         v_fundo = pd.to_numeric(d.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
-
     total = float(v_dia + v_fundo)
-    if total <= 0:
-        return ""
-
-    linhas = [
-        "------------------------------",
-        "💝 <b>Caixinha</b>",
-        f"Dia: <b>{_fmt_brl(v_dia)}</b>",
-        f"Fundo: <b>{_fmt_brl(v_fundo)}</b>",
+    if total <= 0: return ""
+    return "\n".join([
+        "------------------------------","💝 <b>Caixinha</b>",
+        f"Dia: <b>{_fmt_brl(v_dia)}</b>", f"Fundo: <b>{_fmt_brl(v_fundo)}</b>",
         f"Total: <b>{_fmt_brl(total)}</b>",
-    ]
-    return "\n".join(linhas)
+    ])
 
 def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
                          append_sections: list[str] | None = None):
     d_hist = df_all[df_all["Cliente"].astype(str).str.strip() == cliente].copy()
     d_hist["_dt"] = pd.to_datetime(d_hist["Data"], format=DATA_FMT, errors="coerce")
     d_hist = d_hist.dropna(subset=["_dt"]).sort_values("_dt")
-
     unique_days = sorted(set(d_hist["_dt"].dt.date.tolist()))
     total_atend = len(unique_days)
-
     dt_atual = pd.to_datetime(data_str, format=DATA_FMT, errors="coerce")
     dia_atual = None if pd.isna(dt_atual) else dt_atual.date()
-
     prev_days = [d for d in unique_days if (dia_atual is None or d < dia_atual)]
     prev_date = prev_days[-1] if prev_days else None
-
-    if prev_date is not None:
-        ultimo_reg = d_hist[d_hist["_dt"].dt.date == prev_date].iloc[-1]
-        ultimo_func = str(ultimo_reg.get("Funcionário", "-"))
-    else:
-        ultimo_func = "-"
-
-    if prev_date is not None and dia_atual is not None:
-        dias_str = f"{(dia_atual - prev_date).days} dias"
-    else:
-        dias_str = "-"
-
+    ultimo_func = str(d_hist[d_hist["_dt"].dt.date == prev_date].iloc[-1].get("Funcionário","-")) if prev_date is not None else "-"
+    dias_str = f"{(dia_atual - prev_date).days} dias" if (prev_date is not None and dia_atual is not None) else "-"
     if len(unique_days) >= 2:
         ts = [pd.to_datetime(x) for x in unique_days]
         diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
         media = sum(diffs) / len(diffs) if diffs else None
     else:
         media = None
-
     media_str = "-" if media is None else f"{media:.1f} dias".replace(".", ",")
     valor_str = _fmt_brl(valor_total)
-
     base = (
         "📌 <b>Atendimento registrado</b>\n"
         f"👤 Cliente: <b>{cliente}</b>\n"
@@ -475,69 +410,44 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
         f"📈 Total de atendimentos: <b>{total_atend}</b>\n"
         f"👨‍🔧 Último atendente: <b>{ultimo_func}</b>"
     )
-
     if append_sections:
         base += "\n\n" + "\n\n".join([s for s in append_sections if s and s.strip()])
-
     return base
 
 def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None, combo=None) -> bool:
-    # quando não recebemos servico/valor, montamos a partir da base do dia
     if servico is None or valor is None:
         servico_label, valor_total, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
     else:
-        # trata como combo se já veio um combo explicitamente OU se o texto tem "+"
         is_combo = bool(combo and str(combo).strip())
         eh_combo = is_combo or ("+" in str(servico))
         servico_label = f"{servico} (Combo)" if eh_combo else f"{servico} (Simples)"
         valor_total = float(valor)
-        # ainda assim pegamos o período do resumo do dia
         _, _, _, _, periodo_label = _resumo_do_dia(df_all, cliente, data_str)
-
-    # Blocos extras (cartão e caixinha)
     sec_cartao = _secao_pag_cartao(df_all, cliente, data_str)
     sec_caixa  = _secao_caixinha(df_all, cliente, data_str)
-
     extras_base = []
-    if sec_cartao:
-        extras_base.append(sec_cartao)
-    if sec_caixa:
-        extras_base.append(sec_caixa)
-
-    # Seções extras para JP (histórico anual e por serviço)
+    if sec_cartao: extras_base.append(sec_cartao)
+    if sec_caixa:  extras_base.append(sec_caixa)
     ano = _ano_from_date_str(data_str)
     extras_jp = extras_base.copy()
     if ano is not None:
         sec_hist, sec_serv = _year_sections_for_jpaulo(df_all, cliente, ano)
         extras_jp.extend([sec_hist, sec_serv])
-
     foto = FOTOS.get(_norm(cliente))
-
-    caption_base = make_card_caption_v2(
-        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
-        append_sections=extras_base
-    )
-    caption_jp = make_card_caption_v2(
-        df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label,
-        append_sections=extras_jp
-    )
-
+    caption_base = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras_base)
+    caption_jp   = make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, valor_total, periodo_label, append_sections=extras_jp)
     ok = False
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
-        if foto:
-            ok = tg_send_photo(foto, caption_jp, chat_id=chat_jp)
-        else:
-            ok = tg_send(caption_jp, chat_id=chat_jp)
+        if foto: ok = tg_send_photo(foto, caption_jp, chat_id=chat_jp)
+        else:    ok = tg_send(caption_jp, chat_id=chat_jp)
         return ok
-
     if funcionario == "Vinicius":
         chat_v = _get_chat_id_vini()
         sent_v = tg_send_photo(foto, caption_base, chat_id=chat_v) if foto else tg_send(caption_base, chat_id=chat_v)
         chat_jp = _get_chat_id_jp()
         sent_jp = tg_send_photo(foto, caption_jp, chat_id=chat_jp) if foto else tg_send(caption_jp, chat_id=chat_jp)
         return bool(sent_v or sent_jp)
-
     destino = _chat_id_por_func(funcionario)
     ok = tg_send_photo(foto, caption_base, chat_id=destino) if foto else tg_send(caption_base, chat_id=destino)
     return ok
@@ -599,7 +509,6 @@ st.title("📅 Adicionar Atendimento")
 df_existente, _ = carregar_base()
 df_existente["_dt"] = pd.to_datetime(df_existente["Data"], format=DATA_FMT, errors="coerce")
 df_2025 = df_existente[df_existente["_dt"].dt.year == 2025]
-
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
 servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
@@ -607,32 +516,30 @@ contas_existentes = sorted([c for c in df_2025["Conta"].dropna().astype(str).str
 combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str.strip().unique() if c])
 
 # =========================
-# FORM – Modo (evita duplicidades!)
+# FORM – Modo
 # =========================
 modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
 
-# Data sempre visível
+# Data
 data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
 
-# Mostrar campos “padrão” **apenas** no modo Lote
+# Campos padrão só no lote
 if modo_lote:
     col1, col2 = st.columns(2)
     with col1:
         conta_global = st.selectbox(
             "Forma de Pagamento (padrão)",
-            list(dict.fromkeys(contas_existentes + ["Carteira", "Pix", "Transferência",
-                                                    "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
+            list(dict.fromkeys(contas_existentes + ["Carteira","Pix","Transferência","Nubank CNPJ","Nubank","Pagseguro","Mercado Pago"]))
         )
     with col2:
         funcionario_global = st.selectbox("Funcionário (padrão)", ["JPaulo", "Vinicius"])
     periodo_global = st.selectbox("Período do Atendimento (padrão)", ["Manhã", "Tarde", "Noite"])
     tipo = st.selectbox("Tipo", ["Serviço", "Produto"])
 else:
-    # Defaults silenciosos (sem widgets visíveis no modo 1x)
     conta_global = None
     funcionario_global = None
     periodo_global = None
-    tipo = "Serviço"  # padrão comum
+    tipo = "Serviço"
 
 fase = "Dono + funcionário"
 
@@ -640,24 +547,23 @@ fase = "Dono + funcionário"
 # MODO UM POR VEZ
 # =========================
 if not modo_lote:
-    # ➕ FOTO DO CLIENTE (prévia ao lado da seleção)
-    cA, cB = st.columns([2,1])
+    cA, cB = st.columns([2, 1])
     with cA:
         cliente = st.selectbox("Nome do Cliente", clientes_existentes)
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
     with cB:
         foto_url = get_foto_url(cliente)
-        st.image(foto_url, caption=cliente if cliente else "Cliente", use_container_width=True)
+        if foto_url:
+            # >>> FOTO 200px (igual Detalhamento)
+            st.image(foto_url, caption=(cliente or "Cliente"), width=200)
 
-    # Fallbacks para sugestões quando não há “padrões” na tela
     conta_fallback = (contas_existentes[0] if contas_existentes else "Carteira")
     periodo_fallback = "Manhã"
     func_fallback = "JPaulo"
 
     sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
-        df_existente,
-        cliente,
+        df_existente, cliente,
         conta_global or conta_fallback,
         periodo_global or periodo_fallback,
         funcionario_global or func_fallback
@@ -665,11 +571,9 @@ if not modo_lote:
 
     conta = st.selectbox(
         "Forma de Pagamento",
-        list(dict.fromkeys([sug_conta] + contas_existentes +
-                           ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"]))
+        list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira","Pix","Transferência","Nubank CNPJ","Nubank","Pagseguro","Mercado Pago"]))
     )
 
-    # checkbox com trava para meios NÃO-cartão
     force_off = is_nao_cartao(conta)
     usar_cartao = st.checkbox(
         "Tratar como cartão (com taxa)?",
@@ -681,7 +585,7 @@ if not modo_lote:
 
     funcionario = st.selectbox("Funcionário", ["JPaulo", "Vinicius"], index=(0 if sug_func == "JPaulo" else 1))
     periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"],
-                                 index=["Manhã", "Tarde", "Noite"].index(sug_periodo))
+                                 index=["Manhã","Tarde","Noite"].index(sug_periodo))
 
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
@@ -701,12 +605,11 @@ if not modo_lote:
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
 
-        # 💝 Caixinhas (opcional)
+        # Caixinhas
         with st.expander("💝 Caixinhas (opcional)", expanded=False):
             caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
             caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
 
-        # UI cartão + distribuição (apenas se marcado)
         liquido_total = None
         bandeira = ""
         tipo_cartao = "Crédito"
@@ -816,7 +719,6 @@ if not modo_lote:
                         novas[idx_ajuste]["TaxaCartaoValor"] = tsel
                         novas[idx_ajuste]["TaxaCartaoPct"] = round(psel, 4)
 
-                # Linha única de caixinha (se houver)
                 if (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0:
                     novas.append(_preencher_fiado_vazio({
                         "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta,
@@ -842,10 +744,11 @@ if not modo_lote:
     # -------- SIMPLES (um por vez) --------
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
-        servico = st.selectbox("Serviço", servicos_existentes)
+        # >>> “Corte” como padrão
+        idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
+        servico = st.selectbox("Serviço", servicos_existentes, index=idx_corte)
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
-        # 💝 Caixinhas (opcional)
         with st.expander("💝 Caixinhas (opcional)", expanded=False):
             caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
             caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
@@ -871,7 +774,6 @@ if not modo_lote:
         if "simples_salvo" not in st.session_state:
             st.session_state.simples_salvo = False
 
-        # Salvar atendimento normal (com caixinha junto se houver)
         if not st.session_state.simples_salvo and st.button("📁 Salvar Atendimento"):
             servico_norm = _cap_first(servico)
             if ja_existe_atendimento(cliente, data, servico_norm):
@@ -904,7 +806,6 @@ if not modo_lote:
                     })
                 df_final = pd.concat([df_all, pd.DataFrame([nova])], ignore_index=True)
 
-                # Linha única de caixinha (se houver)
                 add_cx = (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0
                 if add_cx:
                     df_final = pd.concat([df_final, pd.DataFrame([_preencher_fiado_vazio({
@@ -922,7 +823,6 @@ if not modo_lote:
                     + (" 📲 Notificação enviada." if ok_tg else " ⚠️ Não consegui notificar no Telegram.")
                 )
 
-        # Salvar SÓ a caixinha (sem relançar serviço)
         if st.button("💝 Salvar SÓ a caixinha"):
             if (caixinha_dia or 0) <= 0 and (caixinha_anual or 0) <= 0:
                 st.warning("⚠️ Informe algum valor de caixinha antes de salvar.")
@@ -945,7 +845,7 @@ if not modo_lote:
                 )
 
 # =========================
-# MODO LOTE AVANÇADO
+# MODO LOTE
 # =========================
 else:
     st.info("Defina atendimento individual por cliente (misture combos e simples). Também escolha forma de pagamento, período e funcionário para cada um.")
@@ -960,13 +860,12 @@ else:
 
     for cli in lista_final:
         with st.container(border=True):
-            # ➕ FOTO DO CLIENTE no modo lote (miniatura à direita)
-            c1, c2 = st.columns([3,1])
-            with c1:
-                st.subheader(f"⚙️ Atendimento para {cli}")
-            with c2:
-                st.image(get_foto_url(cli), caption=cli, use_container_width=True)
+            foto_url = get_foto_url(cli)
+            if foto_url:
+                # >>> FOTO 200px (igual Detalhamento)
+                st.image(foto_url, caption=cli, width=200)
 
+            st.subheader(f"⚙️ Atendimento para {cli}")
             sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
                 df_existente, cli, conta_global, periodo_global, funcionario_global
             )
@@ -975,12 +874,10 @@ else:
 
             st.selectbox(
                 f"Forma de Pagamento de {cli}",
-                list(dict.fromkeys([sug_conta] + contas_existentes +
-                                   ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago"])),
+                list(dict.fromkeys([sug_conta] + contas_existentes + ["Carteira","Pix","Transferência","Nubank CNPJ","Nubank","Pagseguro","Mercado Pago"])),
                 key=f"conta_{cli}"
             )
 
-            # trava de cartão
             force_off_cli = is_nao_cartao(st.session_state.get(f"conta_{cli}", ""))
 
             st.checkbox(
@@ -991,16 +888,14 @@ else:
                 help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None),
             )
 
-            # Caixinhas no modo lote
             with st.expander(f"💝 Caixinhas de {cli} (opcional)", expanded=False):
                 st.number_input(f"{cli} - Caixinha do dia", value=0.0, step=1.0, format="%.2f", key=f"cx_dia_{cli}")
                 st.number_input(f"{cli} - Caixinha anual", value=0.0, step=1.0, format="%.2f", key=f"cx_anual_{cli}")
 
-            # uso efetivo (sem escrever no session_state do widget)
             use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
 
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
-                         index=["Manhã", "Tarde", "Noite"].index(sug_periodo), key=f"periodo_{cli}")
+                         index=["Manhã","Tarde","Noite"].index(sug_periodo), key=f"periodo_{cli}")
             st.selectbox(f"Funcionário de {cli}", ["JPaulo", "Vinicius"],
                          index=(0 if sug_func == "JPaulo" else 1), key=f"func_{cli}")
 
@@ -1017,37 +912,41 @@ else:
                         itens.append((s2, val))
                         total_padrao += float(val)
 
-                    # Cartão + distribuição
                     if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
-                            c1b, c2b = st.columns(2)
-                            with c1b:
+                            c1, c2 = st.columns(2)
+                            with c1:
                                 st.number_input(f"{cli} - Valor recebido (líquido)", value=float(total_padrao), step=1.0, key=f"liq_{cli}")
                                 st.selectbox(f"{cli} - Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0, key=f"bandeira_{cli}")
-                            with c2b:
+                            with c2:
                                 st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                                 st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
-
                             st.radio(f"{cli} - Distribuição do desconto/taxa",
-                                     ["Proporcional (padrão)", "Concentrar em um serviço"],
+                                     ["Proporcional (padrão)","Concentrar em um serviço"],
                                      horizontal=False, key=f"dist_{cli}")
                             if st.session_state.get(f"dist_{cli}", "Proporcional (padrão)") == "Concentrar em um serviço":
-                                st.selectbox(f"{cli} - Aplicar TODO o desconto/taxa em",
-                                             [nm for (nm, _) in itens], key=f"alvo_{cli}")
+                                st.selectbox(f"{cli} - Aplicar TODO o desconto/taxa em", [nm for (nm, _) in itens], key=f"alvo_{cli}")
 
             else:
-                st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
+                # >>> “Corte” como padrão no lote (simples)
+                idx_corte = servicos_existentes.index("Corte") if "Corte" in servicos_existentes else 0
+                st.selectbox(
+                    f"Serviço simples para {cli}",
+                    servicos_existentes,
+                    index=idx_corte,
+                    key=f"servico_{cli}"
+                )
                 serv_cli = st.session_state.get(f"servico_{cli}", None)
                 st.number_input(f"{cli} - Valor do serviço",
                                 value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
                                 step=1.0, key=f"valor_{cli}_simples")
                 if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
-                        c1b, c2b = st.columns(2)
-                        with c1b:
+                        c1, c2 = st.columns(2)
+                        with c1:
                             st.number_input(f"{cli} - Valor recebido (líquido)", value=float(st.session_state.get(f"valor_{cli}_simples", 0.0)), step=1.0, key=f"liq_{cli}")
                             st.selectbox(f"{cli} - Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0, key=f"bandeira_{cli}")
-                        with c2b:
+                        with c2:
                             st.selectbox(f"{cli} - Tipo", ["Débito", "Crédito"], index=1, key=f"tipo_cartao_{cli}")
                             st.number_input(f"{cli} - Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"parc_{cli}")
 
@@ -1180,7 +1079,6 @@ else:
                     clientes_salvos.add(cli)
                     funcionario_por_cliente[cli] = func_cli
 
-                # Caixinha 1x por cliente (se houver)
                 if (cx_dia or 0) > 0 or (cx_anual or 0) > 0:
                     novas.append(_preencher_fiado_vazio({
                         "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta_cli,
