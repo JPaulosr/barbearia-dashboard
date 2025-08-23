@@ -199,6 +199,13 @@ def carregar_fotos_mapa():
         return {}
 FOTOS = carregar_fotos_mapa()
 
+def get_foto_url(nome: str) -> str | None:
+    """Retorna a URL da foto do cliente; None se não houver."""
+    if not nome:
+        return None
+    url = FOTOS.get(_norm(nome))
+    return url if (url and url.strip()) else None
+
 # =========================
 # TELEGRAM
 # =========================
@@ -512,6 +519,7 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         append_sections=extras_jp
     )
 
+    # >>> Telegram permanece como estava originalmente <<<
     ok = False
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
@@ -592,7 +600,13 @@ df_2025 = df_existente[df_existente["_dt"].dt.year == 2025]
 
 clientes_existentes = sorted(df_2025["Cliente"].dropna().unique())
 df_2025 = df_2025[df_2025["Serviço"].notna()].copy()
+
+# Lista original
 servicos_existentes = sorted(df_2025["Serviço"].str.strip().unique())
+
+# NOVO: garante que "Corte" sempre aparece como opção e no topo
+servicos_ui = list(dict.fromkeys(["Corte", *servicos_existentes]))
+
 contas_existentes = sorted([c for c in df_2025["Conta"].dropna().astype(str).str.strip().unique() if c])
 combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str.strip().unique() if c])
 
@@ -630,12 +644,16 @@ fase = "Dono + funcionário"
 # MODO UM POR VEZ
 # =========================
 if not modo_lote:
-    cA, cB = st.columns(2)
+    cA, cB = st.columns([2, 1])
     with cA:
         cliente = st.selectbox("Nome do Cliente", clientes_existentes)
-    with cB:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
+    with cB:
+        # >>> Foto pequena aqui (width=128) <<<
+        foto_url = get_foto_url(cliente)
+        if foto_url:
+            st.image(foto_url, caption=(cliente or "Cliente"), width=250)
 
     # Fallbacks para sugestões quando não há “padrões” na tela
     conta_fallback = (contas_existentes[0] if contas_existentes else "Carteira")
@@ -829,7 +847,15 @@ if not modo_lote:
     # -------- SIMPLES (um por vez) --------
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
-        servico = st.selectbox("Serviço", servicos_existentes)
+
+        # usa lista com "Corte" garantido e chave nova para evitar conflito de estado
+        servico = st.selectbox(
+            "Serviço",
+            servicos_ui,
+            index=servicos_ui.index("Corte"),
+            key="servico_um_v2"
+        )
+
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
         # 💝 Caixinhas (opcional)
@@ -947,8 +973,13 @@ else:
 
     for cli in lista_final:
         with st.container(border=True):
+            # >>> Foto pequena no topo de cada cliente (width=128) <<<
+            foto_url = get_foto_url(cli)
+            if foto_url:
+                st.image(foto_url, caption=cli, width=200)
+
             st.subheader(f"⚙️ Atendimento para {cli}")
-            sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
+            sug_conta, sug_periodo, sug_func = sugestões = sugestoes_do_cliente(
                 df_existente, cli, conta_global, periodo_global, funcionario_global
             )
 
@@ -1017,11 +1048,21 @@ else:
                                              [nm for (nm, _) in itens], key=f"alvo_{cli}")
 
             else:
-                st.selectbox(f"Serviço simples para {cli}", servicos_existentes, key=f"servico_{cli}")
-                serv_cli = st.session_state.get(f"servico_{cli}", None)
-                st.number_input(f"{cli} - Valor do serviço",
-                                value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
-                                step=1.0, key=f"valor_{cli}_simples")
+                # usa lista com "Corte" garantido e key nova por cliente
+                st.selectbox(
+                    f"Serviço simples para {cli}",
+                    servicos_ui,
+                    index=servicos_ui.index("Corte"),
+                    key=f"servico_{cli}_v2"
+                )
+
+                serv_cli = st.session_state.get(f"servico_{cli}_v2", None)
+                st.number_input(
+                    f"{cli} - Valor do serviço",
+                    value=(obter_valor_servico(serv_cli) if serv_cli else 0.0),
+                    step=1.0,
+                    key=f"valor_{cli}_simples"
+                )
                 if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                     with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                         c1, c2 = st.columns(2)
@@ -1130,7 +1171,7 @@ else:
                     funcionario_por_cliente[cli] = func_cli
 
                 else:
-                    serv_cli = st.session_state.get(f"servico_{cli}", None)
+                    serv_cli = st.session_state.get(f"servico_{cli}_v2", None)
                     serv_norm = _cap_first(serv_cli) if serv_cli else ""
                     if not serv_norm:
                         st.warning(f"⚠️ {cli}: serviço simples não definido. Pulando."); continue
