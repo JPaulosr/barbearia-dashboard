@@ -1,113 +1,87 @@
-# -*- coding: utf-8 -*-
-# 11_Adicionar_Atendimento.py
-import streamlit as st
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from gspread.utils import rowcol_to_a1
-from datetime import datetime
-import pytz
-import unicodedata
-import requests
+# =========================
+# KPIs (RESPONSIVO, SEM TICKET)
+# =========================
+cli, srv, rec, tkt = kpis(df_dia)
+
+# CSS para cards responsivos (empilham no celular)
+st.markdown("""
+<style>
+.metrics-wrap{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}
+.metrics-wrap .card{
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px;
+  padding:12px 14px;
+  min-width:160px; /* evita cortar no mobile */
+  flex:1 1 200px;  /* cresce e quebra em novas linhas quando precisa */
+}
+.metrics-wrap .card .label{font-size:0.9rem;opacity:.85;margin-bottom:6px}
+.metrics-wrap .card .value{
+  font-weight:700;
+  /* fonte que cresce no desktop e reduz no celular */
+  font-size:clamp(18px, 3.8vw, 28px);
+  line-height:1.15;
+  word-break:break-word;  /* garante quebra e nunca "R$ 2..." */
+}
+.section-h{font-weight:700;margin:12px 0 6px}
+</style>
+""", unsafe_allow_html=True)
+
+def metric_card(label, value):
+    return f"""
+    <div class="card">
+      <div class="label">{label}</div>
+      <div class="value">{value}</div>
+    </div>
+    """
+
+st.markdown('<div class="metrics-wrap">' +
+            metric_card("👥 Clientes atendidos", f"{cli}") +
+            metric_card("✂️ Serviços realizados", f"{srv}") +
+            metric_card("💰 Receita do dia", format_moeda(rec)) +
+            '</div>', unsafe_allow_html=True)
+
+st.markdown("---")
 
 # =========================
-# CONFIG
+# Por Funcionário (RESPONSIVO, SEM TICKET)
 # =========================
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"
-STATUS_ABA = "clientes_status"
-TZ = "America/Sao_Paulo"
-DATA_FMT = "%d/%m/%Y"
+st.subheader("📊 Por Funcionário (dia selecionado)")
 
-COLS_OFICIAIS = [
-    "Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
-    "Funcionário", "Fase", "Tipo", "Período"
-]
-COLS_CAIXINHAS = ["CaixinhaDia"]  # só mantemos o do dia
+df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
+df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
 
-# =========================
-# UTILS
-# =========================
-def _cap_first(s: str) -> str:
-    return (str(s).strip().lower().capitalize()) if s is not None else ""
+cli_j, srv_j, rec_j, _ = kpis(df_j)
+cli_v, srv_v, rec_v, _ = kpis(df_v)
 
-def now_br():
-    return datetime.now(pytz.timezone(TZ)).strftime("%d/%m/%Y %H:%M:%S")
+col_j, col_v = st.columns(2)
 
-def _fmt_brl(v: float) -> str:
-    try:
-        v = float(v)
-    except Exception:
-        v = 0.0
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+with col_j:
+    st.markdown(f'<div class="section-h">{FUNC_JPAULO}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="metrics-wrap">' +
+                metric_card("Clientes", f"{cli_j}") +
+                metric_card("Serviços", f"{srv_j}") +
+                metric_card("Receita", format_moeda(rec_j)) +
+                '</div>', unsafe_allow_html=True)
+
+with col_v:
+    st.markdown(f'<div class="section-h">{FUNC_VINICIUS}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="metrics-wrap">' +
+                metric_card("Clientes", f"{cli_v}") +
+                metric_card("Serviços", f"{srv_v}") +
+                metric_card("Receita", format_moeda(rec_v)) +
+                '</div>', unsafe_allow_html=True)
 
 # =========================
-# SHEETS
+# Gráfico comparativo (mantido)
 # =========================
-@st.cache_resource
-def conectar_sheets():
-    info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
-    cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(SHEET_ID)
-
-def carregar_base():
-    aba = conectar_sheets().worksheet(ABA_DADOS)
-    df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(c).strip() for c in df.columns]
-    for c in [*COLS_OFICIAIS, *COLS_CAIXINHAS]:
-        if c not in df.columns:
-            df[c] = ""
-    return df, aba
-
-def salvar_base(df_final: pd.DataFrame):
-    aba = conectar_sheets().worksheet(ABA_DADOS)
-    headers_existentes = aba.row_values(1)
-    colunas_alvo = list(dict.fromkeys([*headers_existentes, *COLS_OFICIAIS, *COLS_CAIXINHAS]))
-    for c in colunas_alvo:
-        if c not in df_final.columns:
-            df_final[c] = ""
-    df_final = df_final[colunas_alvo]
-    aba.clear()
-    set_with_dataframe(aba, df_final, include_index=False, include_column_header=True)
-
-# =========================
-# UI
-# =========================
-st.set_page_config(layout="wide")
-st.title("📅 Adicionar Atendimento")
-
-df_existente, _ = carregar_base()
-clientes_existentes = sorted(df_existente["Cliente"].dropna().unique())
-servicos_existentes = sorted(df_existente["Serviço"].dropna().unique())
-servicos_ui = list(dict.fromkeys(["Corte", *servicos_existentes]))
-
-data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
-
-c1, c2 = st.columns([2,1])
-with c1:
-    cliente = st.selectbox("Cliente", clientes_existentes)
-    novo = st.text_input("Ou digite um novo cliente")
-    cliente = novo if novo else cliente
-with c2:
-    servico = st.selectbox("Serviço", servicos_ui, index=servicos_ui.index("Corte"))
-    valor = st.number_input("Valor", value=0.0, step=1.0)
-
-# 💝 Caixinha do dia
-with st.expander("💝 Caixinha (opcional)", expanded=False):
-    caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
-
-if st.button("💾 Salvar Atendimento"):
-    df_all, _ = carregar_base()
-    nova = {
-        "Data": data, "Serviço": servico, "Valor": valor,
-        "Conta": "Carteira", "Cliente": cliente, "Combo": "",
-        "Funcionário": "JPaulo", "Fase": "Dono + funcionário",
-        "Tipo": "Serviço", "Período": "Manhã",
-        "CaixinhaDia": float(caixinha_dia or 0.0)
-    }
-    df_final = pd.concat([df_all, pd.DataFrame([nova])], ignore_index=True)
-    salvar_base(df_final)
-    st.success(f"✅ Atendimento de {cliente} registrado em {data}.")
+df_comp = pd.DataFrame([
+    {"Funcionário": FUNC_JPAULO, "Clientes": cli_j, "Serviços": srv_j},
+    {"Funcionário": FUNC_VINICIUS, "Clientes": cli_v, "Serviços": srv_v},
+])
+fig = px.bar(
+    df_comp.melt(id_vars="Funcionário", var_name="Métrica", value_name="Quantidade"),
+    x="Funcionário", y="Quantidade", color="Métrica", barmode="group",
+    title=f"Comparativo de atendimentos — {dia_selecionado.strftime('%d/%m/%Y')}"
+)
+st.plotly_chart(fig, use_container_width=True)
