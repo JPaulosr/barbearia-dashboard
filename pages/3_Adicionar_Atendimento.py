@@ -616,7 +616,9 @@ combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str
 modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
 
 # Data sempre visível
-data = st.date_input("Data", value=datetime.today()).strftime("%d/%m/%Y")
+# garantir fuso horário de Brasília (UTC-3)
+hoje_br = datetime.now(pytz.timezone("America/Sao_Paulo")).date()
+data = st.date_input("Data", value=hoje_br).strftime("%d/%m/%Y")
 
 # Mostrar campos “padrão” **apenas** no modo Lote
 if modo_lote:
