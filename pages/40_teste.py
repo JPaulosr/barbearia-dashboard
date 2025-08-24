@@ -240,9 +240,8 @@ html("""
 # =========================
 # KPIs (RESPONSIVOS) — Ticket Médio + Receita do Salão
 # =========================
-# Receita de Vinicius no dia (para abater 50%)
 df_v_top = df_dia[df_dia["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
-_, _, rec_v_top, _ = kpis(df_v_top)
+_, _, rec_v_top, _ = kpis(df_v_top)  # receita do Vinicius no dia
 
 cli, srv, rec, tkt = kpis(df_dia)
 receita_salao = rec - (rec_v_top * 0.5)  # total - 50% do Vinicius
@@ -258,7 +257,6 @@ html(
 )
 
 html(f'<span class="badge">Fórmula da Receita do salão: Receita total ({format_moeda(rec)}) – 50% da receita do Vinicius ({format_moeda(rec_v_top*0.5)}).</span>')
-
 st.markdown("---")
 
 # =========================
