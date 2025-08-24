@@ -267,8 +267,8 @@ st.subheader("📊 Por Funcionário (dia selecionado)")
 df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
 df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
 
-cli_j, srv_j, rec_j, _ = kpis(df_j)
-cli_v, srv_v, rec_v, _ = kpis(df_v)
+cli_j, srv_j, rec_j, tkt_j = kpis(df_j)
+cli_v, srv_v, rec_v, tkt_v = kpis(df_v)
 
 col_j, col_v = st.columns(2)
 with col_j:
@@ -276,6 +276,7 @@ with col_j:
     html('<div class="metrics-wrap">' +
          card("Clientes", f"{cli_j}") +
          card("Serviços", f"{srv_j}") +
+         card("🧾 Ticket médio", format_moeda(tkt_j)) +
          card("Receita", format_moeda(rec_j)) +
          '</div>')
 with col_v:
@@ -283,6 +284,7 @@ with col_v:
     html('<div class="metrics-wrap">' +
          card("Clientes", f"{cli_v}") +
          card("Serviços", f"{srv_v}") +
+         card("🧾 Ticket médio", format_moeda(tkt_v)) +
          card("Receita", format_moeda(rec_v)) +
          '</div>')
 
