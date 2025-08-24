@@ -153,6 +153,73 @@ TZ = pytz.timezone("America/Sao_Paulo")
 DATA_FMT = "%d/%m/%Y"
 
 # ... [mantém VALORES_PADRAO, COMISSAO_FUNCIONARIOS, conectar_sheets, etc.]
+# ====== FIX: utilitários mínimos para carregar listas do Sheets ======
+import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+from gspread_dataframe import get_as_dataframe
+
+# Ajuste se já tiver esses valores declarados no arquivo:
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+ABA_BASE = "Base de Dados"
+
+@st.cache_resource
+def conectar_sheets():
+    # Requer st.secrets["GCP_SERVICE_ACCOUNT"] configurado no Streamlit Cloud
+    info = st.secrets["GCP_SERVICE_ACCOUNT"]
+    scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(info, scopes=scopes)
+    gc = gspread.authorize(creds)
+    return gc.open_by_key(SHEET_ID)
+
+def garantir_aba(ss, nome, cols_min=None):
+    """Abre a worksheet; se não existir, cria com colunas mínimas."""
+    try:
+        return ss.worksheet(nome)
+    except gspread.WorksheetNotFound:
+        ws = ss.add_worksheet(title=nome, rows=200, cols=40)
+        if cols_min:
+            ws.append_row(cols_min)
+        return ws
+
+@st.cache_data(show_spinner=False)
+def carregar_listas():
+    """
+    Retorna 4 listas: clientes, combos, serviços, contas.
+    • Ignora linhas vazias
+    • Remove duplicados
+    • Garante 'Nubank CNPJ' nas contas
+    """
+    ss = conectar_sheets()
+
+    # Colunas mínimas caso a planilha esteja vazia/sem cabeçalho
+    COLS_MIN = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário","Fase","Tipo","Período",
+                "StatusFiado","IDLancFiado","VencimentoFiado","DataPagamento"]
+
+    ws_base = garantir_aba(ss, ABA_BASE, cols_min=COLS_MIN)
+    df = get_as_dataframe(ws_base, evaluate_formulas=True, header=0).fillna("")
+    if df.empty:
+        # Se estiver vazia, devolve listas básicas pra não quebrar a UI
+        return [], [], [], ["Pix","Dinheiro","Cartão","Transferência","Nubank CNPJ"]
+
+    # Normaliza colunas e remove duplicadas
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
+
+    # Extrai listas
+    clientes = sorted([c for c in df.get("Cliente", "").astype(str).str.strip().unique() if c])
+    combos   = sorted([c for c in df.get("Combo",   "").astype(str).str.strip().unique() if c])
+    servs    = sorted([s for s in df.get("Serviço", "").astype(str).str.strip().unique() if s])
+
+    contas_raw = [c for c in df.get("Conta", "").astype(str).str.strip().unique() if c]
+    # Tira "Fiado" da lista de formas de pagamento comuns
+    contas = sorted([c for c in contas_raw if c.lower() != "fiado"], key=lambda s: s.lower())
+    if "Nubank CNPJ" not in contas:
+        contas.append("Nubank CNPJ")
+
+    return clientes, combos, servs, contas
+# ====== FIM DO FIX ======
 
 # ===== Caches
 clientes, combos_exist, servs_exist, contas_exist = carregar_listas()
