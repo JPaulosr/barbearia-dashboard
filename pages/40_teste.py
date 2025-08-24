@@ -286,6 +286,7 @@ with col_v:
          card("Serviços", f"{srv_v}") +
          card("🧾 Ticket médio", format_moeda(tkt_v)) +
          card("Receita", format_moeda(rec_v)) +
+         card("💵 Comissão (50%)", format_moeda(rec_v * 0.5)) +
          '</div>')
 
 # =========================
