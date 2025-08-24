@@ -11,9 +11,8 @@ import io
 import plotly.express as px
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
-from gspread.utils import rowcol_to_a1
 from datetime import datetime, date
-import pytz
+import pytz, textwrap
 
 # =========================
 # CONFIG
@@ -23,7 +22,6 @@ ABA_DADOS = "Base de Dados"  # Masculino
 TZ = "America/Sao_Paulo"
 DATA_FMT = "%d/%m/%Y"
 
-# Funcionários oficiais
 FUNC_JPAULO = "JPaulo"
 FUNC_VINICIUS = "Vinicius"
 
@@ -37,12 +35,9 @@ def _tz_now():
     return datetime.now(pytz.timezone(TZ))
 
 def _fmt_data(d):
-    if pd.isna(d):
-        return ""
-    if isinstance(d, (pd.Timestamp, datetime)):
-        return d.strftime(DATA_FMT)
-    if isinstance(d, date):
-        return d.strftime(DATA_FMT)
+    if pd.isna(d): return ""
+    if isinstance(d, (pd.Timestamp, datetime)): return d.strftime(DATA_FMT)
+    if isinstance(d, date): return d.strftime(DATA_FMT)
     d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
     return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
 
@@ -110,7 +105,7 @@ def carregar_base():
             return 0.0
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # Limpeza de strings (usar .str.strip())
+    # Limpeza de strings
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
         if col not in df.columns:
             df[col] = ""
@@ -158,13 +153,6 @@ def preparar_tabela_exibicao(df):
         if c not in df.columns:
             df[c] = ""
     out = df.copy()
-    ord_cols = []
-    if "Hora Início" in out.columns: ord_cols.append("Hora Início")
-    ord_cols.append("Cliente")
-    try:
-        out = out.sort_values(by=ord_cols, ascending=[True] * len(ord_cols))
-    except Exception:
-        pass
     out["Data"] = out["Data_norm"].apply(_fmt_data)
     out["Valor"] = out["Valor_num"].apply(format_moeda)
     return out[cols_ordem]
@@ -204,6 +192,13 @@ def _delete_rows(ws, rows):
         except Exception as e:
             st.warning(f"Falha ao excluir linha {r}: {e}")
 
+# ============= HELPER HTML (render seguro) =============
+def html(s: str):
+    st.markdown(textwrap.dedent(s), unsafe_allow_html=True)
+
+def card(label, val):
+    return f'<div class="card"><div class="label">{label}</div><div class="value">{val}</div></div>'
+
 # =========================
 # UI
 # =========================
@@ -222,44 +217,81 @@ if df_dia.empty:
     st.info("Nenhum atendimento encontrado para o dia selecionado.")
     st.stop()
 
-# KPIs
-cli, srv, rec, tkt = kpis(df_dia)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("👥 Clientes atendidos", f"{cli}")
-c2.metric("✂️ Serviços realizados", f"{srv}")
-c3.metric("💰 Receita do dia", format_moeda(rec))
-c4.metric("🧾 Ticket médio", format_moeda(tkt))
+# ========== CSS CARDS ==========
+html("""
+<style>
+.metrics-wrap{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}
+.metrics-wrap .card{
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px;
+  padding:12px 14px;
+  min-width:160px;
+  flex:1 1 200px;
+}
+.metrics-wrap .card .label{font-size:0.9rem;opacity:.85;margin-bottom:6px}
+.metrics-wrap .card .value{font-weight:700;font-size:clamp(18px,3.8vw,28px);line-height:1.15;word-break:break-word}
+.section-h{font-weight:700;margin:12px 0 6px}
+.badge{display:inline-block;padding:6px 10px;border-radius:999px;font-size:.85rem;
+       background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15)}
+</style>
+""")
 
+# =========================
+# KPIs (RESPONSIVOS) — Ticket Médio + Receita do Salão
+# =========================
+df_v_top = df_dia[df_dia["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
+_, _, rec_v_top, _ = kpis(df_v_top)  # receita do Vinicius no dia
+
+cli, srv, rec, tkt = kpis(df_dia)
+receita_salao = rec - (rec_v_top * 0.5)  # total - 50% do Vinicius
+
+html(
+    '<div class="metrics-wrap">'
+    + card("👥 Clientes atendidos", f"{cli}")
+    + card("✂️ Serviços realizados", f"{srv}")
+    + card("🧾 Ticket médio", format_moeda(tkt))
+    + card("💰 Receita do dia", format_moeda(rec))
+    + card("🏢 Receita do salão (–50% Vinicius)", format_moeda(receita_salao))
+    + "</div>"
+)
+
+html(f'<span class="badge">Fórmula da Receita do salão: Receita total ({format_moeda(rec)}) – 50% da receita do Vinicius ({format_moeda(rec_v_top*0.5)}).</span>')
 st.markdown("---")
 
-# Por funcionário (métricas)
+# =========================
+# Por Funcionário (RESPONSIVO)
+# =========================
 st.subheader("📊 Por Funcionário (dia selecionado)")
+
 df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
 df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
 
-def _kpis_func(df_): 
-    return kpis(df_)
+cli_j, srv_j, rec_j, tkt_j = kpis(df_j)
+cli_v, srv_v, rec_v, tkt_v = kpis(df_v)
 
-cli_j, srv_j, rec_j, tkt_j = _kpis_func(df_j)
-cli_v, srv_v, rec_v, tkt_v = _kpis_func(df_v)
+col_j, col_v = st.columns(2)
+with col_j:
+    html(f'<div class="section-h">{FUNC_JPAULO}</div>')
+    html('<div class="metrics-wrap">' +
+         card("Clientes", f"{cli_j}") +
+         card("Serviços", f"{srv_j}") +
+         card("🧾 Ticket médio", format_moeda(tkt_j)) +
+         card("Receita", format_moeda(rec_j)) +
+         '</div>')
+with col_v:
+    html(f'<div class="section-h">{FUNC_VINICIUS}</div>')
+    html('<div class="metrics-wrap">' +
+         card("Clientes", f"{cli_v}") +
+         card("Serviços", f"{srv_v}") +
+         card("🧾 Ticket médio", format_moeda(tkt_v)) +
+         card("Receita", format_moeda(rec_v)) +
+         card("💵 Comissão (50%)", format_moeda(rec_v * 0.5)) +
+         '</div>')
 
-f1, f2 = st.columns(2)
-with f1:
-    st.markdown(f"**{FUNC_JPAULO}**")
-    a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Clientes", f"{cli_j}")
-    a2.metric("Serviços", f"{srv_j}")
-    a3.metric("Receita", format_moeda(rec_j))
-    a4.metric("Ticket", format_moeda(tkt_j))
-with f2:
-    st.markdown(f"**{FUNC_VINICIUS}**")
-    b1, b2, b3, b4 = st.columns(4)
-    b1.metric("Clientes", f"{cli_v}")
-    b2.metric("Serviços", f"{srv_v}")
-    b3.metric("Receita", format_moeda(rec_v))
-    b4.metric("Ticket", format_moeda(tkt_v))
-
+# =========================
 # Gráfico comparativo (Clientes x Serviços)
+# =========================
 df_comp = pd.DataFrame([
     {"Funcionário": FUNC_JPAULO, "Clientes": cli_j, "Serviços": srv_j},
     {"Funcionário": FUNC_VINICIUS, "Clientes": cli_v, "Serviços": srv_v},
