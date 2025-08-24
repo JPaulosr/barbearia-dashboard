@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # 12_Dashboard_Funcionario.py — Dashboard por Funcionário
-# Corrigido: detecção robusta de FIADO (Conta/Forma/Status/Tipo) e fiado pago (Status/DataPagamento)
+# FIADO corrigido: "Pago" só vale com DataPagamento <= dt_fim do filtro (ou status textual pago).
 
 import streamlit as st
 import pandas as pd
@@ -21,31 +21,27 @@ ABA_DADOS = "Base de Dados"
 ABA_DESPESAS = "Despesas"
 TZ = "America/Sao_Paulo"
 
-# % padrão por funcionário quando NÃO há "% Comissão" por linha
-DEFAULT_PCT_MAP = {
-    "Vinicius": 0.50,  # 50%
-}
+DEFAULT_PCT_MAP = {"Vinicius": 0.50}
 
-# Nomes de colunas na Base
+# Colunas na Base
 COL_DATA      = "Data"
 COL_SERVICO   = "Serviço"
 COL_VALOR     = "Valor"
 COL_CLIENTE   = "Cliente"
 COL_FUNC      = "Funcionário"
-COL_TIPO      = "Tipo"              # pode ou não conter "Fiado"
-COL_STATUSF   = "StatusFiado"       # "Pago" / "A receber" etc
-COL_DT_PAG    = "DataPagamento"     # data do pagamento do fiado
-COL_PCT       = "% Comissão"        # % por linha
+COL_TIPO      = "Tipo"
+COL_STATUSF   = "StatusFiado"
+COL_DT_PAG    = "DataPagamento"
+COL_PCT       = "% Comissão"
 COL_REFID     = "RefID"
 
-# Colunas alternativas que podem conter a informação de FIADO
+# Colunas alternativas que podem indicar FIADO
 FIADO_HINT_COLS = [
-    COL_TIPO,
-    "Conta", "Forma de pagamento", "Forma de Pagamento", "Pagamento", "Status",
-    "Meio de Pagamento", "Categoria"
+    COL_TIPO, "Conta", "Forma de pagamento", "Forma de Pagamento",
+    "Pagamento", "Status", "Meio de Pagamento", "Categoria"
 ]
 
-# Colunas possíveis em Despesas
+# Despesas
 DESP_COL_DATA   = "Data"
 DESP_COL_VALOR  = "Valor"
 DESP_TXT_CANDS  = ["Categoria", "Descrição", "Descricao", "Tipo", "Conta", "Histórico"]
@@ -55,10 +51,7 @@ DESP_TXT_CANDS  = ["Categoria", "Descrição", "Descricao", "Tipo", "Conta", "Hi
 # =============================
 @st.cache_resource(show_spinner=False)
 def conectar_sheets():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(st.secrets["GCP_SERVICE_ACCOUNT"], scopes=scopes)
     return gspread.authorize(creds)
 
@@ -69,35 +62,32 @@ def carregar_base():
     ws = sh.worksheet(ABA_DADOS)
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
 
-    # DATA
+    # Data
     if COL_DATA in df.columns:
-        def _parse_data(x):
+        def _parse(x):
             if pd.isna(x): return None
-            if isinstance(x, (datetime, date)): return pd.to_datetime(x)
-            s = str(x).strip()
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                try:
-                    return pd.to_datetime(s, format=fmt, dayfirst=True)
-                except Exception:
-                    pass
+            if isinstance(x,(datetime,date)): return pd.to_datetime(x)
+            s=str(x).strip()
+            for fmt in ("%d/%m/%Y","%Y-%m-%d","%d-%m-%Y"):
+                try: return pd.to_datetime(s, format=fmt, dayfirst=True)
+                except: pass
             return pd.to_datetime(s, dayfirst=True, errors="coerce")
-        df[COL_DATA] = df[COL_DATA].apply(_parse_data)
+        df[COL_DATA] = df[COL_DATA].apply(_parse)
 
-    # VALOR
+    # Valor
     if COL_VALOR in df.columns:
         df[COL_VALOR] = pd.to_numeric(df[COL_VALOR], errors="coerce").fillna(0.0)
 
-    # % COMISSÃO (por linha, se existir)
+    # % Comissão
     if COL_PCT in df.columns:
         def _pct(v):
             if pd.isna(v): return None
-            s = str(v).strip().replace(",", ".")
+            s=str(v).strip().replace(",",".")
             if s.endswith("%"):
                 try: return float(s[:-1])/100.0
                 except: return None
             try:
-                f = float(s)
-                return f/100.0 if f > 1 else f
+                f=float(s); return f/100.0 if f>1 else f
             except: return None
         df[COL_PCT] = df[COL_PCT].apply(_pct)
 
@@ -105,7 +95,6 @@ def carregar_base():
 
 @st.cache_data(show_spinner=False, ttl=300)
 def carregar_despesas():
-    """Carrega a aba Despesas de forma resiliente."""
     try:
         gc = conectar_sheets()
         sh = gc.open_by_key(SHEET_ID)
@@ -114,77 +103,68 @@ def carregar_despesas():
     except Exception:
         return pd.DataFrame()
 
-    # Data
     if DESP_COL_DATA in d.columns:
         def _pd(x):
             if pd.isna(x): return None
-            if isinstance(x, (datetime, date)): return pd.to_datetime(x)
-            s = str(x).strip()
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                try:
-                    return pd.to_datetime(s, format=fmt, dayfirst=True)
-                except Exception:
-                    pass
+            if isinstance(x,(datetime,date)): return pd.to_datetime(x)
+            s=str(x).strip()
+            for fmt in ("%d/%m/%Y","%Y-%m-%d","%d-%m-%Y"):
+                try: return pd.to_datetime(s, format=fmt, dayfirst=True)
+                except: pass
             return pd.to_datetime(s, dayfirst=True, errors="coerce")
         d[DESP_COL_DATA] = d[DESP_COL_DATA].apply(_pd)
-
-    # Valor
     if DESP_COL_VALOR in d.columns:
         d[DESP_COL_VALOR] = pd.to_numeric(d[DESP_COL_VALOR], errors="coerce").fillna(0.0)
 
-    # Coluna de texto para classificar
     txt_cols = [c for c in DESP_TXT_CANDS if c in d.columns]
-    if txt_cols:
-        d["_texto"] = d[txt_cols].astype(str).agg(" ".join, axis=1).str.lower()
-    else:
-        d["_texto"] = ""
+    d["_texto"] = d[txt_cols].astype(str).agg(" ".join, axis=1).str.lower() if txt_cols else ""
     return d
 
 # =============================
-# DETECÇÃO DE FIADO (ROBUSTA)
+# DETECÇÃO DE FIADO
 # =============================
-def detectar_fiado_e_pago(df: pd.DataFrame):
-    """
-    Retorna:
-      eh_fiado: Series booleana
-      pago_mask: Series booleana (só faz sentido quando eh_fiado == True)
-      debug: dict com colunas usadas
-    """
+def _parse_date_any(x):
+    if pd.isna(x): return None
+    if isinstance(x,(datetime,date)): return pd.to_datetime(x)
+    s=str(x).strip()
+    for fmt in ("%d/%m/%Y","%Y-%m-%d","%d-%m-%Y"):
+        try: return pd.to_datetime(s, format=fmt, dayfirst=True)
+        except: pass
+    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+
+def detectar_fiado_e_pago(df: pd.DataFrame, dt_ref: date):
+    """dt_ref = data final do filtro (para validar DataPagamento <= dt_ref)."""
     if df.empty:
         return pd.Series(dtype=bool), pd.Series(dtype=bool), {"fiado_cols": [], "status_cols": []}
 
-    # --- FIADO ---
+    # FIADO: procura 'fiado' em várias colunas
     fiado_cols_presentes = [c for c in FIADO_HINT_COLS if c in df.columns]
     if fiado_cols_presentes:
         textos = df[fiado_cols_presentes].astype(str).agg(" ".join, axis=1).str.lower()
         eh_fiado = textos.str.contains(r"\bfiado\b", na=False)
     else:
-        # fallback: se existir COL_TIPO
         eh_fiado = df.get(COL_TIPO, pd.Series([""]*len(df))).astype(str).str.lower().eq("fiado")
 
-    # --- PAGO (para linhas fiado) ---
+    # PAGO: status textual OU DataPagamento válida <= dt_ref
     status_cols = []
     pago_mask = pd.Series(False, index=df.index)
 
-    # Status textual comum
     if COL_STATUSF in df.columns:
         status_cols.append(COL_STATUSF)
         pago_mask |= df[COL_STATUSF].astype(str).str.strip().str.lower().isin(
-            ["pago", "paga", "quitado", "quitada", "liberado", "liberada"]
+            ["pago","paga","quitado","quitada","liberado","liberada"]
         )
-
-    # Outras colunas de status que às vezes aparecem
-    for alt in ["Status", "Situação", "Situacao"]:
+    for alt in ["Status","Situação","Situacao"]:
         if alt in df.columns:
             status_cols.append(alt)
             pago_mask |= df[alt].astype(str).str.strip().str.lower().isin(
-                ["pago", "paga", "quitado", "quitada", "liberado", "liberada"]
+                ["pago","paga","quitado","quitada","liberado","liberada"]
             )
 
-    # Data de pagamento preenchida => pago
     if COL_DT_PAG in df.columns:
         status_cols.append(COL_DT_PAG)
-        pago_mask |= df[COL_DT_PAG].astype(str).str.strip().ne("")
+        dp = df[COL_DT_PAG].apply(_parse_date_any)
+        pago_mask |= (pd.to_datetime(dp, errors="coerce").dt.date <= dt_ref)
 
     debug = {"fiado_cols": fiado_cols_presentes, "status_cols": status_cols}
     return eh_fiado, pago_mask, debug
@@ -192,9 +172,8 @@ def detectar_fiado_e_pago(df: pd.DataFrame):
 # =============================
 # LÓGICA
 # =============================
-def preparar_df_funcionario(df_raw: pd.DataFrame,
-                            funcionario: str,
-                            incluir_fiado_nao_pago: bool) -> tuple[pd.DataFrame, dict, dict]:
+def preparar_df_funcionario(df_raw: pd.DataFrame, funcionario: str,
+                            incluir_fiado_nao_pago: bool, dt_ref: date):
     if df_raw.empty:
         vazio = df_raw.head(0)
         return vazio, dict(total=0, fiados_total=0, fiados_pagos=0, fiados_nao_pagos=0, considerados=0), {}
@@ -210,18 +189,15 @@ def preparar_df_funcionario(df_raw: pd.DataFrame,
     if df.empty:
         return df, dict(total=0, fiados_total=0, fiados_pagos=0, fiados_nao_pagos=0, considerados=0), {}
 
-    # --- marcações fiado/pago (robustas) ---
-    eh_fiado, pago_mask, dbg = detectar_fiado_e_pago(df)
+    # FIADO/PAGO com dt_ref
+    eh_fiado, pago_mask, dbg = detectar_fiado_e_pago(df, dt_ref)
 
-    # Resumo FIADO antes do filtro
     fiados_total = int(eh_fiado.sum())
     fiados_pagos = int((eh_fiado & pago_mask).sum())
     fiados_nao_pagos = int((eh_fiado & ~pago_mask).sum())
 
-    # Aplica regra FIADO
-    if incluir_fiado_nao_pago:
-        pass  # mantém todos
-    else:
+    # Aplica toggle
+    if not incluir_fiado_nao_pago:
         df = df[(~eh_fiado) | (eh_fiado & pago_mask)]
 
     considerados = len(df)
@@ -253,12 +229,9 @@ def resumo_cards(df, ano=None, mes=None, titulo="Resumo"):
     if df.empty:
         return dict(atend=0, clientes=0, base=0.0, com=0.0, titulo=titulo)
     dfx = df.copy()
-    if ano is not None:
-        dfx = dfx[dfx["Ano"] == int(ano)]
-    if mes is not None:
-        dfx = dfx[dfx["Mes"] == int(mes)]
-    if dfx.empty:
-        return dict(atend=0, clientes=0, base=0.0, com=0.0, titulo=titulo)
+    if ano is not None: dfx = dfx[dfx["Ano"] == int(ano)]
+    if mes is not None: dfx = dfx[dfx["Mes"] == int(mes)]
+    if dfx.empty: return dict(atend=0, clientes=0, base=0.0, com=0.0, titulo=titulo)
     atend = len(dfx)
     clientes = dfx[COL_CLIENTE].astype(str).str.strip().nunique() if COL_CLIENTE in dfx.columns else atend
     base = float(dfx["Valor_para_comissao"].sum().round(2))
@@ -270,10 +243,8 @@ def fmt_moeda(v: float) -> str:
 
 def card_html(titulo, v1_label, v1, v2_label, v2):
     return f"""
-    <div style="
-      background:#121212;border:1px solid #2a2a2a;border-radius:16px;
-      padding:16px;color:#eaeaea;box-shadow:0 2px 10px rgba(0,0,0,0.25);
-    ">
+    <div style="background:#121212;border:1px solid #2a2a2a;border-radius:16px;
+                padding:16px;color:#eaeaea;box-shadow:0 2px 10px rgba(0,0,0,0.25);">
       <div style="font-size:13px;opacity:.8;margin-bottom:6px;">{titulo}</div>
       <div style="display:flex;justify-content:space-between;gap:16px;">
         <div><div style="font-size:12px;opacity:.7;">{v1_label}</div>
@@ -306,13 +277,11 @@ def to_excel_bytes(df):
         df.to_excel(writer, index=False, sheet_name="dados")
     return output.getvalue()
 
-def extrair_comissao_vinicius_despesas(desp: pd.DataFrame, dt_ini, dt_fim) -> tuple[float, float]:
-    """Retorna (comissao_vinicius, total_despesas) no período."""
+def extrair_comissao_vinicius_despesas(desp: pd.DataFrame, dt_ini, dt_fim):
     if desp.empty: return 0.0, 0.0
     d = desp.copy()
     d = d[(pd.to_datetime(d[DESP_COL_DATA]).dt.date >= dt_ini) & (pd.to_datetime(d[DESP_COL_DATA]).dt.date <= dt_fim)]
     total = float(d[DESP_COL_VALOR].sum().round(2)) if DESP_COL_VALOR in d.columns else 0.0
-    # Heurística para encontrar comissão do Vinicius nas descrições/categorias:
     mask_com_vin = d["_texto"].str.contains(r"comiss", na=False) & d["_texto"].str.contains(r"vini", na=False)
     com_vin = float(d.loc[mask_com_vin, DESP_COL_VALOR].sum().round(2)) if DESP_COL_VALOR in d.columns else 0.0
     return com_vin, total
@@ -326,7 +295,7 @@ st.title("📊 Dashboard Funcionário")
 df_raw = carregar_base()
 despesas_raw = carregar_despesas()
 
-# ---- Filtros/topbar
+# Topbar
 top1, top2, top3, top4, top5 = st.columns([1.1, 1.1, 1.4, 1.1, 1.3])
 with top1:
     incluir_fiado = st.toggle("Incluir FIADO não pago", value=False,
@@ -352,11 +321,13 @@ with top4:
 with top5:
     dt_fim = st.date_input("Até", value=dt_fim_preset, format="DD/MM/YYYY")
 
-# ---- Dados do funcionário selecionado + detecção de fiado
-df_func, resumo_fiado, dbg_cols = preparar_df_funcionario(df_raw, funcionario, incluir_fiado_nao_pago=incluir_fiado)
+# Dados do funcionário + FIADO usando dt_fim como referência de pagamento
+df_func, resumo_fiado, dbg_cols = preparar_df_funcionario(
+    df_raw, funcionario, incluir_fiado_nao_pago=incluir_fiado, dt_ref=dt_fim
+)
 dfp = filtrar_por_periodo(df_func, dt_ini, dt_fim)
 
-# ---- Banner do FIADO + debug de colunas usadas
+# Banner
 st.caption(
     f"**FIADO** — Total (funcionário): **{resumo_fiado['fiados_total']}** | "
     f"Pagos: **{resumo_fiado['fiados_pagos']}** | "
@@ -366,7 +337,7 @@ st.caption(
 )
 st.caption(
     f"🧪 Detecção FIADO: {', '.join(dbg_cols.get('fiado_cols', []) or ['(sem colunas explícitas)'])} | "
-    f"Pago por: {', '.join(dbg_cols.get('status_cols', []) or ['(sem status/data)'])}"
+    f"Pago por: {', '.join(dbg_cols.get('status_cols', []) or ['(sem status/data)'])} (DataPagamento ≤ {dt_fim.strftime('%d/%m/%Y')})"
 )
 
 # =============================
@@ -377,67 +348,46 @@ mes_ref, ano_ref = dt_fim.month, dt_fim.year
 res_mes = resumo_cards(dfp, ano=ano_ref, mes=mes_ref, titulo=f"Mês {mes_ref:02d}/{ano_ref}")
 res_ano = resumo_cards(dfp, ano=ano_ref, titulo=f"Ano {ano_ref}")
 
-# ---- Modo padrão (funcionário ≠ JPaulo): mostra Base e Comissão
 if funcionario.lower() != "jpaulo":
     with colc1:
         st.markdown(card_html(res_mes["titulo"], "Atendimentos", f"{res_mes['atend']}",
-                              "Clientes únicos", f"{res_mes['clientes']}"),
-                    unsafe_allow_html=True)
+                              "Clientes únicos", f"{res_mes['clientes']}"), unsafe_allow_html=True)
     with colc2:
         st.markdown(card_html("Base p/ comissão (Mês)", "Base", fmt_moeda(res_mes["base"]),
-                              "Comissão", fmt_moeda(res_mes["com"])),
-                    unsafe_allow_html=True)
+                              "Comissão", fmt_moeda(res_mes["com"])), unsafe_allow_html=True)
     with colc3:
         st.markdown(card_html(res_ano["titulo"], "Atendimentos", f"{res_ano['atend']}",
-                              "Clientes únicos", f"{res_ano['clientes']}"),
-                    unsafe_allow_html=True)
+                              "Clientes únicos", f"{res_ano['clientes']}"), unsafe_allow_html=True)
     with colc4:
         st.markdown(card_html("Base p/ comissão (Ano)", "Base", fmt_moeda(res_ano["base"]),
-                              "Comissão", fmt_moeda(res_ano["com"])),
-                    unsafe_allow_html=True)
-
-# ---- Modo especial JPaulo
+                              "Comissão", fmt_moeda(res_ano["com"])), unsafe_allow_html=True)
 else:
-    # Bruto JPaulo (período)
     bruto_jp = float(dfp["Valor_para_comissao"].sum().round(2)) if not dfp.empty else 0.0
-
-    # Bruto Vinicius no mesmo período (considerando mesma lógica de FIADO)
-    df_vin, _, _ = preparar_df_funcionario(df_raw, "Vinicius", incluir_fiado_nao_pago=incluir_fiado)
+    df_vin, _, _ = preparar_df_funcionario(df_raw, "Vinicius", incluir_fiado_nao_pago=incluir_fiado, dt_ref=dt_fim)
     df_vin_periodo = filtrar_por_periodo(df_vin, dt_ini, dt_fim)
     bruto_vin = float(df_vin_periodo["Valor_para_comissao"].sum().round(2)) if not df_vin_periodo.empty else 0.0
-
-    # Despesas do período + Comissão Vinicius vinda de Despesas (se existir)
     com_vin_desp, total_desp = extrair_comissao_vinicius_despesas(despesas_raw, dt_ini, dt_fim)
-
-    # Se não achou comissão nas Despesas, estima a partir da base do Vinicius
     if com_vin_desp <= 0 and not df_vin_periodo.empty:
         com_vin_est = float((df_vin_periodo["Valor_para_comissao"] * df_vin_periodo["Pct_Comissao"]).sum().round(2))
-        com_vin = com_vin_est
-        fonte_comissao = "estimada (Base × %)"
+        com_vin, fonte_comissao = com_vin_est, "estimada (Base × %)"
     else:
-        com_vin = com_vin_desp
-        fonte_comissao = "Despesas"
-
+        com_vin, fonte_comissao = com_vin_desp, "Despesas"
     outras_desp = max(total_desp - com_vin, 0.0)
-
     lucro_pos_com = bruto_jp + (bruto_vin - com_vin)
     lucro_liquido  = lucro_pos_com - outras_desp
-
     with colc1:
         st.markdown(card_html("Bruto JPaulo (período)", "Receita", fmt_moeda(bruto_jp),
                               "Bruto Vinicius", fmt_moeda(bruto_vin)), unsafe_allow_html=True)
     with colc2:
-        st.markdown(card_html(f"Comissão Vinicius ({fonte_comissao})",
-                              "Comissão", fmt_moeda(com_vin),
+        st.markdown(card_html(f"Comissão Vinicius ({fonte_comissao})", "Comissão", fmt_moeda(com_vin),
                               "Outras despesas", fmt_moeda(outras_desp)), unsafe_allow_html=True)
     with colc3:
-        st.markdown(card_html("Lucro após comissão",
-                              "Cálculo", "JP + (VIN − Comissão)",
+        st.markdown(card_html("Lucro após comissão", "Cálculo", "JP + (VIN − Comissão)",
                               "Valor", fmt_moeda(lucro_pos_com)), unsafe_allow_html=True)
     with colc4:
-        st.markdown(card_html("Lucro líquido (período)",
-                              "Cálculo", "Lucro pós comissão − Outras despesas",
-                              "Valor", fmt_moeda(lucro_liquido)), unsafe_allow_html=True)
+        st.markdown(card_html("Lucro líquido (período)", "Cálculo",
+                              "Lucro pós comissão − Outras despesas", "Valor",
+                              fmt_moeda(lucro_liquido)), unsafe_allow_html=True)
 
 st.divider()
 
@@ -450,15 +400,15 @@ with g1:
     st.subheader("🔝 Top Serviços (período)")
     if not dfp.empty and COL_SERVICO in dfp.columns:
         top_serv = (dfp.groupby(COL_SERVICO, dropna=False)
-                      .agg(Qtde=("Valor_para_comissao", "count"),
-                           Base=("Valor_para_comissao", "sum"),
-                           Comissao=("Comissao_R$", "sum"))
+                      .agg(Qtde=("Valor_para_comissao","count"),
+                           Base=("Valor_para_comissao","sum"),
+                           Comissao=("Comissao_R$","sum"))
                       .reset_index()
-                      .sort_values(["Base", "Qtde"], ascending=[False, False]))
+                      .sort_values(["Base","Qtde"], ascending=[False,False]))
         top_serv["Base"] = top_serv["Base"].round(2)
         fig = px.bar(top_serv.head(12), x="Base", y=COL_SERVICO, orientation="h",
                      labels={"Base":"Base (R$)", COL_SERVICO:"Serviço"})
-        fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Sem dados de serviços no período.")
@@ -467,15 +417,15 @@ with g2:
     st.subheader("👥 Top Clientes (período)")
     if not dfp.empty and COL_CLIENTE in dfp.columns:
         top_cli = (dfp.groupby(COL_CLIENTE, dropna=False)
-                      .agg(Qtde=("Valor_para_comissao", "count"),
-                           Base=("Valor_para_comissao", "sum"),
-                           Comissao=("Comissao_R$", "sum"))
+                      .agg(Qtde=("Valor_para_comissao","count"),
+                           Base=("Valor_para_comissao","sum"),
+                           Comissao=("Comissao_R$","sum"))
                       .reset_index()
-                      .sort_values(["Base", "Qtde"], ascending=[False, False]))
+                      .sort_values(["Base","Qtde"], ascending=[False,False]))
         top_cli["Base"] = top_cli["Base"].round(2)
         fig = px.bar(top_cli.head(12), x="Base", y=COL_CLIENTE, orientation="h",
                      labels={"Base":"Base (R$)", COL_CLIENTE:"Cliente"})
-        fig.update_layout(height=420, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(height=420, margin=dict(l=10,r=10,t=10,b=10))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Sem dados de clientes no período.")
@@ -492,7 +442,7 @@ with h1:
                   .reset_index().sort_values("AnoMes"))
         fig = px.line(dfm, x="AnoMes", y=["Base","Comissao"], markers=True,
                       labels={"value":"R$","AnoMes":"Competência","variable":"Métrica"})
-        fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Sem dados para evolução mensal.")
@@ -505,7 +455,7 @@ with h2:
                        Qtde=("Valor_para_comissao","count"))
                   .reset_index().sort_values("Dia"))
         fig = px.line(dfd, x="Dia", y="Base", markers=True, labels={"Base":"R$","Dia":"Dia"})
-        fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Sem dados para evolução diária.")
@@ -519,10 +469,8 @@ st.subheader("📄 Detalhe das linhas (período)")
 if not dfp.empty:
     cols_show = [c for c in [COL_DATA, COL_CLIENTE, COL_SERVICO, COL_VALOR,
                              "Valor_para_comissao", "Pct_Comissao", "Comissao_R$",
-                             COL_TIPO, COL_STATUSF, COL_DT_PAG, COL_REFID]
-                 if c in dfp.columns]
+                             COL_TIPO, COL_STATUSF, COL_DT_PAG, COL_REFID] if c in dfp.columns]
     dfd = dfp[cols_show].copy()
-
     if COL_DATA in dfd.columns:
         dfd[COL_DATA] = pd.to_datetime(dfd[COL_DATA], errors="coerce").dt.strftime("%d/%m/%Y")
     if "Valor_para_comissao" in dfd.columns:
@@ -530,7 +478,8 @@ if not dfp.empty:
     if "Comissao_R$" in dfd.columns:
         dfd["Comissao_R$"] = dfd["Comissao_R$"].apply(fmt_moeda)
     if "Pct_Comissao" in dfd.columns:
-        dfd["Pct_Comissao"] = (pd.to_numeric(dfd["Pct_Comissao"], errors="coerce").fillna(0)*100).round(0).astype(int).astype(str) + "%"
+        dfd["Pct_Comissao"] = (pd.to_numeric(dfd["Pct_Comissao"], errors="coerce").fillna(0)*100)\
+                                .round(0).astype(int).astype(str) + "%"
 
     st.dataframe(dfd, hide_index=True, use_container_width=True)
 
@@ -540,41 +489,27 @@ if not dfp.empty:
     if "Pct_Comissao" in raw_export.columns:
         raw_export["Pct_Comissao"] = (pd.to_numeric(raw_export["Pct_Comissao"], errors="coerce").fillna(0).round(4))
 
-    cexp1, cexp2 = st.columns(2)
-    with cexp1:
-        st.download_button(
-            "⬇️ Baixar CSV (período)",
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("⬇️ Baixar CSV (período)",
             data=raw_export.to_csv(index=False).encode("utf-8"),
             file_name=f"dashboard_{funcionario}_{dt_ini.strftime('%Y%m%d')}_{dt_fim.strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    with cexp2:
-        st.download_button(
-            "⬇️ Baixar Excel (período)",
+            mime="text/csv")
+    with c2:
+        st.download_button("⬇️ Baixar Excel (período)",
             data=to_excel_bytes(raw_export),
             file_name=f"dashboard_{funcionario}_{dt_ini.strftime('%Y%m%d')}_{dt_fim.strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 else:
     st.info("Sem linhas no período selecionado.")
 
 # =============================
 # RODAPÉ
 # =============================
-if funcionario.lower() != "jpaulo":
-    rodape = f"""
-    <small>
-    • Funcionário: <b>{funcionario}</b>. Período: <b>{dt_ini.strftime('%d/%m/%Y')}</b> a <b>{dt_fim.strftime('%d/%m/%Y')}</b>.<br>
-    • Cálculo sobre <b>Valor</b> da Base. Se existir <b>% Comissão</b> por linha, ela prevalece; senão usa o padrão do funcionário (ver <code>DEFAULT_PCT_MAP</code>).<br>
-    • Toggle FIADO: <b>{'inclui' if incluir_fiado else 'exclui'}</b> fiados não pagos.
-    </small>
-    """
-else:
-    rodape = f"""
-    <small>
-    • Funcionário: <b>{funcionario}</b>. Período: <b>{dt_ini.strftime('%d/%m/%Y')}</b> a <b>{dt_fim.strftime('%d/%m/%Y')}</b>.<br>
-    • Modo dono: exibindo <b>Bruto JPaulo</b>, <b>Bruto Vinicius</b>, <b>Comissão do Vinicius</b> (prioriza aba Despesas; se não houver, estima por %), <b>Outras despesas</b>, <b>Lucro após comissão</b> e <b>Lucro líquido</b>.<br>
-    • Toggle FIADO: <b>{'inclui' if incluir_fiado else 'exclui'}</b> fiados não pagos.
-    </small>
-    """
+rodape = f"""
+<small>
+• Funcionário: <b>{funcionario}</b>. Período: <b>{dt_ini.strftime('%d/%m/%Y')}</b> a <b>{dt_fim.strftime('%d/%m/%Y')}</b>.<br>
+• Toggle FIADO: <b>{'inclui' if incluir_fiado else 'exclui'}</b> fiados sem pagamento até {dt_fim.strftime('%d/%m/%Y')}.
+</small>
+"""
 st.markdown(rodape, unsafe_allow_html=True)
