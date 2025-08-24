@@ -153,6 +153,7 @@ TZ = pytz.timezone("America/Sao_Paulo")
 DATA_FMT = "%d/%m/%Y"
 
 # ... [mantém VALORES_PADRAO, COMISSAO_FUNCIONARIOS, conectar_sheets, etc.]
+
 # ====== FIX: utilitários mínimos para carregar listas do Sheets ======
 import streamlit as st
 import pandas as pd
