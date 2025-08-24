@@ -514,7 +514,7 @@ if acao == "➕ Lançar fiado":
                 except Exception:
                     pass
 
-    # --- Lote ---
+    # --- Lote (Cliente só da Base de Dados + validação) ---
     with tab_lote:
         st.caption("💡 Preencha várias linhas e clique em **Salvar fiados (lote)**. No lote os valores seguem a tabela padrão por serviço.")
         num_linhas = st.number_input("Quantidade de linhas", min_value=1, max_value=200, value=5, step=1, key="fiado_qtd_lote")
@@ -533,7 +533,11 @@ if acao == "➕ Lançar fiado":
         edited = st.data_editor(
             df_modelo, num_rows="dynamic", use_container_width=True, key="fiado_editor_lote",
             column_config={
-                "Cliente": st.column_config.TextColumn(help="Digite exatamente como está na planilha"),
+                # 🔒 Cliente: somente nomes existentes da Base de Dados
+                "Cliente": st.column_config.SelectboxColumn(
+                    options=[""] + clientes,
+                    help="Escolha um cliente já cadastrado"
+                ),
                 "Funcionário": st.column_config.SelectboxColumn(options=["JPaulo", "Vinicius"]),
                 "Data": st.column_config.DateColumn(format="DD/MM/YYYY"),
                 "Vencimento": st.column_config.DateColumn(format="DD/MM/YYYY"),
@@ -544,6 +548,7 @@ if acao == "➕ Lançar fiado":
             },
         )
 
+        # Preview de foto do primeiro cliente preenchido
         try:
             primeira_linha_cli = next((str(x).strip() for x in edited["Cliente"].tolist() if str(x).strip()), "")
             if primeira_linha_cli:
@@ -553,11 +558,25 @@ if acao == "➕ Lançar fiado":
             pass
 
         if st.button("Salvar fiados (lote)", use_container_width=True, key="btn_salvar_lote"):
+            # Filtra linhas preenchidas
             linhas_validas = edited.dropna(how="all")
             linhas_validas = linhas_validas[linhas_validas["Cliente"].astype(str).str.strip() != ""]
             if linhas_validas.empty:
                 st.error("Preencha pelo menos uma linha com Cliente e Combo_ou_Serviço.")
             else:
+                # 🔒 Validação: todos os clientes precisam existir na Base
+                clientes_ok = {str(c).strip() for c in clientes}
+                invalidos = sorted(
+                    {
+                        str(c).strip()
+                        for c in linhas_validas["Cliente"].tolist()
+                        if str(c).strip() not in clientes_ok
+                    }
+                )
+                if invalidos:
+                    st.error("Há cliente(s) não cadastrados no lote: " + ", ".join(invalidos) + ". Corrija no seletor.")
+                    st.stop()
+
                 ss = conectar_sheets()
                 ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
                 ensure_headers(ws_base, BASE_COLS_ALL)
@@ -1018,8 +1037,8 @@ elif acao == "📋 Em aberto & exportação":
                     return None
             em_aberto["__venc"] = em_aberto["VencimentoFiado"].apply(parse_dt)
             em_aberto["DiasAtraso"] = em_aberto["__venc"].apply(
-                lambda d: (hoje - d).ays if (d is not None and hoje > d) else 0
-            ) if False else em_aberto["__venc"].apply(lambda d: (hoje - d).days if (d is not None and hoje > d) else 0)
+                lambda d: (hoje - d).days if (d is not None and hoje > d) else 0
+            )
             em_aberto["Situação"] = em_aberto["DiasAtraso"].apply(lambda n: "Em dia" if n<=0 else f"{int(n)}d atraso")
 
             em_aberto["Valor"] = pd.to_numeric(em_aberto["Valor"], errors="coerce").fillna(0)
