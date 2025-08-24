@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # 12_Fiado.py — Fiado + Telegram (foto + card), por funcionário + cópia p/ JP
-# - Lançar fiado: append sem limpar (1 a 1) e também por LOTE (CSV/Excel ou texto colado)
+# - Lançar fiado: append sem limpar
+# - Lançar fiado em LOTE (CSV/colar texto → pré-visualizar/editar → salvar)
 # - Quitar por COMPETÊNCIA com atualização mínima
 # - Notificações com FOTO e card HTML; roteamento por funcionário (Vinícius → canal; JPaulo → privado)
 # - Comissão só p/ elegíveis (ex.: Vinicius)
-# - 💳 Maquininha: grava LÍQUIDO no campo Valor da BASE (e colunas extras: bruto/taxa) **apenas se usar_cartao=True**
+# - 💳 Maquininha: grava LÍQUIDO no campo Valor da BASE (e preenche colunas extras: bruto/taxa) **apenas se usar_cartao=True**
 # - Quitar por ID (combo inteiro) ou por LINHA (serviço)
 # - Fiado_Pagamentos salva TotalLiquido + TotalBruto + Taxa
-# - NOVO: 📦 Lançar fiado em lote + 📒 Registros (pagos)
+# - 📚 Registros (Pagos): filtros + totais + export + resumo Telegram
 
 import streamlit as st
 import pandas as pd
@@ -17,7 +18,7 @@ from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
 from gspread.utils import rowcol_to_a1
 from datetime import date, datetime, timedelta
-from io import BytesIO
+from io import BytesIO, StringIO
 import pytz
 import unicodedata
 
@@ -228,12 +229,6 @@ def historico_cliente_por_ano(df_base: pd.DataFrame, cliente: str) -> dict[int, 
     grp = df.groupby(df["__dt"].dt.year)["__valor"].sum().to_dict()
     return {int(ano): float(round(v, 2)) for ano, v in grp.items()}
 
-def ano_da_data_str(dstr: str, fmt: str = "%d/%m/%Y") -> int | None:
-    try:
-        return datetime.strptime(dstr, fmt).year
-    except Exception:
-        return None
-
 def breakdown_por_servico_no_ano(df_base: pd.DataFrame, cliente: str, ano: int, max_itens: int = 8):
     if df_base is None or df_base.empty or not cliente or not ano:
         return pd.DataFrame(columns=["Serviço","Qtd","Total"]), 0, 0.0, 0, 0.0
@@ -411,16 +406,16 @@ clientes, combos_exist, servs_exist, contas_exist = carregar_listas()
 FOTOS = carregar_fotos_mapa()
 
 # =========================
-# MENU
+# SIDEBAR
 # =========================
 st.sidebar.header("Ações")
 acao = st.sidebar.radio(
     "Escolha:",
-    ["➕ Lançar fiado", "💰 Registrar pagamento", "📋 Em aberto & exportação",
-     "📦 Lançar fiado em lote", "📒 Registros (pagos)"]
+    ["➕ Lançar fiado", "📥 Lançar em lote", "💰 Registrar pagamento", "📚 Registros (Pagos)", "📋 Em aberto & exportação"],
+    index=0
 )
 
-# ---------- 1) Lançar fiado (unitário) ----------
+# ---------- 1) Lançar fiado (individual) ----------
 if acao == "➕ Lançar fiado":
     st.subheader("➕ Lançar fiado — cria UMA linha por serviço na Base (Conta='Fiado', StatusFiado='Em aberto')")
 
@@ -505,6 +500,189 @@ if acao == "➕ Lançar fiado":
             except Exception:
                 pass
 
+# ---------- 1b) Lançar fiado em LOTE ----------
+elif acao == "📥 Lançar em lote":
+    st.subheader("📥 Lançar fiado em lote — cole CSV ou envie arquivo; revise e edite antes de salvar")
+    with st.expander("📄 Instruções do CSV (exemplo)", expanded=False):
+        st.markdown(
+            """
+**Colunas aceitas**  
+Obrigatórias: `Data`, `Cliente`, `Funcionário`, **e** ( `Combo` **ou** `Servicos`/`Serviço` )  
+Opcionais: `Vencimento`, `Tipo`, `Período`, `Fase`  
+- Datas no formato **DD/MM/AAAA**  
+- `Combo` e `Servicos` aceitam valores separados por `+` (ex.: `corte+barba`)  
+- Se valor não for informado, será usado o **valor padrão** definido no sistema.
+            """
+        )
+
+    c1, c2 = st.columns([1,1])
+    with c1:
+        uploaded = st.file_uploader("Enviar CSV", type=["csv"])
+    with c2:
+        texto = st.text_area("Ou cole o CSV (separador vírgula ou ponto-e-vírgula):", height=150)
+
+    df_in = pd.DataFrame()
+    if uploaded is not None:
+        raw = uploaded.read().decode("utf-8-sig")
+        try:
+            df_in = pd.read_csv(StringIO(raw))
+        except Exception:
+            df_in = pd.read_csv(StringIO(raw), sep=";")
+    elif texto.strip():
+        try:
+            df_in = pd.read_csv(StringIO(texto))
+        except Exception:
+            df_in = pd.read_csv(StringIO(texto), sep=";")
+
+    def _col(df, names):
+        for n in names:
+            if n in df.columns:
+                return n
+        return None
+
+    if not df_in.empty:
+        df = df_in.copy()
+        df.columns = [c.strip() for c in df.columns]
+        col_data  = _col(df, ["Data","data"])
+        col_cli   = _col(df, ["Cliente","cliente","Nome","nome"])
+        col_func  = _col(df, ["Funcionário","funcionário","Funcionario","funcionario"])
+        col_combo = _col(df, ["Combo","combo"])
+        col_servs = _col(df, ["Servicos","Serviços","servicos","serviços","Servico","Serviço"])
+        col_venc  = _col(df, ["Vencimento","vencimento"])
+        col_tipo  = _col(df, ["Tipo","tipo"])
+        col_per   = _col(df, ["Período","Periodo","periodo","período"])
+        col_fase  = _col(df, ["Fase","fase"])
+
+        missing = [x for x, c in {
+            "Data": col_data, "Cliente": col_cli, "Funcionário": col_func
+        }.items() if c is None]
+        if missing or (col_combo is None and col_servs is None):
+            st.error(f"CSV inválido. Faltando colunas: {missing or []}. É obrigatório ter Combo **ou** Servicos/Serviço.")
+        else:
+            # Expande linhas (uma por serviço) e aplica valores padrão
+            linhas = []
+            for _, r in df.iterrows():
+                data_str = str(r[col_data]).strip()
+                cliente  = str(r[col_cli]).strip()
+                func     = str(r[col_func]).strip() or "JPaulo"
+                fase     = str(r[col_fase]).strip() if col_fase else "Dono + funcionário"
+                tipo     = str(r[col_tipo]).strip() if col_tipo else "Serviço"
+                per      = str(r[col_per]).strip() if col_per else ""
+                venc     = str(r[col_venc]).strip() if col_venc else ""
+
+                combo_txt = str(r[col_combo]).strip() if col_combo else ""
+                serv_txt  = str(r[col_servs]).strip() if col_servs else ""
+                servicos  = parse_combo(combo_txt or serv_txt)
+
+                if not (data_str and cliente and func and servicos):
+                    continue
+
+                idl = gerar_id("L")
+                for s in servicos:
+                    valor_item = float(VALORES_PADRAO.get(s, 0.0))
+                    linhas.append({
+                        "IDLancFiado": idl,
+                        "Data": data_str,
+                        "Cliente": cliente,
+                        "Funcionário": func,
+                        "Serviço": s,
+                        "Valor": valor_item,
+                        "Combo": (combo_txt if combo_txt else ""),
+                        "Fase": fase,
+                        "Tipo": tipo,
+                        "Período": per,
+                        "VencimentoFiado": venc,
+                        "StatusFiado": "Em aberto"
+                    })
+
+            if not linhas:
+                st.warning("Nenhuma linha válida encontrada no CSV.")
+            else:
+                df_preview = pd.DataFrame(linhas)
+                st.caption("Revise os valores (editáveis):")
+                df_edit = st.data_editor(
+                    df_preview[["IDLancFiado","Data","Cliente","Funcionário","Serviço","Valor","Combo","Fase","Tipo","Período","VencimentoFiado"]],
+                    use_container_width=True,
+                    num_rows="fixed"
+                )
+
+                if st.button("Salvar lote", use_container_width=True):
+                    ss = conectar_sheets()
+                    ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
+                    ensure_headers(ws_base, BASE_COLS_ALL)
+
+                    novas = []
+                    for _, r in df_edit.iterrows():
+                        novas.append({
+                            "Data": str(r["Data"]).strip(),
+                            "Serviço": str(r["Serviço"]).strip(),
+                            "Valor": float(pd.to_numeric(r["Valor"], errors="coerce") or 0.0),
+                            "Conta": "Fiado",
+                            "Cliente": str(r["Cliente"]).strip(),
+                            "Combo": str(r.get("Combo","")).strip(),
+                            "Funcionário": str(r["Funcionário"]).strip(),
+                            "Fase": str(r.get("Fase","Dono + funcionário")).strip() or "Dono + funcionário",
+                            "Tipo": str(r.get("Tipo","Serviço")).strip() or "Serviço",
+                            "Período": str(r.get("Período","")).strip(),
+                            "StatusFiado": "Em aberto",
+                            "IDLancFiado": str(r["IDLancFiado"]).strip(),
+                            "VencimentoFiado": str(r.get("VencimentoFiado","")).strip(),
+                            "DataPagamento": "",
+                            "ValorBrutoRecebido":"", "ValorLiquidoRecebido":"", "TaxaCartaoValor":"", "TaxaCartaoPct":"",
+                            "FormaPagDetalhe":"", "PagamentoID":""
+                        })
+
+                    append_rows_base(ws_base, novas)
+
+                    # Atualiza Fiado_Lancamentos (um por ID)
+                    df_tmp = pd.DataFrame(novas)
+                    df_ids = (df_tmp.groupby(["IDLancFiado","Cliente","Funcionário","Combo"], as_index=False)
+                                   .agg(Data=("Data","min"), Total=("Valor","sum"), Venc=("VencimentoFiado","max")))
+                    ws_l = garantir_aba(ss, ABA_LANC, ["IDLanc","Data","Cliente","Combo","Servicos","Total","Venc","Func","Fase","Tipo","Periodo"])
+                    for _, rr in df_ids.iterrows():
+                        servs_do_id = df_tmp[df_tmp["IDLancFiado"] == rr["IDLancFiado"]]["Serviço"].tolist()
+                        append_rows_generic(ws_l, [{
+                            "IDLanc": rr["IDLancFiado"],
+                            "Data": rr["Data"],
+                            "Cliente": rr["Cliente"],
+                            "Combo": rr["Combo"],
+                            "Servicos": "+".join(servs_do_id),
+                            "Total": float(rr["Total"]),
+                            "Venc": rr["Venc"],
+                            "Func": rr["Funcionário"],
+                            "Fase": "Dono + funcionário",
+                            "Tipo": "Serviço",
+                            "Periodo": ""
+                        }], default_headers=["IDLanc","Data","Cliente","Combo","Servicos","Total","Venc","Func","Fase","Tipo","Periodo"])
+
+                    st.success(f"Lote salvo com {len(novas)} linhas na Base.")
+                    st.cache_data.clear()
+
+                    # Telegram por ID
+                    try:
+                        for idl, grp in df_tmp.groupby("IDLancFiado"):
+                            cliente = str(grp["Cliente"].iloc[0]).strip()
+                            func    = str(grp["Funcionário"].iloc[0]).strip()
+                            data_id = str(grp["Data"].iloc[0]).strip()
+                            venc_id = str(grp["VencimentoFiado"].iloc[0]).strip()
+                            total   = float(pd.to_numeric(grp["Valor"], errors="coerce").fillna(0).sum())
+                            servtxt = "+".join(sorted(grp["Serviço"].astype(str).tolist()))
+                            msg_html = (
+                                "🧾 <b>Novo fiado (lote)</b>\n"
+                                f"👤 Cliente: <b>{cliente}</b>\n"
+                                f"🧰 Serviço(s): <b>{servtxt}</b>\n"
+                                f"💵 Total: <b>{_fmt_brl(total)}</b>\n"
+                                f"📅 Atendimento: {data_id}\n"
+                                f"⏳ Vencimento: {venc_id or '-'}\n"
+                                f"🆔 ID: <code>{idl}</code>"
+                            )
+                            chat_dest = _chat_id_por_func(func)
+                            foto = FOTOS.get(_norm(cliente))
+                            if foto: tg_send_photo(foto, msg_html, chat_id=chat_dest)
+                            else:    tg_send(msg_html, chat_id=chat_dest)
+                    except Exception:
+                        pass
+
 # ---------- 2) Registrar pagamento ----------
 elif acao == "💰 Registrar pagamento":
     st.subheader("💰 Registrar pagamento — escolha o cliente e depois o(s) fiado(s) em aberto")
@@ -527,7 +705,7 @@ elif acao == "💰 Registrar pagamento":
     with colc2:
         forma_pag = st.selectbox("Forma de pagamento (quitação)", options=lista_contas, index=default_idx)
 
-    # === checkbox de cartão ===
+    # === checkbox de cartão (mesma lógica do 11) ===
     force_off = is_nao_cartao(forma_pag)
     usar_cartao = st.checkbox(
         "Tratar como cartão (com taxa)?",
@@ -611,10 +789,6 @@ elif acao == "💰 Registrar pagamento":
     taxa_valor_est = 0.0
     taxa_pct_est = 0.0
     subset_preview = pd.DataFrame()
-
-    ss = conectar_sheets()  # reutiliza depois
-    if cliente_sel:
-        df_base_full, ws_base2 = read_base_raw(ss)
 
     if cliente_sel:
         if modo_sel.startswith("Por ID"):
@@ -768,7 +942,6 @@ elif acao == "💰 Registrar pagamento":
             )
             st.cache_data.clear()
 
-            # Telegram — clientes / funcionários
             try:
                 servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
                 ids_txt = ", ".join(sorted(set(subset_all["IDLancFiado"].astype(str))))
@@ -798,7 +971,6 @@ elif acao == "💰 Registrar pagamento":
             except Exception:
                 pass
 
-            # Telegram — cópia p/ JP com histórico + comissões
             try:
                 sub = subset_all.copy()
                 sub["Valor"] = pd.to_numeric(sub["Valor"], errors="coerce").fillna(0.0)  # bruto original p/ comissão
@@ -862,8 +1034,132 @@ elif acao == "💰 Registrar pagamento":
             except Exception:
                 pass
 
-# ---------- 3) Em aberto & exportação ----------
-elif acao == "📋 Em aberto & exportação":
+# ---------- 3) 📚 Registros (Pagos) ----------
+elif acao == "📚 Registros (Pagos)":
+    st.subheader("📚 Registros de Fiados Pagos — filtros, totais e exportação")
+
+    ss = conectar_sheets()
+    df_base, _ = read_base_raw(ss)
+    try:
+        ws_p = garantir_aba(ss, ABA_PAGT, PAGT_COLS)
+        ensure_headers(ws_p, PAGT_COLS)
+        df_pagt = get_as_dataframe(ws_p, evaluate_formulas=True, header=0).fillna("")
+        df_pagt.columns = [str(c).strip() for c in df_pagt.columns]
+        df_pagt = df_pagt.loc[:, ~pd.Index(df_pagt.columns).duplicated(keep="first")]
+    except Exception:
+        df_pagt = pd.DataFrame(columns=PAGT_COLS)
+
+    if df_pagt.empty:
+        st.info("Ainda não há pagamentos registrados.")
+    else:
+        # Parse datas e números
+        def _to_dt(s):
+            try:
+                return datetime.strptime(str(s), DATA_FMT).date()
+            except Exception:
+                return None
+
+        for col in ["TotalBruto","TotalLiquido","TaxaValor","TaxaPct"]:
+            if col in df_pagt.columns:
+                df_pagt[col] = pd.to_numeric(df_pagt[col], errors="coerce").fillna(0.0)
+
+        df_pagt["__Data"] = df_pagt["DataPagamento"].map(_to_dt)
+
+        min_dt = min([d for d in df_pagt["__Data"].dropna().tolist()] or [date.today()])
+        max_dt = max([d for d in df_pagt["__Data"].dropna().tolist()] or [date.today()])
+
+        c1, c2, c3, c4 = st.columns([1,1,1,1])
+        with c1:
+            dt_ini = st.date_input("De", value=min_dt)
+        with c2:
+            dt_fim = st.date_input("Até", value=max_dt)
+        with c3:
+            clientes_opts = sorted(df_pagt["Cliente"].astype(str).unique().tolist())
+            cli_sel = st.multiselect("Cliente", clientes_opts, default=[])
+        with c4:
+            formas_opts = sorted(df_pagt["Forma"].astype(str).unique().tolist())
+            forma_sel = st.multiselect("Forma", formas_opts, default=[])
+
+        mask = df_pagt["__Data"].apply(lambda d: (d is not None) and (dt_ini <= d <= dt_fim))
+        if cli_sel:
+            mask &= df_pagt["Cliente"].astype(str).isin(cli_sel)
+        if forma_sel:
+            mask &= df_pagt["Forma"].astype(str).isin(forma_sel)
+
+        df_view = df_pagt[mask].copy()
+
+        # Enriquecer com Funcionários & Serviços (a partir da Base pelas linhas com PagamentoID)
+        if not df_view.empty:
+            base_paid = df_base[df_base["PagamentoID"].astype(str).isin(df_view["IDPagamento"].astype(str))].copy()
+            base_paid["ValorNum"] = pd.to_numeric(base_paid["ValorBrutoRecebido"], errors="coerce").fillna(
+                pd.to_numeric(base_paid["Valor"], errors="coerce").fillna(0.0)
+            )
+            funcs_by_pay = (base_paid.groupby("PagamentoID")["Funcionário"]
+                                     .apply(lambda x: ", ".join(sorted(set(x.dropna().astype(str))))))
+            servs_by_pay = (base_paid.groupby("PagamentoID")
+                                     .apply(lambda g: "+".join(sorted(set(g["Serviço"].dropna().astype(str))))))
+            df_view["Funcionários"] = df_view["IDPagamento"].map(funcs_by_pay.to_dict())
+            df_view["Serviços"] = df_view["IDPagamento"].map(servs_by_pay.to_dict())
+
+        # Totais
+        total_bruto = float(pd.to_numeric(df_view["TotalBruto"], errors="coerce").fillna(0).sum())
+        total_liq   = float(pd.to_numeric(df_view["TotalLiquido"], errors="coerce").fillna(0).sum())
+        taxa_val    = float(pd.to_numeric(df_view["TaxaValor"], errors="coerce").fillna(0).sum())
+        taxa_pct_med = (taxa_val / total_bruto * 100.0) if total_bruto > 0 else 0.0
+
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.metric("Total bruto", _fmt_brl(total_bruto))
+        with m2:
+            st.metric("Total líquido", _fmt_brl(total_liq))
+        with m3:
+            st.metric("Taxa total (média %)", f"{_fmt_brl(taxa_val)} · {_fmt_pct(taxa_pct_med)}")
+
+        view_cols = ["IDPagamento","DataPagamento","Cliente","Forma","TotalBruto","TotalLiquido","TaxaValor","TaxaPct","Funcionários","Serviços","IDLancs","Obs"]
+        view_cols = [c for c in view_cols if c in df_view.columns]
+        st.dataframe(df_view[view_cols].sort_values("DataPagamento", ascending=False), use_container_width=True, hide_index=True)
+
+        # Export
+        exp1, exp2, exp3 = st.columns([1,1,2])
+        with exp1:
+            try:
+                from openpyxl import Workbook  # noqa
+                buf = BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                    df_view[view_cols].sort_values("DataPagamento").to_excel(w, index=False, sheet_name="Pagos")
+                st.download_button("⬇️ Exportar (Excel)", data=buf.getvalue(), file_name="fiados_pagos.xlsx")
+            except Exception:
+                pass
+        with exp2:
+            csv_bytes = df_view[view_cols].sort_values("DataPagamento").to_csv(index=False).encode("utf-8-sig")
+            st.download_button("⬇️ Exportar (CSV)", data=csv_bytes, file_name="fiados_pagos.csv")
+
+        # Resumo Telegram (JP)
+        with exp3:
+            if st.button("📲 Enviar resumo ao Telegram (JP)", use_container_width=True, type="secondary"):
+                try:
+                    linha_cli = ""
+                    top_cli = (df_view.groupby("Cliente")["TotalLiquido"].sum()
+                                     .sort_values(ascending=False).head(5))
+                    if not top_cli.empty:
+                        itens = [f"• {k}: <b>{_fmt_brl(v)}</b>" for k, v in top_cli.items()]
+                        linha_cli = "\nTop 5 clientes (líquido):\n" + "\n".join(itens)
+
+                    msg = (
+                        "📚 <b>Registros de fiado pagos</b>\n"
+                        f"🗓️ Período: {dt_ini.strftime(DATA_FMT)} → {dt_fim.strftime(DATA_FMT)}\n"
+                        f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
+                        f"💵 Líquido: <b>{_fmt_brl(total_liq)}</b>\n"
+                        f"🧾 Taxa: <b>{_fmt_brl(taxa_val)} ({_fmt_pct(taxa_pct_med)})</b>"
+                        + (f"\n{linha_cli}" if linha_cli else "")
+                    )
+                    tg_send(msg, chat_id=_get_chat_id_jp())
+                    st.success("Resumo enviado ao Telegram (JP).")
+                except Exception:
+                    st.error("Falha ao enviar o resumo ao Telegram.")
+
+# ---------- 4) Em aberto & exportação ----------
+else:
     st.subheader("📋 Fiados em aberto (agrupados por ID)")
     ss = conectar_sheets()
     df_base_full, _ = read_base_raw(ss)
@@ -933,200 +1229,3 @@ elif acao == "📋 Em aberto & exportação":
                     index=False
                 ).encode("utf-8-sig")
                 st.download_button("⬇️ Exportar (CSV)", data=csv_bytes, file_name="fiado_em_aberto.csv")
-
-# ---------- 4) Lançar fiado em lote (NOVO) ----------
-elif acao == "📦 Lançar fiado em lote":
-    st.subheader("📦 Lançar fiado em lote")
-    st.markdown(
-        "Envie um **CSV/Excel** ou cole uma tabela. Colunas aceitas (títulos livres):\n"
-        "- **Cliente** (obrigatório)\n"
-        "- **Data** (DD/MM/AAAA) — se vazio, usa hoje\n"
-        "- **Funcionário** (JPaulo/Vinicius) — se vazio, usa JPaulo\n"
-        "- **Combo** (ex: 'corte+barba') **ou** **Serviço** (uma opção)\n"
-        "- **Valor** (opcional; se vazio, usa valor padrão por serviço)\n"
-        "- **Vencimento** (opcional, DD/MM/AAAA)\n"
-        "- **Fase** (opcional; padrão 'Dono + funcionário')\n"
-        "- **Tipo** (Serviço/Produto; padrão Serviço)\n"
-        "- **Período** (Manhã/Tarde/Noite; opcional)"
-    )
-
-    up = st.file_uploader("Enviar CSV/XLSX", type=["csv","xlsx","xls"])
-    texto = st.text_area("Ou cole dados (CSV simples com cabeçalho)", height=160, placeholder="Cliente,Data,Funcionário,Combo,Serviço,Valor,Vencimento,Fase,Tipo,Período\nJoão,21/08/2025,Vinicius,corte+barba,,,\nMaria,22/08/2025,, ,Corte,25,25/08/2025,Dono + funcionário,Serviço,Manhã")
-
-    df_lote = pd.DataFrame()
-    if up is not None:
-        try:
-            if up.name.lower().endswith(".csv"):
-                df_lote = pd.read_csv(up).fillna("")
-            else:
-                df_lote = pd.read_excel(up).fillna("")
-        except Exception as e:
-            st.error(f"Erro ao ler arquivo: {e}")
-    elif texto.strip():
-        try:
-            from io import StringIO
-            df_lote = pd.read_csv(StringIO(texto)).fillna("")
-        except Exception as e:
-            st.error(f"Texto não pôde ser lido como CSV: {e}")
-
-    if not df_lote.empty:
-        # normaliza colunas
-        m = {c.lower().strip(): c for c in df_lote.columns}
-        def col(*ops): 
-            for o in ops:
-                if o in m: return m[o]
-            return None
-
-        col_cliente     = col("cliente","nome","nome_cliente")
-        col_data        = col("data","data_atendimento")
-        col_func        = col("funcionário","funcionario","barbeiro")
-        col_combo       = col("combo")
-        col_servico     = col("serviço","servico")
-        col_valor       = col("valor","preco","preço")
-        col_venc        = col("vencimento","venc")
-        col_fase        = col("fase")
-        col_tipo        = col("tipo")
-        col_periodo     = col("período","periodo")
-
-        obrig = [col_cliente]
-        if not all(obrig):
-            st.error("Coluna 'Cliente' é obrigatória no lote.")
-        else:
-            # pré-visualização
-            prev = df_lote.copy()
-            st.dataframe(prev, use_container_width=True, hide_index=True)
-
-            if st.button("Salvar LOTE", use_container_width=True):
-                ss = conectar_sheets()
-                ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
-                ensure_headers(ws_base, BASE_COLS_ALL)
-                ws_lanc = garantir_aba(ss, ABA_LANC, ["IDLanc","Data","Cliente","Combo","Servicos","Total","Venc","Func","Fase","Tipo","Periodo"])
-
-                novas_all = []
-                lancs_all = []
-                for _, r in df_lote.iterrows():
-                    cliente = str(r[col_cliente]).strip()
-
-                    # Data atendimento
-                    if col_data and str(r[col_data]).strip():
-                        try:
-                            d = pd.to_datetime(str(r[col_data]), dayfirst=True, errors="coerce")
-                            data_str = d.strftime(DATA_FMT)
-                        except Exception:
-                            data_str = date.today().strftime(DATA_FMT)
-                    else:
-                        data_str = date.today().strftime(DATA_FMT)
-
-                    funcionario = (str(r[col_func]).strip() if col_func and str(r[col_func]).strip() else "JPaulo")
-                    fase = (str(r[col_fase]).strip() if col_fase and str(r[col_fase]).strip() else "Dono + funcionário")
-                    tipo = (str(r[col_tipo]).strip() if col_tipo and str(r[col_tipo]).strip() else "Serviço")
-                    periodo = (str(r[col_periodo]).strip() if col_periodo and str(r[col_periodo]).strip() else "")
-
-                    combo_str = str(r[col_combo]).strip() if col_combo else ""
-                    servico_unico = str(r[col_servico]).strip() if col_servico else ""
-
-                    # Vencimento
-                    if col_venc and str(r[col_venc]).strip():
-                        try:
-                            v = pd.to_datetime(str(r[col_venc]), dayfirst=True, errors="coerce")
-                            venc_str = v.strftime(DATA_FMT)
-                        except Exception:
-                            venc_str = ""
-                    else:
-                        venc_str = ""
-
-                    # Serviços
-                    servicos = parse_combo(combo_str) if combo_str else ([servico_unico] if servico_unico else [])
-                    if not servicos:
-                        # se não veio nem combo nem serviço, pula
-                        continue
-
-                    # Valor: se vier único, usa esse nas linhas (primeira linha), restantes por padrão
-                    valor_in = None
-                    if col_valor and str(r[col_valor]).strip():
-                        try:
-                            valor_in = float(str(r[col_valor]).replace(",", "."))
-                        except Exception:
-                            valor_in = None
-
-                    idl = gerar_id("L")
-                    total_lanc = 0.0
-                    for i, s in enumerate(servicos):
-                        val_item = VALORES_PADRAO.get(s, 0.0)
-                        if valor_in is not None and i == 0:
-                            val_item = float(valor_in)
-                        novas_all.append({
-                            "Data": data_str, "Serviço": s, "Valor": val_item, "Conta": "Fiado",
-                            "Cliente": cliente, "Combo": combo_str if combo_str else "", "Funcionário": funcionario,
-                            "Fase": fase, "Tipo": tipo, "Período": periodo,
-                            "StatusFiado": "Em aberto", "IDLancFiado": idl, "VencimentoFiado": venc_str,
-                            "DataPagamento": "",
-                            "ValorBrutoRecebido":"", "ValorLiquidoRecebido":"", "TaxaCartaoValor":"", "TaxaCartaoPct":"",
-                            "FormaPagDetalhe":"", "PagamentoID":""
-                        })
-                        total_lanc += float(val_item)
-
-                    lancs_all.append({
-                        "IDLanc": idl, "Data": data_str, "Cliente": cliente, "Combo": combo_str,
-                        "Servicos": "+".join(servicos), "Total": total_lanc, "Venc": venc_str, "Func": funcionario,
-                        "Fase": fase, "Tipo": tipo, "Periodo": periodo
-                    })
-
-                if novas_all:
-                    append_rows_base(ws_base, novas_all)
-                    append_rows_generic(ws_lanc, lancs_all, default_headers=["IDLanc","Data","Cliente","Combo","Servicos","Total","Venc","Func","Fase","Tipo","Periodo"])
-                    st.success(f"Lote inserido com sucesso: {len(lancs_all)} fiados (IDs) • {len(novas_all)} linhas na Base.")
-                    st.cache_data.clear()
-                else:
-                    st.warning("Nada foi inserido (verifique as colunas).")
-
-# ---------- 5) Registros (pagos) — NOVO ----------
-else:  # "📒 Registros (pagos)"
-    st.subheader("📒 Registros de Pagamentos de Fiado")
-
-    ss = conectar_sheets()
-    # Planilha de pagamentos
-    try:
-        ws_p = garantir_aba(ss, ABA_PAGT, PAGT_COLS)
-        ensure_headers(ws_p, PAGT_COLS)
-        df_pag = get_as_dataframe(ws_p, evaluate_formulas=True, header=0).fillna("")
-        df_pag.columns = [str(c).strip() for c in df_pag.columns]
-    except Exception:
-        df_pag = pd.DataFrame(columns=PAGT_COLS)
-
-    # Base (para buscar funcionário via PagamentoID)
-    df_base, _ = read_base_raw(ss)
-
-    # filtros
-    c1, c2, c3 = st.columns([1,1,1])
-    with c1:
-        dt_ini = st.date_input("Início", value=date.today().replace(day=1))
-    with c2:
-        dt_fim = st.date_input("Fim", value=date.today())
-    with c3:
-        cliente_f = st.text_input("Filtrar por cliente (opcional)", "")
-
-    # aplica filtro de datas
-    def parse_dt(s):
-        try:
-            return datetime.strptime(str(s), DATA_FMT).date()
-        except Exception:
-            return None
-    df_pag["__dt"] = df_pag["DataPagamento"].apply(parse_dt)
-    mask = df_pag["__dt"].notna()
-    if dt_ini:
-        mask &= (df_pag["__dt"] >= dt_ini)
-    if dt_fim:
-        mask &= (df_pag["__dt"] <= dt_fim)
-    if cliente_f.strip():
-        mask &= df_pag["Cliente"].astype(str).str.contains(cliente_f.strip(), case=False, na=False)
-
-    df_view = df_pag[mask].copy()
-
-    # Totais
-    def to_num(s):
-        try:
-            return float(str(s).replace(",", "."))
-        except Exception:
-            return 0.0
-    df_view["
