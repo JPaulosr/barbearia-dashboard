@@ -1,420 +1,160 @@
-# -*- coding: utf-8 -*-
-# 15_Atendimentos_Masculino_Por_Dia.py
-# Página: escolher um dia e ver TODOS os atendimentos (masculino),
-# KPIs gerais, por funcionário, gráfico comparativo e histórico (com Top 5).
-# + MODO DE CONFERÊNCIA: marcar conferido e excluir registros no Sheets.
-
 import streamlit as st
 import pandas as pd
-import gspread
-import io
 import plotly.express as px
-from google.oauth2.service_account import Credentials
+import gspread
 from gspread_dataframe import get_as_dataframe
-from datetime import datetime, date
-import pytz, textwrap
+from google.oauth2.service_account import Credentials
 
-# =========================
-# CONFIG
-# =========================
+st.set_page_config(layout="wide")
+st.title("📊 Dashboard Salão JP")
+
+# === CONFIGURAÇÃO GOOGLE SHEETS ===
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"  # Masculino
-TZ = "America/Sao_Paulo"
-DATA_FMT = "%d/%m/%Y"
+BASE_ABA = "Base de Dados"
 
-FUNC_JPAULO = "JPaulo"
-FUNC_VINICIUS = "Vinicius"
-
-DATA_CORRETA = datetime(2025, 5, 11).date()
-
-# =========================
-# UTILS
-# =========================
-def _tz_now():
-    return datetime.now(pytz.timezone(TZ))
-
-def _fmt_data(d):
-    if pd.isna(d): return ""
-    if isinstance(d, (pd.Timestamp, datetime)): return d.strftime(DATA_FMT)
-    if isinstance(d, date): return d.strftime(DATA_FMT)
-    d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
-    return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
-
-@st.cache_resource(show_spinner=False)
-def _conectar_sheets():
+@st.cache_resource
+def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
-    creds = Credentials.from_service_account_info(
-        info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"]
-    )
-    return gspread.authorize(creds)
+    escopo = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    credenciais = Credentials.from_service_account_info(info, scopes=escopo)
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(SHEET_ID)
 
-@st.cache_data(ttl=300, show_spinner=False)
-def carregar_base():
-    gc = _conectar_sheets()
-    sh = gc.open_by_key(SHEET_ID)
-    ws = sh.worksheet(ABA_DADOS)
-    df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
-    df = df.dropna(how="all")
-    if df.empty: return pd.DataFrame()
-    df["SheetRow"] = df.index + 2
-    df.columns = [str(c).strip() for c in df.columns]
-
-    # colunas mínimas
-    cols = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário",
-            "Fase","Hora Chegada","Hora Início","Hora Saída",
-            "Hora Saída do Salão","Tipo","Conferido"]
-    for c in cols:
-        if c not in df.columns: df[c] = None
-
-    # datas
-    def parse_data(x):
-        if pd.isna(x): return None
-        if isinstance(x,(datetime,pd.Timestamp)): return x.date()
-        s = str(x).strip()
-        for fmt in ["%d/%m/%Y","%d-%m-%Y","%Y-%m-%d","%d/%m/%y"]:
-            try: return datetime.strptime(s,fmt).date()
-            except: pass
-        return None
-    df["Data_norm"] = df["Data"].apply(parse_data)
-
-    # valores
-    def parse_valor(v):
-        if pd.isna(v): return 0.0
-        s = str(v).replace("R$","").replace(" ","")
-        if "," in s and "." in s: s = s.replace(".","").replace(",",".")
-        else: s = s.replace(",",".")
-        try: return float(s)
-        except: return 0.0
-    df["Valor_num"] = df["Valor"].apply(parse_valor)
-
-    for col in ["Cliente","Serviço","Funcionário","Conta","Combo","Tipo","Fase"]:
-        df[col] = df[col].astype(str).fillna("").str.strip()
-
-    def to_bool(x):
-        if isinstance(x,bool): return x
-        return str(x).strip().lower() in ("1","true","sim","ok","y","yes")
-    df["Conferido"] = df["Conferido"].apply(to_bool)
-
+@st.cache_data
+def carregar_dados():
+    planilha = conectar_sheets()
+    aba = planilha.worksheet(BASE_ABA)
+    df = get_as_dataframe(aba).dropna(how="all")
+    df.columns = [str(col).strip() for col in df.columns]
+    # Normaliza Data
+    df["Data"] = pd.to_datetime(df["Data"], errors='coerce')
+    df = df.dropna(subset=["Data"])
+    # Derivadas de tempo
+    df["Ano"] = df["Data"].dt.year
+    df["Mês"] = df["Data"].dt.month
+    df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
     return df
 
-def filtrar_por_dia(df, dia):
-    if df.empty or dia is None: return df.iloc[0:0]
-    return df[df["Data_norm"]==dia].copy()
+df_full = carregar_dados()  # base intacta para partirmos sempre do mesmo lugar
 
-def contar_atendimentos_dia(df):
-    if df.empty: return 0
-    dia = df["Data_norm"].dropna().iloc[0]
-    if dia < DATA_CORRETA: return len(df)
-    return df.groupby(["Cliente","Data_norm"]).ngroups
+# --- Identifica coluna de pagamento/conta que indica FIADO ---
+col_conta = next(
+    (c for c in df_full.columns if c.strip().lower() in ["conta", "forma de pagamento", "pagamento", "status"]),
+    None
+)
+if col_conta:
+    is_fiado_full = df_full[col_conta].astype(str).str.strip().str.lower().eq("fiado")
+else:
+    is_fiado_full = pd.Series(False, index=df_full.index)  # se não houver coluna, ninguém é fiado
 
-def kpis(df):
-    if df.empty: return 0,0,0.0,0.0
-    cli = contar_atendimentos_dia(df)
-    srv = len(df)
-    rec = float(df["Valor_num"].sum())
-    tkt = rec/cli if cli>0 else 0.0
-    return cli,srv,rec,tkt
+# === Sidebar: Filtros ===
+st.sidebar.header("🎛️ Filtros")
 
-def format_moeda(v):
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X",".")
+# Filtro de pagamento (igual à imagem)
+pagamento_opcao = st.sidebar.radio(
+    "Filtro de pagamento",
+    ["Apenas pagos", "Apenas fiado", "Incluir tudo"],
+    index=0,
+    help="Pagos = tudo que NÃO é 'Fiado'. Escolha 'Apenas fiado' para ver somente fiados; "
+         "'Incluir tudo' considera pagos + fiados."
+)
+aplicar_hist = st.sidebar.checkbox("Aplicar no histórico (tabela)", value=False)
 
-def preparar_tabela_exibicao(df):
-    cols = ["Data","Cliente","Serviço","Valor","Conta","Funcionário","Combo",
-            "Tipo","Hora Chegada","Hora Início","Hora Saída","Hora Saída do Salão"]
-    for c in cols:
-        if c not in df.columns: df[c]=""
-    out=df.copy()
-    out["Data"]=out["Data_norm"].apply(_fmt_data)
-    out["Valor"]=out["Valor_num"].apply(format_moeda)
-    return out[cols]
+# Máscara para valores (receita)
+if pagamento_opcao == "Apenas pagos":
+    mask_valores_full = ~is_fiado_full
+elif pagamento_opcao == "Apenas fiado":
+    mask_valores_full = is_fiado_full
+else:  # Incluir tudo
+    mask_valores_full = pd.Series(True, index=df_full.index)
 
-def gerar_excel(df1,df2):
-    buf=io.BytesIO()
-    with pd.ExcelWriter(buf,engine="xlsxwriter") as w:
-        df1.to_excel(w,"Linhas",index=False)
-        df2.to_excel(w,"ResumoClientes",index=False)
-    return buf.getvalue()
+# Máscara para base histórica (tabelas/contagens)
+mask_historico_full = mask_valores_full if aplicar_hist else pd.Series(True, index=df_full.index)
 
-# ============= HELPER HTML =============
-def html(s:str):
-    st.markdown(textwrap.dedent(s), unsafe_allow_html=True)
+# --- Deriva bases com as máscaras escolhidas ---
+df_valores_full = df_full[mask_valores_full].copy()   # usado para somatórios/gráficos de VALOR
+df_hist_full    = df_full[mask_historico_full].copy() # usado para histórico/contagens/tabelas
 
-def card(label,val):
-    return f'<div class="card"><div class="label">{label}</div><div class="value">{val}</div></div>'
+# === Filtro por Ano e Meses múltiplos ===
+anos_disponiveis = sorted(df_full["Ano"].dropna().unique(), reverse=True)
+ano_escolhido = st.sidebar.selectbox("🗓️ Escolha o Ano", anos_disponiveis)
 
-# =========================
-# UI
-# =========================
-st.set_page_config(page_title="Atendimentos por Dia (Masculino)", page_icon="📅", layout="wide")
-st.title("📅 Atendimentos por Dia — Masculino")
-st.caption("KPIs do dia, comparativo por funcionário e histórico dos dias com mais atendimentos (regra de 11/05/2025 aplicada).")
-
-with st.spinner("Carregando base masculina..."):
-    df_base = carregar_base()
-
-hoje=_tz_now().date()
-dia_selecionado=st.date_input("Dia",value=hoje,format="DD/MM/YYYY")
-df_dia=filtrar_por_dia(df_base,dia_selecionado)
-if df_dia.empty:
-    st.info("Nenhum atendimento encontrado para o dia selecionado.")
-    st.stop()
-
-# ========== CSS CARDS ==========
-html("""
-<style>
-.metrics-wrap{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}
-.metrics-wrap .card{
-  background:rgba(255,255,255,0.04);
-  border:1px solid rgba(255,255,255,0.08);
-  border-radius:12px;
-  padding:12px 14px;
-  min-width:160px;
-  flex:1 1 200px;
+meses_pt = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
-.metrics-wrap .card .label{font-size:0.9rem;opacity:.85;margin-bottom:6px}
-.metrics-wrap .card .value{font-weight:700;font-size:clamp(18px,3.8vw,28px);line-height:1.15;word-break:break-word}
-.section-h{font-weight:700;margin:12px 0 6px}
-</style>
-""")
 
-# KPIs do dia
-cli,srv,rec,_=kpis(df_dia)
-html('<div class="metrics-wrap">'+
-     card("👥 Clientes atendidos",f"{cli}")+
-     card("✂️ Serviços realizados",f"{srv}")+
-     card("💰 Receita do dia",format_moeda(rec))+
-     '</div>')
+meses_disponiveis = sorted(df_full[df_full["Ano"] == ano_escolhido]["Mês"].dropna().unique())
+mes_opcoes = [meses_pt[m] for m in meses_disponiveis]
+meses_selecionados = st.sidebar.multiselect("📆 Selecione os Meses (opcional)", mes_opcoes, default=mes_opcoes)
+
+if meses_selecionados:
+    meses_numeros = [k for k, v in meses_pt.items() if v in meses_selecionados]
+    df_hist = df_hist_full[(df_hist_full["Ano"] == ano_escolhido) & (df_hist_full["Mês"].isin(meses_numeros))].copy()
+    df_valores = df_valores_full[(df_valores_full["Ano"] == ano_escolhido) & (df_valores_full["Mês"].isin(meses_numeros))].copy()
+else:
+    df_hist = df_hist_full[df_hist_full["Ano"] == ano_escolhido].copy()
+    df_valores = df_valores_full[df_valores_full["Ano"] == ano_escolhido].copy()
+
+# Coluna numérica de valor para as bases de VALOR
+df_valores["ValorNum"] = pd.to_numeric(df_valores["Valor"], errors="coerce").fillna(0)
+
+# === Indicadores principais ===
+receita_total = df_valores["ValorNum"].sum()  # respeita o filtro de pagamento
+total_atendimentos = len(df_hist)             # respeita "Aplicar no histórico (tabela)" se marcado
+
+# Clientes únicos com a regra 11/05/2025 (na base histórica)
+data_limite = pd.to_datetime("2025-05-11")
+antes = df_hist[df_hist["Data"] < data_limite]
+depois = df_hist[df_hist["Data"] >= data_limite].drop_duplicates(subset=["Cliente", "Data"])
+clientes_unicos = pd.concat([antes, depois])["Cliente"].nunique()
+
+ticket_medio = receita_total / total_atendimentos if total_atendimentos else 0
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("💰 Receita Total", f"R$ {receita_total:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col2.metric("📅 Total de Atendimentos", total_atendimentos)
+col3.metric("🎯 Ticket Médio", f"R$ {ticket_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+col4.metric("🟢 Clientes Ativos", clientes_unicos)
+
+# === Receita por Funcionário ===
+st.markdown("### 📊 Receita por Funcionário")
+df_func = df_valores.groupby("Funcionário")["ValorNum"].sum().reset_index().rename(columns={"ValorNum": "Valor"})
+fig_func = px.bar(df_func, x="Funcionário", y="Valor", text_auto=True)
+fig_func.update_traces(marker_color=["#5179ff", "#33cc66", "#ff9933"])
+fig_func.update_layout(height=400, yaxis_title="Receita (R$)", showlegend=False)
+st.plotly_chart(fig_func, use_container_width=True)
+
+# === Receita por Tipo ===
+st.markdown("### 🧾 Receita por Tipo")
+df_tipo = df_valores.copy()
+df_tipo["Tipo"] = df_tipo["Serviço"].apply(
+    lambda x: "Combo" if "combo" in str(x).lower()
+    else "Produto" if ("gel" in str(x).lower() or "produto" in str(x).lower())
+    else "Serviço"
+)
+df_pizza = df_tipo.groupby("Tipo")["ValorNum"].sum().reset_index().rename(columns={"ValorNum": "Valor"})
+fig_pizza = px.pie(df_pizza, values="Valor", names="Tipo", title="Distribuição de Receita")
+fig_pizza.update_traces(textinfo='percent+label')
+st.plotly_chart(fig_pizza, use_container_width=True)
+
+# === Top 10 Clientes (frequência da base histórica + valor da base de valores) ===
+st.markdown("### 🥇 Top 10 Clientes")
+nomes_excluir = ["boliviano", "brasileiro", "menino"]
+
+# contagem de serviços (frequência) — histórica (pode ou não aplicar fiado, conforme checkbox)
+cnt = df_hist.groupby("Cliente")["Serviço"].count().rename("Qtd_Serviços")
+
+# soma de valores — sempre respeita filtro de pagamento escolhido
+val = df_valores.groupby("Cliente")["ValorNum"].sum().rename("Valor")
+
+df_top = pd.concat([cnt, val], axis=1).reset_index().fillna(0)
+df_top = df_top[~df_top["Cliente"].str.lower().isin(nomes_excluir)]
+df_top = df_top.sort_values(by="Valor", ascending=False).head(10)
+df_top["Valor Formatado"] = df_top["Valor"].apply(lambda x: f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+
+st.dataframe(df_top[["Cliente", "Qtd_Serviços", "Valor Formatado"]], use_container_width=True)
 
 st.markdown("---")
-
-# Por funcionário
-st.subheader("📊 Por Funcionário (dia selecionado)")
-df_j=df_dia[df_dia["Funcionário"].str.casefold()==FUNC_JPAULO.casefold()]
-df_v=df_dia[df_dia["Funcionário"].str.casefold()==FUNC_VINICIUS.casefold()]
-cli_j,srv_j,rec_j,_=kpis(df_j)
-cli_v,srv_v,rec_v,_=kpis(df_v)
-
-col_j,col_v=st.columns(2)
-with col_j:
-    html(f'<div class="section-h">{FUNC_JPAULO}</div>')
-    html('<div class="metrics-wrap">'+
-         card("Clientes",f"{cli_j}")+
-         card("Serviços",f"{srv_j}")+
-         card("Receita",format_moeda(rec_j))+
-         '</div>')
-with col_v:
-    html(f'<div class="section-h">{FUNC_VINICIUS}</div>')
-    html('<div class="metrics-wrap">'+
-         card("Clientes",f"{cli_v}")+
-         card("Serviços",f"{srv_v}")+
-         card("Receita",format_moeda(rec_v))+
-         '</div>')
-
-# Gráfico comparativo
-df_comp=pd.DataFrame([
-    {"Funcionário":FUNC_JPAULO,"Clientes":cli_j,"Serviços":srv_j},
-    {"Funcionário":FUNC_VINICIUS,"Clientes":cli_v,"Serviços":srv_v},
-])
-fig=px.bar(
-    df_comp.melt(id_vars="Funcionário",var_name="Métrica",value_name="Quantidade"),
-    x="Funcionário",y="Quantidade",color="Métrica",barmode="group",
-    title=f"Comparativo de atendimentos — {dia_selecionado.strftime('%d/%m/%Y')}"
-)
-st.plotly_chart(fig,use_container_width=True)
-
-# ========================================================
-# 🔎 MODO DE CONFERÊNCIA (logo após o comparativo)
-# ========================================================
-st.markdown("---")
-st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
-
-df_conf = df_dia.copy()
-if "Conferido" not in df_conf.columns:
-    df_conf["Conferido"] = False
-
-df_conf_view = df_conf[[
-    "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
-]].copy()
-df_conf_view["Excluir"] = False
-
-st.caption("Edite **Conferido** e/ou marque **Excluir**. Depois clique em **Aplicar mudanças**.")
-edited = st.data_editor(
-    df_conf_view,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Nº real no Sheets", disabled=True),
-        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
-        "Serviço": st.column_config.TextColumn("Serviço", disabled=True),
-        "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
-        "Valor": st.column_config.TextColumn("Valor", disabled=True),
-        "Conta": st.column_config.TextColumn("Conta", disabled=True),
-        "Conferido": st.column_config.CheckboxColumn("Conferido"),
-        "Excluir": st.column_config.CheckboxColumn("Excluir"),
-    },
-    key="editor_conferencia"
-)
-
-if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
-    try:
-        gc = _conectar_sheets()
-        sh = gc.open_by_key(SHEET_ID)
-        ws = sh.worksheet(ABA_DADOS)
-
-        # Atualiza 'Conferido' 1 a 1 (payload simples e estável)
-        orig_by_row = df_conf.set_index("SheetRow")["Conferido"].to_dict()
-        updates = []
-        for _, r in edited.iterrows():
-            rownum = int(r["SheetRow"])
-            new_val = bool(r["Conferido"])
-            old_val = bool(orig_by_row.get(rownum, False))
-            if new_val != old_val:
-                updates.append({"row": rownum, "value": new_val})
-        _update_conferido(ws, updates)
-
-        # Exclui linhas marcadas
-        rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(r["Excluir"])]
-        _delete_rows(ws, rows_to_delete)
-
-        st.success("Alterações aplicadas com sucesso!")
-        st.experimental_rerun()
-
-    except Exception as e:
-        st.error(f"Falha ao aplicar mudanças: {e}")
-
-# -------------------------
-# Histórico — Dias com mais atendimentos
-# -------------------------
-st.markdown("---")
-st.subheader("📈 Histórico — Dias com mais atendimentos")
-
-only_after_cut = st.checkbox(
-    f"Mostrar apenas a partir de {DATA_CORRETA.strftime('%d/%m/%Y')}",
-    value=True
-)
-
-def contar_atendimentos_bloco(bloco):
-    if bloco.empty: return 0, 0
-    d0 = bloco["Data_norm"].dropna()
-    if d0.empty: return 0, len(bloco)
-    dia = d0.iloc[0]
-    if dia < DATA_CORRETA:
-        clientes = len(bloco)
-    else:
-        clientes = bloco.groupby(["Cliente", "Data_norm"]).ngroups
-    return clientes, len(bloco)
-
-lista = []
-for dval, bloco in df_base.groupby("Data_norm"):
-    if pd.isna(dval): continue
-    if only_after_cut and dval < DATA_CORRETA: continue
-    cli_h, srv_h = contar_atendimentos_bloco(bloco)
-    lista.append({"Data": dval, "Clientes únicos": cli_h, "Serviços": srv_h})
-
-df_hist = pd.DataFrame(lista).sort_values("Data")
-if not df_hist.empty:
-    df_hist["Data"] = pd.to_datetime(df_hist["Data"], errors="coerce")
-
-if not df_hist.empty:
-    top_idx = df_hist["Clientes únicos"].idxmax()
-    top_dia = df_hist.loc[top_idx]
-    st.success(
-        f"📅 Recorde: **{_fmt_data(top_dia['Data'])}** — "
-        f"**{int(top_dia['Clientes únicos'])} clientes** e **{int(top_dia['Serviços'])} serviços**."
-    )
-
-    df_top5 = df_hist.sort_values(
-        ["Clientes únicos", "Serviços", "Data"],
-        ascending=[False, False, False]
-    ).head(5).copy()
-    df_top5["Data_fmt"] = df_top5["Data"].apply(_fmt_data)
-
-    ct1, ct2 = st.columns([1, 1])
-    with ct1:
-        st.markdown("**🏆 Top 5 dias (por clientes)**")
-        st.dataframe(
-            df_top5[["Data_fmt", "Clientes únicos", "Serviços"]]
-                .rename(columns={"Data_fmt": "Data"}),
-            use_container_width=True, hide_index=True
-        )
-    with ct2:
-        fig_top = px.bar(
-            df_top5, x="Data_fmt", y="Clientes únicos", text="Clientes únicos",
-            title="Top 5 — Clientes por dia"
-        )
-        st.plotly_chart(fig_top, use_container_width=True)
-
-    st.markdown("**Histórico completo**")
-    df_hist_show = df_hist.copy()
-    df_hist_show["Data_fmt"] = df_hist_show["Data"].apply(_fmt_data)
-    st.dataframe(
-        df_hist_show[["Data_fmt", "Clientes únicos", "Serviços"]]
-            .rename(columns={"Data_fmt": "Data"}),
-        use_container_width=True, hide_index=True
-    )
-
-    fig2 = px.line(
-        df_hist, x="Data", y="Clientes únicos", markers=True,
-        title="Clientes únicos por dia (histórico)"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-# -------------------------
-# Tabela do dia + exportações
-# -------------------------
-st.markdown("---")
-df_exibe = preparar_tabela_exibicao(df_dia)
-st.subheader("Registros do dia (linhas)")
-st.dataframe(df_exibe, use_container_width=True, hide_index=True)
-
-st.subheader("Resumo por Cliente (no dia)")
-grp = (
-    df_dia
-    .groupby("Cliente", as_index=False)
-    .agg(Quantidade_Serviços=("Serviço", "count"),
-         Valor_Total=("Valor_num", "sum"))
-    .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
-)
-grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
-
-st.dataframe(
-    grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
-    use_container_width=True, hide_index=True
-)
-
-st.markdown("### Exportar")
-df_lin_export = df_exibe.copy()
-df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
-
-st.download_button(
-    "⬇️ Baixar Linhas (CSV)",
-    data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
-    mime="text/csv"
-)
-st.download_button(
-    "⬇️ Baixar Resumo por Cliente (CSV)",
-    data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
-    mime="text/csv"
-)
-
-try:
-    xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
-    st.download_button(
-        "⬇️ Baixar Excel (Linhas + Resumo)",
-        data=xlsx_bytes,
-        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-except Exception as e:
-    st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
-
-st.caption(
-    "• Contagem de clientes aplica a regra: antes de 11/05/2025 cada linha=1 atendimento; "
-    "a partir de 11/05/2025: 1 atendimento por Cliente + Data. "
-    "• 'Por Funcionário' usa o campo **Funcionário** da base. "
-    "• No modo de conferência, a coluna **Conferido** é criada automaticamente se não existir."
-)
+st.caption("Criado por JPaulo ✨ | Versão principal do painel consolidado")
