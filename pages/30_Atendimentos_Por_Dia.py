@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # 15_Atendimentos_Masculino_Por_Dia.py
-# KPIs do dia, por funcionário, conferência (gravar/excluir no Sheets),
-# histórico, exportar (CSV/XLSX) e exportar Mobills (apenas não conferidos, opcional).
+# KPIs do dia, por funcionário, conferência (gravar/excluir no Sheets)
+# e EXPORTAR PARA MOBILLS (tudo ou só NÃO conferidos) + pós-exportação marcar conferidos.
 
 import streamlit as st
 import pandas as pd
@@ -59,6 +59,66 @@ def _conectar_sheets():
     )
     return gspread.authorize(creds)
 
+# ---------- helpers Sheets ----------
+def _headers_and_indices(ws):
+    """Retorna (headers, norm_headers, indices_conferido, idx_conferido_escolhido)"""
+    headers = ws.row_values(1)
+    norms = [_norm_col(h) for h in headers]
+    idxs = [i for i, n in enumerate(norms) if n == "conferido"]  # 0-based
+    chosen = idxs[-1] if idxs else None  # SEMPRE a última
+    return headers, norms, idxs, chosen
+
+def _ensure_conferido_column(ws):
+    """Garante coluna 'Conferido' e retorna índice 1-based da **ÚLTIMA** ocorrência."""
+    headers, norms, idxs, chosen = _headers_and_indices(ws)
+    if chosen is not None:
+        return chosen + 1  # 1-based
+    col = len(headers) + 1
+    ws.update_cell(1, col, "Conferido")
+    return col
+
+def _update_conferido(ws, updates):
+    """Atualiza 1 a 1 para garantir persistência na mesma coluna."""
+    if not updates: return
+    col_conf = _ensure_conferido_column(ws)
+    for u in updates:
+        row = int(u["row"])
+        val = "TRUE" if u["value"] else "FALSE"
+        ws.update_cell(row, col_conf, val)
+
+def _delete_rows(ws, rows):
+    for r in sorted(set(rows), reverse=True):
+        try:
+            ws.delete_rows(int(r))
+        except Exception as e:
+            st.warning(f"Falha ao excluir linha {r}: {e}")
+
+def _fetch_conferido_map(ws):
+    """
+    Lê a ÚLTIMA coluna 'Conferido' diretamente do Sheets (mesma que atualizamos)
+    e devolve um dict {SheetRow:int -> bool}.
+    """
+    col_conf = _ensure_conferido_column(ws)
+    col_letter = gspread.utils.rowcol_to_a1(1, col_conf)[0]  # ex.: 'W'
+    rng = f"{col_letter}2:{col_letter}"
+    vals = ws.get(rng, value_render_option="UNFORMATTED_VALUE")
+
+    m = {}
+    rownum = 2
+    for row in vals:
+        v = row[0] if row else ""
+        if isinstance(v, (bool, np.bool_)):
+            b = bool(v)
+        elif isinstance(v, (int, float)) and not pd.isna(v):
+            b = float(v) != 0.0
+        else:
+            s = str(v).strip().lower()
+            b = s in ("1", "true", "verdadeiro", "sim", "ok", "y", "yes")
+        m[rownum] = b
+        rownum += 1
+    return m
+
+# ---------- leitura base ----------
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_base():
     gc = _conectar_sheets()
@@ -80,16 +140,10 @@ def carregar_base():
         if c not in df.columns:
             df[c] = None
 
-    # === Unificar 'Conferido' (OR de todas as variações) ===
-    conf_cols = [c for c in df.columns if _norm_col(c) == "conferido"]
-    if conf_cols:
-        conf_series = pd.Series(False, index=df.index)
-        for c in conf_cols:
-            conf_series = conf_series | df[c].apply(_to_bool)
-        df["Conferido"] = conf_series.astype(bool)
-    else:
-        df["Conferido"] = False
-    df.attrs["__conferido_sources__"] = conf_cols or []
+    # strings padronizadas
+    for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
+        if col not in df.columns: df[col] = ""
+        df[col] = df[col].astype(str).fillna("").str.strip()
 
     # datas
     def parse_data(x):
@@ -118,13 +172,18 @@ def carregar_base():
             return 0.0
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
-        if col not in df.columns: df[col] = ""
-        df[col] = df[col].astype(str).fillna("").str.strip()
+    # >>> Lê Conferido direto da coluna correta do Sheets
+    conferido_map = _fetch_conferido_map(ws)
+    df["Conferido"] = df["SheetRow"].map(lambda r: bool(conferido_map.get(int(r), False))).astype(bool)
 
-    df["Conferido"] = df["Conferido"].apply(_to_bool).astype(bool)
+    # para debug na sidebar
+    headers = ws.row_values(1)
+    conf_sources = [h for h in headers if _norm_col(h) == "conferido"]
+    df.attrs["__conferido_sources__"] = conf_sources or []
+
     return df
 
+# ---------- agregações ----------
 def filtrar_por_dia(df, dia):
     if df.empty or dia is None: return df.iloc[0:0]
     return df[df["Data_norm"] == dia].copy()
@@ -162,61 +221,6 @@ def preparar_tabela_exibicao(df):
     out["Valor"] = out["Valor_num"].apply(format_moeda)
     return out[cols_ordem]
 
-# ---------- Excel helpers ----------
-def _choose_excel_engine():
-    import importlib.util
-    for eng in ("xlsxwriter", "openpyxl"):
-        if importlib.util.find_spec(eng) is not None:
-            return eng
-    return None
-
-def _to_xlsx_bytes(dfs_by_sheet: dict):
-    engine = _choose_excel_engine()
-    if not engine:
-        return None
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine=engine) as writer:
-        for sheet, df in dfs_by_sheet.items():
-            df.to_excel(writer, sheet_name=sheet, index=False)
-    return buf.getvalue()
-
-def gerar_excel(df_lin, df_cli):
-    return _to_xlsx_bytes({"Linhas": df_lin, "ResumoClientes": df_cli})
-
-# ===== helpers Sheets =====
-def _headers_and_indices(ws):
-    """Retorna (headers, norm_headers, indices_conferido, idx_conferido_escolhido)"""
-    headers = ws.row_values(1)
-    norms = [_norm_col(h) for h in headers]
-    idxs = [i for i, n in enumerate(norms) if n == "conferido"]  # 0-based
-    chosen = idxs[-1] if idxs else None  # SEMPRE a última
-    return headers, norms, idxs, chosen
-
-def _ensure_conferido_column(ws):
-    """Garante coluna 'Conferido' e retorna índice 1-based da **ÚLTIMA** ocorrência."""
-    headers, norms, idxs, chosen = _headers_and_indices(ws)
-    if chosen is not None:
-        return chosen + 1  # 1-based
-    # não existe: cria no final
-    col = len(headers) + 1
-    ws.update_cell(1, col, "Conferido")
-    return col
-
-def _update_conferido(ws, updates):
-    if not updates: return
-    col_conf = _ensure_conferido_column(ws)
-    for u in updates:
-        row = int(u["row"])
-        val = "TRUE" if u["value"] else "FALSE"
-        ws.update_cell(row, col_conf, val)
-
-def _delete_rows(ws, rows):
-    for r in sorted(set(rows), reverse=True):
-        try:
-            ws.delete_rows(int(r))
-        except Exception as e:
-            st.warning(f"Falha ao excluir linha {r}: {e}")
-
 # ============= HELPER HTML (render seguro) =============
 def html(s: str):
     st.markdown(textwrap.dedent(s), unsafe_allow_html=True)
@@ -229,15 +233,16 @@ def card(label, val):
 # =========================
 st.set_page_config(page_title="Atendimentos por Dia (Masculino)", page_icon="📅", layout="wide")
 st.title("📅 Atendimentos por Dia — Masculino")
-st.caption("KPIs do dia, comparativo por funcionário e histórico. (Regra de 11/05/2025 aplicada).")
+st.caption("KPIs do dia, comparativo por funcionário, conferência e exportação para Mobills.")
 
 if st.sidebar.button("🔄 Recarregar dados agora"):
     st.cache_data.clear()
     st.rerun()
 
-with st.spinner("Carregando base masculina..."):
+with st.spinner("Carregando base..."):
     df_base = carregar_base()
 
+# Seletor de dia
 hoje = _tz_now().date()
 dia_selecionado = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
 df_dia = filtrar_por_dia(df_base, dia_selecionado)
@@ -245,11 +250,28 @@ if df_dia.empty:
     st.info("Nenhum atendimento encontrado para o dia selecionado.")
     st.stop()
 
-# Debug de colunas Conferido
-st.sidebar.caption("Fonte(s) de Conferido lidas: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
-st.sidebar.caption(f"Conferidos no dia (lido): {int(df_dia['Conferido'].fillna(False).sum())}")
+# Debug rápido
+st.sidebar.caption("Colunas 'Conferido' no cabeçalho: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
+st.sidebar.caption(f"Conferidos no dia: {int(df_dia['Conferido'].fillna(False).sum())}")
 
-# ===== KPIs =====
+# ====== KPIs ======
+html("""
+<style>
+.metrics-wrap{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}
+.metrics-wrap .card{
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px;
+  padding:12px 14px;
+  min-width:160px;
+  flex:1 1 200px;
+}
+.metrics-wrap .card .label{font-size:0.9rem;opacity:.85;margin-bottom:6px}
+.metrics-wrap .card .value{font-weight:700;font-size:clamp(18px,3.8vw,28px);line-height:1.15}
+.section-h{font-weight:700;margin:12px 0 6px}
+</style>
+""")
+
 df_v_top = df_dia[df_dia["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
 _, _, rec_v_top, _ = kpis(df_v_top)
 cli, srv, rec, tkt = kpis(df_dia)
@@ -311,10 +333,7 @@ st.markdown("---")
 st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
 
 df_conf = df_dia.copy()
-if "Conferido" not in df_conf.columns:
-    df_conf["Conferido"] = False
-else:
-    df_conf["Conferido"] = df_conf["Conferido"].apply(_to_bool).astype(bool)
+df_conf["Conferido"] = df_conf["Conferido"].apply(_to_bool).astype(bool)
 
 df_conf_view = df_conf[[
     "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
@@ -339,38 +358,13 @@ edited = st.data_editor(
     key="editor_conferencia"
 )
 
-# ===== DIAGNÓSTICO VISUAL (para a gente validar agora) =====
-with st.expander("🔧 Diagnóstico 'Conferido' (clique para abrir)"):
-    try:
-        gc = _conectar_sheets()
-        sh = gc.open_by_key(SHEET_ID)
-        ws = sh.worksheet(ABA_DADOS)
-        headers, norms, idxs, chosen = _headers_and_indices(ws)
-        st.write("Cabeçalho (1ª linha):", headers)
-        st.write("Índices com 'Conferido' (0-based):", idxs)
-        st.write("Coluna que será ATUALIZADA:", None if chosen is None else chosen + 1, "(1-based)")
-        if idxs:
-            # mostra valores crus em cada coluna conferido para as linhas do dia
-            show = df_conf[["SheetRow"]].copy()
-            for i, idx0 in enumerate(idxs):
-                colname = headers[idx0]
-                # lê um range preciso para as linhas do dia nessa coluna
-                rows = show["SheetRow"].astype(int).tolist()
-                col_letter = gspread.utils.rowcol_to_a1(1, idx0+1)[0]
-                rng = f"{col_letter}{min(rows)}:{col_letter}{max(rows)}"
-                vals = ws.get(rng, value_render_option="FORMULA")
-                flat = [v[0] if v else "" for v in vals]
-                show[f"{colname} (cru)"] = flat[:len(show)]
-            st.dataframe(show, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Diag falhou: {e}")
-
 if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
     try:
         gc = _conectar_sheets()
         sh = gc.open_by_key(SHEET_ID)
         ws = sh.worksheet(ABA_DADOS)
 
+        # Atualiza 'Conferido'
         orig_by_row = df_conf.set_index("SheetRow")["Conferido"].apply(_to_bool).to_dict()
         updates = []
         for _, r in edited.iterrows():
@@ -381,6 +375,7 @@ if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
                 updates.append({"row": rownum, "value": new_val})
         _update_conferido(ws, updates)
 
+        # Exclui marcados
         rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(_to_bool(r["Excluir"]))]
         _delete_rows(ws, rows_to_delete)
 
@@ -390,103 +385,24 @@ if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
     except Exception as e:
         st.error(f"Falha ao aplicar mudanças: {e}")
 
-# -------------------------
-# FILTRO DE EXPORTAÇÃO (só NÃO conferidos)
-# -------------------------
+# ========================================================
+# 📤 EXPORTAR PARA MOBILLS
+# ========================================================
 st.markdown("---")
-st.subheader("⚙️ Filtro para exportação")
+st.subheader("📤 Exportar para Mobills")
 
 export_only_unchecked = st.checkbox(
-    "Exportar apenas os registros NÃO conferidos",
+    "Exportar **apenas os NÃO conferidos**",
     value=True,
-    help="Quando marcado, os botões de download considerarão somente linhas com Conferido = False."
+    help="Desmarque para exportar TODOS os registros do dia."
 )
 
 df_export_base = df_dia.copy()
-if "Conferido" not in df_export_base.columns:
-    df_export_base["Conferido"] = False
-else:
-    df_export_base["Conferido"] = df_export_base["Conferido"].apply(_to_bool).astype(bool)
-
+df_export_base["Conferido"] = df_export_base["Conferido"].apply(_to_bool).astype(bool)
 if export_only_unchecked:
     df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
 st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")
-
-# -------------------------
-# Tabela + exportações
-# -------------------------
-st.markdown("---")
-st.subheader("Registros selecionados para exportação")
-
-if df_export_base.empty:
-    st.info("Nada a exportar com o filtro atual (todos conferidos).")
-else:
-    df_exibe = preparar_tabela_exibicao(df_export_base)
-    st.dataframe(df_exibe, use_container_width=True, hide_index=True)
-
-    st.subheader("Resumo por Cliente (seleção atual)")
-    grp = (
-        df_export_base
-        .groupby("Cliente", as_index=False)
-        .agg(Quantidade_Serviços=("Serviço", "count"),
-             Valor_Total=("Valor_num", "sum"))
-        .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
-    )
-    grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
-    st.dataframe(
-        grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
-        use_container_width=True, hide_index=True
-    )
-
-    st.markdown("### Exportar (CSV/XLSX)")
-    df_lin_export = df_exibe.copy()
-    df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
-
-    st.download_button(
-        "⬇️ Baixar Linhas (CSV)",
-        data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
-        mime="text/csv"
-    )
-    st.download_button(
-        "⬇️ Baixar Resumo por Cliente (CSV)",
-        data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
-        mime="text/csv"
-    )
-
-    xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
-    if xlsx_bytes:
-        st.download_button(
-            "⬇️ Baixar Excel (Linhas + Resumo)",
-            data=xlsx_bytes,
-            file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.warning("Nenhuma engine Excel instalada (xlsxwriter/openpyxl). Use os CSVs ou instale uma engine.")
-
-    # Pós-exportação: marcar como conferidos
-    st.markdown("#### Pós-exportação")
-    if st.button("✅ Marcar exportados como Conferidos no Sheets"):
-        try:
-            gc = _conectar_sheets()
-            sh = gc.open_by_key(SHEET_ID)
-            ws = sh.worksheet(ABA_DADOS)
-            updates = [{"row": int(r), "value": True} for r in df_export_base["SheetRow"].tolist()]
-            _update_conferido(ws, updates)
-            st.success(f"Marcados {len(updates)} registros como Conferidos.")
-            st.cache_data.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Falha ao marcar como conferidos: {e}")
-
-# ===========================================
-# 📤 Exportar Mobills
-# ===========================================
-st.markdown("---")
-st.subheader("📤 Exportar Mobills")
 
 conta_fallback = st.text_input("Conta padrão (quando vazio na base)", value="Nubank CNPJ")
 
@@ -506,9 +422,10 @@ def _categoria(row):
         return f"Lucro Vinicius > {serv}"
     return f"Lucro salão > {serv}"
 
-if not df_export_base.empty:
+if df_export_base.empty:
+    st.info("Nada a exportar (com o filtro atual).")
+else:
     df_mob = df_export_base.copy()
-
     df_mob["Data"] = df_mob["Data_norm"].apply(_fmt_data_ddmmyyyy)
     df_mob["Descrição"] = df_mob.apply(_descricao, axis=1)
     df_mob["Valor"] = pd.to_numeric(df_mob["Valor_num"], errors="coerce").fillna(0.0)
@@ -517,7 +434,6 @@ if not df_export_base.empty:
     df_mob.loc[df_mob["Conta"] == "", "Conta"] = conta_fallback
 
     df_mob["Categoria"] = df_mob.apply(_categoria, axis=1)
-
     df_mob["serviço"] = df_mob["Serviço"].astype(str).fillna("").str.strip()
     df_mob["cliente"] = df_mob["Cliente"].astype(str).fillna("").str.strip()
     df_mob["Combo"]   = df_mob.get("Combo", "").astype(str).fillna("").str.strip()
@@ -528,6 +444,7 @@ if not df_export_base.empty:
     st.markdown("**Prévia (Mobills)**")
     st.dataframe(df_mobills, use_container_width=True, hide_index=True)
 
+    # CSV (separador ';' p/ Mobills)
     csv_bytes = df_mobills.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
         "⬇️ Baixar CSV (Mobills)",
@@ -537,15 +454,17 @@ if not df_export_base.empty:
         type="primary"
     )
 
-    xlsx_mob = _to_xlsx_bytes({"Mobills": df_mobills})
-    if xlsx_mob:
-        st.download_button(
-            "⬇️ Baixar XLSX (Mobills)",
-            data=xlsx_mob,
-            file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.info("Sem engine Excel instalada (xlsxwriter/openpyxl). Use o CSV ou instale uma engine.")
-else:
-    st.info("Sem dados para exportar (com o filtro atual).")
+    # Pós-exportação: marcar como conferidos
+    st.markdown("#### Pós-exportação")
+    if st.button("✅ Marcar exportados como Conferidos no Sheets"):
+        try:
+            gc = _conectar_sheets()
+            sh = gc.open_by_key(SHEET_ID)
+            ws = sh.worksheet(ABA_DADOS)
+            updates = [{"row": int(r), "value": True} for r in df_export_base["SheetRow"].tolist()]
+            _update_conferido(ws, updates)
+            st.success(f"Marcados {len(updates)} registros como Conferidos.")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao marcar como conferidos: {e}")
