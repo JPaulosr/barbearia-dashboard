@@ -24,22 +24,18 @@ MESES_PT = {
 }
 NOMES_EXCLUIR_RANKINGS = ["boliviano", "brasileiro", "menino"]
 
-# Padrões de identificação
+# Identificação de PRODUTO por nome do serviço
 REGEX_PRODUTO = re.compile(r"(produto|gel|pomad|shampoo|cera|spray|po\b|pó\b|p\u00f3\b)", re.IGNORECASE)
-REGEX_CAIXINHA = re.compile(r"(caix|gorjet)", re.IGNORECASE)
 
 # =========================
-# ESTILOS (CSS leve para cards)
+# CSS (cards + blocos)
 # =========================
 st.markdown("""
 <style>
-.kpi-grid {display:grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 12px;}
-.kpi-card {background:#111418; border:1px solid #262b33; border-radius:16px; padding:14px;}
-.kpi-title {font-size:0.90rem; color:#aab2c5; margin:0;}
-.kpi-value {font-size:1.4rem; font-weight:700; margin-top:6px;}
-.block {background:#0c0f13; border:1px solid #1e242d; border-radius:16px; padding:14px;}
-.section-title {font-weight:700; font-size:1.05rem; margin-bottom:0.5rem;}
-.stPlotlyChart {background:transparent;}
+.block {background:#0c0f13; border:1px solid #1e242d; border-radius:16px; padding:14px; margin-bottom:14px;}
+.kpi {background:#111418; border:1px solid #262b33; border-radius:16px; padding:16px;}
+.kpi .title{font-size:.9rem;color:#aab2c5;margin:0 0 6px 0;}
+.kpi .value{font-size:1.4rem;font-weight:700;margin:0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,12 +57,18 @@ def carregar_dados():
     df = get_as_dataframe(aba).dropna(how="all")
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Normaliza Data
+    # Datas e valores
     df["Data"] = pd.to_datetime(df.get("Data"), errors="coerce")
     df = df.dropna(subset=["Data"])
-
-    # Valor numérico
     df["ValorNum"] = pd.to_numeric(df.get("Valor"), errors="coerce").fillna(0)
+
+    # Caixinha: vem nas MESMAS LINHAS do atendimento (colunas da planilha)
+    # Procura colunas usuais e soma numa coluna única "CaixinhaTotal"
+    cand_cx = ["CaixinhaDia", "Caixinha_Fundo", "CaixinhaFundo", "Caixinha", "Gorjeta"]
+    existentes = [c for c in cand_cx if c in df.columns]
+    for c in existentes:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    df["CaixinhaTotal"] = df[existentes].sum(axis=1) if existentes else 0
 
     # Derivadas de tempo
     df["Ano"] = df["Data"].dt.year
@@ -97,7 +99,7 @@ pagamento_opcao = st.sidebar.radio(
     "Filtro de pagamento",
     ["Apenas pagos", "Apenas fiado", "Incluir tudo"],
     index=0,
-    help="Pagos = tudo que NÃO é 'Fiado'. 'Apenas fiado' mostra somente fiados; 'Incluir tudo' mostra ambos."
+    help="Pagos = tudo que NÃO é 'Fiado'."
 )
 
 aplicar_hist = st.sidebar.checkbox("Aplicar no histórico (contagens e tabelas)", value=False)
@@ -110,9 +112,9 @@ mes_opcoes = [MESES_PT[m] for m in meses_disponiveis]
 meses_selecionados = st.sidebar.multiselect("📆 Meses (opcional)", mes_opcoes, default=mes_opcoes)
 
 # =========================
-# CONSTRUÇÃO DAS MÁSCARAS
+# MÁSCARAS / FILTROS
 # =========================
-# Máscara de valores conforme filtro de pagamento
+# Pagamento
 if pagamento_opcao == "Apenas pagos":
     mask_valores_full = ~is_fiado_full
 elif pagamento_opcao == "Apenas fiado":
@@ -120,20 +122,21 @@ elif pagamento_opcao == "Apenas fiado":
 else:
     mask_valores_full = pd.Series(True, index=df_full.index)
 
-# Máscara para histórico (contagens/tabelas)
+# Histórico
 mask_historico_full = mask_valores_full if aplicar_hist else pd.Series(True, index=df_full.index)
 
-# Filtra por ano/meses
+# Período (ano/meses)
 if meses_selecionados:
     meses_numeros = [k for k, v in MESES_PT.items() if v in meses_selecionados]
-    df_hist = df_full[mask_historico_full & (df_full["Ano"] == ano_escolhido) & (df_full["Mês"].isin(meses_numeros))].copy()
-    df_valores = df_full[mask_valores_full & (df_full["Ano"] == ano_escolhido) & (df_full["Mês"].isin(meses_numeros))].copy()
+    mask_periodo = (df_full["Ano"] == ano_escolhido) & (df_full["Mês"].isin(meses_numeros))
 else:
-    df_hist = df_full[mask_historico_full & (df_full["Ano"] == ano_escolhido)].copy()
-    df_valores = df_full[mask_valores_full & (df_full["Ano"] == ano_escolhido)].copy()
+    mask_periodo = (df_full["Ano"] == ano_escolhido)
+
+df_hist    = df_full[mask_historico_full & mask_periodo].copy()
+df_valores = df_full[mask_valores_full & mask_periodo].copy()
 
 # =========================
-# FUNÇÕES AUXILIARES
+# AUX
 # =========================
 def brl(x: float) -> str:
     return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
@@ -142,17 +145,12 @@ def is_produto(nome_servico: str) -> bool:
     if not isinstance(nome_servico, str): return False
     return bool(REGEX_PRODUTO.search(nome_servico))
 
-def is_caixinha(nome_servico: str) -> bool:
-    if not isinstance(nome_servico, str): return False
-    return bool(REGEX_CAIXINHA.search(nome_servico))
-
-# Flags de tipo
+# Flags de produto/serviço (caixinha já vem por coluna, não por serviço)
 df_valores["EhProduto"] = df_valores["Serviço"].astype(str).apply(is_produto)
-df_valores["EhCaixinha"] = df_valores["Serviço"].astype(str).apply(is_caixinha)
-df_valores["EhServico"]  = ~(df_valores["EhProduto"] | df_valores["EhCaixinha"])
+df_valores["EhServico"] = ~df_valores["EhProduto"]  # tudo que não é produto tratamos como serviço
 
 # =========================
-# KPI's PRINCIPAIS
+# KPIs + CARDS (LADO A LADO)
 # =========================
 receita_total = float(df_valores["ValorNum"].sum())
 total_atendimentos = len(df_hist)
@@ -164,64 +162,34 @@ clientes_unicos = pd.concat([antes, depois])["Cliente"].nunique()
 
 ticket_medio = (receita_total / total_atendimentos) if total_atendimentos else 0.0
 
-# Caixinha no período (geral)
-caixinha_periodo_total = float(df_valores.loc[df_valores["EhCaixinha"], "ValorNum"].sum())
+# Caixinha do período (somando colunas de caixinha das linhas do atendimento)
+caixinha_periodo_total = float(df_valores["CaixinhaTotal"].sum())
 
-# =========================
-# CARDS SUPERIORES
-# =========================
-st.markdown('<div class="kpi-grid">', unsafe_allow_html=True)
-
-st.markdown(f'''
-<div class="kpi-card">
-  <p class="kpi-title">💰 Receita Total</p>
-  <div class="kpi-value">{brl(receita_total)}</div>
-</div>''', unsafe_allow_html=True)
-
-st.markdown(f'''
-<div class="kpi-card">
-  <p class="kpi-title">📅 Total de Atendimentos</p>
-  <div class="kpi-value">{total_atendimentos}</div>
-</div>''', unsafe_allow_html=True)
-
-st.markdown(f'''
-<div class="kpi-card">
-  <p class="kpi-title">🎯 Ticket Médio</p>
-  <div class="kpi-value">{brl(ticket_medio)}</div>
-</div>''', unsafe_allow_html=True)
-
-st.markdown(f'''
-<div class="kpi-card">
-  <p class="kpi-title">🟢 Clientes Ativos</p>
-  <div class="kpi-value">{clientes_unicos}</div>
-</div>''', unsafe_allow_html=True)
-
-st.markdown(f'''
-<div class="kpi-card">
-  <p class="kpi-title">🎁 Caixinha (Período)</p>
-  <div class="kpi-value">{brl(caixinha_periodo_total)}</div>
-</div>''', unsafe_allow_html=True)
-
-st.markdown('</div>', unsafe_allow_html=True)
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1:
+    st.markdown(f'<div class="kpi"><p class="title">💰 Receita Total</p><p class="value">{brl(receita_total)}</p></div>', unsafe_allow_html=True)
+with c2:
+    st.markdown(f'<div class="kpi"><p class="title">📅 Total de Atendimentos</p><p class="value">{total_atendimentos}</p></div>', unsafe_allow_html=True)
+with c3:
+    st.markdown(f'<div class="kpi"><p class="title">🎯 Ticket Médio</p><p class="value">{brl(ticket_medio)}</p></div>', unsafe_allow_html=True)
+with c4:
+    st.markdown(f'<div class="kpi"><p class="title">🟢 Clientes Ativos</p><p class="value">{clientes_unicos}</p></div>', unsafe_allow_html=True)
+with c5:
+    st.markdown(f'<div class="kpi"><p class="title">🎁 Caixinha (Período)</p><p class="value">{brl(caixinha_periodo_total)}</p></div>', unsafe_allow_html=True)
 
 # =========================
 # CAIXINHAS — POR FUNCIONÁRIO (PERÍODO) + TOTAL ANUAL
 # =========================
-st.markdown("")
 col_a, col_b = st.columns([1.1, 1])
 
 with col_a:
-    st.markdown('<div class="block">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">🎁 Caixinhas por Funcionário (período filtrado)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="block"><b>🎁 Caixinhas por Funcionário (período filtrado)</b>', unsafe_allow_html=True)
     df_cx_func = (
-        df_valores[df_valores["EhCaixinha"]]
-        .groupby("Funcionário", dropna=False)["ValorNum"]
-        .sum().reset_index()
-        .rename(columns={"ValorNum": "Caixinha"})
+        df_valores.groupby("Funcionário", dropna=False)["CaixinhaTotal"]
+        .sum().reset_index().rename(columns={"CaixinhaTotal":"Caixinha"})
         .sort_values("Caixinha", ascending=False)
     )
-    if not df_cx_func.empty:
-        df_cx_func["Caixinha"] = df_cx_func["Caixinha"].astype(float)
+    if not df_cx_func.empty and df_cx_func["Caixinha"].sum() > 0:
         fig_cx = px.bar(df_cx_func, x="Funcionário", y="Caixinha", text_auto=True)
         fig_cx.update_layout(height=340, yaxis_title="Valor (R$)", showlegend=False, margin=dict(l=10,r=10,t=30,b=10))
         st.plotly_chart(fig_cx, use_container_width=True)
@@ -230,28 +198,21 @@ with col_a:
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col_b:
-    st.markdown('<div class="block">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">📅 Caixinha Total no Ano</div>', unsafe_allow_html=True)
-    df_ano = df_full[(df_full["Ano"] == ano_escolhido)]
-    # Respeita filtro de pagamento para valores?
-    # Normalmente caixinha é 'paga', mas seguimos o mesmo critério escolhido para manter consistência visual:
+    st.markdown('<div class="block"><b>📅 Caixinha Total no Ano</b>', unsafe_allow_html=True)
+    df_ano = df_full[df_full["Ano"] == ano_escolhido]
+    # respeita mesmo filtro de pagamento aplicado para valores
     df_ano = df_ano[mask_valores_full.loc[df_ano.index]] if len(mask_valores_full) == len(df_full) else df_ano
-    cx_ano = float(df_ano[df_ano["Serviço"].astype(str).apply(is_caixinha)]["ValorNum"].sum())
+    cx_ano = float(df_ano["CaixinhaTotal"].sum())
     st.metric("Total no Ano", brl(cx_ano))
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
 # TENDÊNCIA MENSAL (RECEITA) — APENAS DO ANO SELECIONADO
 # =========================
-st.markdown('<div class="block">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">📈 Tendência Mensal de Receita (Ano Selecionado)</div>', unsafe_allow_html=True)
+st.markdown('<div class="block"><b>📈 Tendência Mensal de Receita (Ano Selecionado)</b>', unsafe_allow_html=True)
 df_anual_val = df_full[(df_full["Ano"] == ano_escolhido)]
 df_anual_val = df_anual_val[mask_valores_full.loc[df_anual_val.index]] if len(mask_valores_full) == len(df_full) else df_anual_val
-
-df_mensal = (
-    df_anual_val.groupby("Mês")["ValorNum"]
-    .sum().reset_index().sort_values("Mês")
-)
+df_mensal = df_anual_val.groupby("Mês")["ValorNum"].sum().reset_index().sort_values("Mês")
 if not df_mensal.empty:
     df_mensal["MêsNome"] = df_mensal["Mês"].map(MESES_PT)
     fig_mes = px.bar(df_mensal, x="MêsNome", y="ValorNum", text_auto=True)
@@ -262,14 +223,12 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# PRODUTOS VENDIDOS (QTD) + TOP PRODUTOS (VALOR)
+# PRODUTOS (QTD e VALOR)
 # =========================
-st.markdown("")
 col_p1, col_p2 = st.columns([1.2, 1])
 
 with col_p1:
-    st.markdown('<div class="block">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">🛍️ Produtos Vendidos (quantidade)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="block"><b>🛍️ Produtos Vendidos (quantidade)</b>', unsafe_allow_html=True)
     df_prod = df_valores[df_valores["EhProduto"]].copy()
     if not df_prod.empty:
         top_qty = (
@@ -285,8 +244,7 @@ with col_p1:
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col_p2:
-    st.markdown('<div class="block">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">🏆 Top Produtos por Valor</div>', unsafe_allow_html=True)
+    st.markdown('<div class="block"><b>🏆 Top Produtos por Valor</b>', unsafe_allow_html=True)
     if not df_prod.empty:
         top_val = (
             df_prod.groupby("Serviço")["ValorNum"].sum()
@@ -301,10 +259,9 @@ with col_p2:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# TOP SERVIÇOS (exclui produtos e caixinha)
+# TOP SERVIÇOS (exclui produtos)
 # =========================
-st.markdown('<div class="block">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">✂️ Top Serviços por Valor</div>', unsafe_allow_html=True)
+st.markdown('<div class="block"><b>✂️ Top Serviços por Valor</b>', unsafe_allow_html=True)
 df_serv = df_valores[df_valores["EhServico"]].copy()
 if not df_serv.empty:
     top_serv = (
@@ -320,17 +277,11 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# TOP 10 CLIENTES (frequência + valor) — mantém sua lógica base
+# TOP 10 CLIENTES (frequência + valor)
 # =========================
-st.markdown('<div class="block">', unsafe_allow_html=True)
-st.markdown('<div class="section-title">🥇 Top 10 Clientes</div>', unsafe_allow_html=True)
-
-# Frequência (histórico)
+st.markdown('<div class="block"><b>🥇 Top 10 Clientes</b>', unsafe_allow_html=True)
 cnt = df_hist.groupby("Cliente")["Serviço"].count().rename("Qtd_Serviços")
-
-# Soma de valores (respeita filtro pagamento)
 val = df_valores.groupby("Cliente")["ValorNum"].sum().rename("Valor")
-
 df_top = pd.concat([cnt, val], axis=1).reset_index().fillna(0)
 df_top = df_top[~df_top["Cliente"].str.lower().isin(NOMES_EXCLUIR_RANKINGS)]
 df_top = df_top.sort_values(by="Valor", ascending=False).head(10)
@@ -342,4 +293,4 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("Criado por JPaulo ✨ | Versão modernizada do painel")
+st.caption("Criado por JPaulo ✨ | Versão modernizada com cards lado a lado e caixinha por linha de atendimento")
