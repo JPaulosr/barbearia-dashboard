@@ -1,35 +1,3 @@
-# -*- coding: utf-8 -*-
-# 15_Atendimentos_Masculino_Por_Dia.py
-# KPIs do dia, por funcionário, conferência (gravar/excluir no Sheets)
-# e EXPORTAR PARA MOBILLS (tudo ou só NÃO conferidos) + pós-exportação marcar conferidos.
-
-import streamlit as st
-import pandas as pd
-import gspread
-import io, textwrap, re
-import plotly.express as px
-from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe
-from datetime import datetime, date
-import pytz
-import numpy as np
-
-# =========================
-# CONFIG
-# =========================
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_DADOS = "Base de Dados"  # Masculino
-TZ = "America/Sao_Paulo"
-DATA_FMT = "%d/%m/%Y"
-FUNC_JPAULO = "JPaulo"
-FUNC_VINICIUS = "Vinicius"
-DATA_CORRETA = datetime(2025, 5, 11).date()
-
-# =========================
-# UTILS
-# =========================
-def _tz_now():
-    return datetime.now(pytz.timezone(TZ))
 
 def _fmt_data(d):
     if pd.isna(d): return ""
