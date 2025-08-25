@@ -425,7 +425,7 @@ def parse_combo(combo_str):
 def ultima_forma_pagto_cliente(df_base, cliente):
     if df_base.empty or not cliente:
         return None
-    df = df_base[(df_base["Cliente"] == cliente) & (df_base["Conta"].str.lower() != "fiado")].copy()
+    df = df_base[(df_base["Cliente"] == cliente) & df_base["Conta"].str.lower() != "fiado"].copy()
     if df.empty:
         return None
     try:
@@ -545,7 +545,7 @@ if acao == "➕ Lançar fiado":
                 except Exception:
                     pass
 
-    # --- Lote (Cliente só da Base de Dados + validação) ---
+    # --- Lote ---
     with tab_lote:
         st.caption("💡 Preencha várias linhas e clique em **Salvar fiados (lote)**. "
                    "Se for serviço único, edite o campo Valor. Para combos o valor segue a tabela padrão por serviço.")
@@ -573,7 +573,6 @@ if acao == "➕ Lançar fiado":
             edited = st.data_editor(
                 df_modelo, num_rows="dynamic", use_container_width=True, key="fiado_editor_lote",
                 column_config={
-                    # 🔒 Cliente: somente nomes existentes da Base de Dados
                     "Cliente": st.column_config.SelectboxColumn(
                         options=[""] + clientes,
                         help="Escolha um cliente já cadastrado"
@@ -595,7 +594,6 @@ if acao == "➕ Lançar fiado":
                 },
             )
         with col_foto:
-            # Preview de foto do primeiro cliente preenchido
             try:
                 primeira_linha_cli = next((str(x).strip() for x in edited["Cliente"].tolist() if str(x).strip()), "")
                 if primeira_linha_cli:
@@ -617,13 +615,11 @@ if acao == "➕ Lançar fiado":
             pass
 
         if st.button("Salvar fiados (lote)", use_container_width=True, key="btn_salvar_lote"):
-            # Filtra linhas preenchidas
             linhas_validas = edited.dropna(how="all")
             linhas_validas = linhas_validas[linhas_validas["Cliente"].astype(str).str.strip() != ""]
             if linhas_validas.empty:
                 st.error("Preencha pelo menos uma linha com Cliente e Combo_ou_Serviço.")
             else:
-                # 🔒 Validação: todos os clientes precisam existir na Base
                 clientes_ok = {str(c).strip() for c in clientes}
                 invalidos = sorted(
                     {
@@ -653,7 +649,6 @@ if acao == "➕ Lançar fiado":
                     escolha_i = str(r["Combo_ou_Serviço"]).strip() or "Corte"
                     valor_edit = float(r.get("Valor", 0.0) or 0.0)
 
-                    # define serviços e se é combo
                     if "+" in escolha_i:
                         servicos_i = parse_combo(escolha_i) or []
                         combo_str = escolha_i
@@ -783,9 +778,9 @@ elif acao == "💰 Registrar pagamento":
 
                 partes = [r["IDLancFiado"]]
                 if dt_reg:
-                    partes.append(f"reg: {dt_reg.strftime(DATA_FMT)}")   # ✅ só DATA
+                    partes.append(f"reg: {dt_reg.strftime(DATA_FMT)}")
                 if periodo_id:
-                    partes.append(periodo_id)                            # ✅ Período (se único)
+                    partes.append(periodo_id)
 
                 rotulo = " • ".join(partes) + f" • {int(r['Qtde'])} serv. • R$ {r['ValorTotal']:.2f} • {badge}"
                 if pd.notna(r["Combo"]) and str(r["Combo"]).strip():
@@ -818,7 +813,7 @@ elif acao == "💰 Registrar pagamento":
                 format_func=lambda i: linhas_label_map.get(i, str(i)),
             )
 
-    # --------- Data padrão do pagamento: data de registro se 1 único ID; senão hoje local
+    # Data padrão do pagamento
     data_pag_default = today_local()
     registro_caption = None
     if modo_sel.startswith("Por ID"):
@@ -843,7 +838,7 @@ elif acao == "💰 Registrar pagamento":
     with cold2:
         obs = st.text_input("Observação (opcional)", "", key="obs")
 
-    # --------- Preview / totais
+    # Preview / totais
     total_sel = 0.0
     valor_liquido_cartao = None
     bandeira_cartao = ""
@@ -1005,12 +1000,40 @@ elif acao == "💰 Registrar pagamento":
             )
             st.cache_data.clear()
 
-            # ---- Mensagem enriquecida (cópia) ----
+            # ---- Mensagens (quitado + cópia enriquecida) ----
             try:
+                # -------- Card 1: ✅ Fiado quitado (competência)
+                ids_lanc_set = sorted(set(subset_all["IDLancFiado"].astype(str)))
+                ids_lanc_txt = "; ".join(ids_lanc_set)
+                servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
+
+                msg_quit = (
+                    "✅ <b>Fiado quitado (competência)</b>\n"
+                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                    f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
+                    f"💳 Forma: <b>{forma_pag}</b>\n"
+                    f"🧾 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
+                    f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
+                    f"📅 Data pagto: <b>{data_pag_str}</b>\n"
+                    f"🆔 IDs: <code>{ids_lanc_txt}</code>\n"
+                    f"🧾 Pag.: <code>{id_pag}</code>"
+                    + (f"\n📝 Obs.: {obs}" if obs else "")
+                )
+
+                foto_cli = FOTOS.get(_norm(cliente_sel))
+                destinos = [_get_chat_id_jp()]
+                funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
+                if len(funcs_set) == 1:
+                    destinos.append(_chat_id_por_func(funcs_set[0]))
+
+                for dest in destinos:
+                    if foto_cli: tg_send_photo(foto_cli, msg_quit, chat_id=dest)
+                    else:        tg_send(msg_quit, chat_id=dest)
+
+                # -------- Card 2: Cópia para controle (enriquecida)
                 datas_sel = pd.to_datetime(subset_all["Data"], format=DATA_FMT, errors="coerce").dropna().dt.date
                 periodos = [p for p in subset_all.get("Período","").astype(str).tolist() if p.strip()]
                 funcs    = [f for f in subset_all.get("Funcionário","").astype(str).tolist() if f.strip()]
-                servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
 
                 if len(set(datas_sel)) == 1:
                     data_atend_txt = next(iter(set(datas_sel))).strftime(DATA_FMT)
@@ -1024,7 +1047,7 @@ elif acao == "💰 Registrar pagamento":
                 atendido_por_txt = (funcs[0] if len(set(funcs)) == 1 else ", ".join(sorted(set(funcs))))
 
                 df_priv, _ = read_base_raw(conectar_sheets())
-                # indicadores rápidos
+
                 def _resumo_visitas(df_base: pd.DataFrame, cliente: str):
                     if df_base is None or df_base.empty or not cliente: return None, None, 0, "-"
                     df = df_base.copy()
@@ -1051,6 +1074,7 @@ elif acao == "💰 Registrar pagamento":
                     f"🧑‍🤝‍🧑 Atendido por: <b>{atendido_por_txt or '-'}</b>"
                 )
                 linha_taxa_cp = (f"\n🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>" if usar_cartao else "")
+
                 bloco_hist_indic = (
                     "\n\n📊 <b>Histórico</b>\n"
                     f"• Média: <b>{(f'{media_dias:.1f} dias' if media_dias is not None else '-')}</b>\n"
@@ -1080,17 +1104,33 @@ elif acao == "💰 Registrar pagamento":
                 else:
                     bloco_srv = f"\n\n🔎 <b>{ano_corr}: por serviço</b>\n• (sem registros)"
 
+                # Frequência por funcionário (visitas por dia)
+                freq_lines = ""
+                try:
+                    df_vis = df_priv.copy()
+                    df_vis["__dt"] = pd.to_datetime(df_vis.get("Data"), format=DATA_FMT, errors="coerce")
+                    df_vis = df_vis[(df_vis["__dt"].notna()) & (df_vis.get("Cliente","")==cliente_sel)]
+                    if not df_vis.empty:
+                        df_day = df_vis.sort_values("__dt").groupby("__dt", as_index=False).agg({"Funcionário":"last"})
+                        vc = df_day["Funcionário"].astype(str).value_counts()
+                        itens = [f"• {k}: <b>{int(v)} visita(s)</b>" for k, v in vc.items()]
+                        if itens:
+                            freq_lines = "\n\n📊 <b>Frequência por funcionário</b>\n" + "\n".join(itens)
+                except Exception:
+                    pass
+
                 msg_jp = (
                     "🧾 <b>Cópia para controle</b>\n" + bloco_atend +
                     f"\n💳 Forma: <b>{forma_pag}</b>\n"
                     f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>"
                     + linha_taxa_cp +
-                    bloco_hist_indic + bloco_hist + bloco_srv +
+                    bloco_hist_indic + bloco_hist + bloco_srv + freq_lines +
                     (f"\n\n📝 Obs.: {obs}" if obs else "")
                 )
-                foto = FOTOS.get(_norm(cliente_sel))
-                if foto: tg_send_photo(foto, msg_jp, chat_id=_get_chat_id_jp())
-                else:    tg_send(msg_jp, chat_id=_get_chat_id_jp())
+
+                if foto_cli: tg_send_photo(foto_cli, msg_jp, chat_id=_get_chat_id_jp())
+                else:        tg_send(msg_jp, chat_id=_get_chat_id_jp())
+
             except Exception:
                 pass
 
@@ -1239,7 +1279,7 @@ else:  # acao == "📗 Pagos (histórico)"
 
     vis = df_pag[mask].copy()
 
-    # NOVO: apenas "RegistradoDe" (REMOVIDO RegistradoAte)
+    # NOVO: apenas "RegistradoDe"
     def _registrado_de(idl_str: str) -> str:
         ids = [s.strip() for s in str(idl_str or "").split(";") if s.strip()]
         datas = [data_reg_do_id(s) for s in ids if data_reg_do_id(s)]
@@ -1279,7 +1319,7 @@ else:  # acao == "📗 Pagos (histórico)"
         st.download_button("⬇️ Exportar (Excel)", data=buf.getvalue(), file_name="fiados_pagos.xlsx")
     except Exception:
         csv_bytes = vis[cols_show].sort_values("DataPagamento", ascending=False).to_csv(index=False).encode("utf-8-sig")
-        st.download_button("⬇️ Exportar (CSV)", data=csv_bytes, file_name="fiados_pagos.csv")
+    st.download_button("⬇️ Exportar (CSV)", data=csv_bytes, file_name="fiados_pagos.csv")
 
     st.markdown("---")
     st.caption("🔎 Detalhe rápido por cliente (no período filtrado)")
