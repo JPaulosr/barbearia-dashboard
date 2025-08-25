@@ -10,6 +10,7 @@ import io, textwrap, re
 import plotly.express as px
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
+from gspread.utils import rowcol_to_a1
 from datetime import datetime, date
 import pytz
 import numpy as np
@@ -99,8 +100,12 @@ def _fetch_conferido_map(ws):
     e devolve um dict {SheetRow:int -> bool}.
     """
     col_conf = _ensure_conferido_column(ws)
-    col_letter = gspread.utils.rowcol_to_a1(1, col_conf)[0]  # ex.: 'W'
-    rng = f"{col_letter}2:{col_letter}"
+
+    # Captura as letras da coluna (suporta AA, AB, ...)
+    a1 = rowcol_to_a1(1, col_conf)  # e.g. 'W1' ou 'AA1'
+    col_letters = "".join(ch for ch in a1 if ch.isalpha())
+
+    rng = f"{col_letters}2:{col_letters}"  # coluna inteira a partir da linha 2
     vals = ws.get(rng, value_render_option="UNFORMATTED_VALUE")
 
     m = {}
@@ -238,7 +243,6 @@ def _to_xlsx_bytes(dfs_by_sheet: dict):
     engine = _choose_excel_engine()
     if not engine:
         return None
-    import io
     with io.BytesIO() as buf:
         with pd.ExcelWriter(buf, engine=engine) as writer:
             for sheet, df in dfs_by_sheet.items():
