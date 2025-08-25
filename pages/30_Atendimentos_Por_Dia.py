@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # 15_Atendimentos_Masculino_Por_Dia.py
-# Página: escolher um dia e ver TODOS os atendimentos (masculino),
-# KPIs gerais, por funcionário, gráfico comparativo e histórico (com Top 5).
-# + MODO DE CONFERÊNCIA: marcar conferido e excluir registros no Sheets.
+# KPIs do dia, por funcionário, conferência (gravar/excluir no Sheets),
+# histórico, exportar (CSV/XLSX) e exportar Mobills (apenas não conferidos, opcional).
 
 import streamlit as st
 import pandas as pd
@@ -12,7 +11,8 @@ import plotly.express as px
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
 from datetime import datetime, date
-import pytz, textwrap
+import pytz, textwrap, re
+import numpy as np  # << novo
 
 # =========================
 # CONFIG
@@ -41,6 +41,10 @@ def _fmt_data(d):
     d2 = pd.to_datetime(str(d), dayfirst=True, errors="coerce")
     return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
 
+def _norm_col(name: str) -> str:
+    """Normaliza nome de coluna: minúsculas, sem espaços/pontuação."""
+    return re.sub(r"[\s\W_]+", "", str(name).strip().lower())
+
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
     """Escopo de ESCRITA para marcar conferido e excluir linhas."""
@@ -54,9 +58,21 @@ def _conectar_sheets():
     )
     return gspread.authorize(creds)
 
-@st.cache_data(ttl=300, show_spinner=False)
+def _to_bool(x):
+    """Conversor robusto para booleano vindo do Sheets."""
+    # já booleano?
+    if isinstance(x, (bool, np.bool_)):
+        return bool(x)
+    # numérico?
+    if isinstance(x, (int, float)) and not pd.isna(x):
+        return float(x) != 0.0
+    # string
+    s = str(x).strip().lower()
+    return s in ("1", "true", "verdadeiro", "sim", "ok", "y", "yes")
+
+@st.cache_data(ttl=60, show_spinner=False)
 def carregar_base():
-    """Lê a 'Base de Dados' e preserva o índice para mapear a linha real do Sheets."""
+    """Lê a 'Base de Dados' e unifica qualquer variação de coluna 'Conferido'."""
     gc = _conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
@@ -66,24 +82,39 @@ def carregar_base():
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Mapeia linha física do Sheets (header=1 → primeira linha de dados é 2)
+    # linha real no Sheets (header=1 => primeira linha de dados é 2)
     df["SheetRow"] = df.index + 2
 
-    # Normaliza nomes e garante colunas
+    # cabeçalhos limpos
     df.columns = [str(c).strip() for c in df.columns]
-    cols = ["Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
-            "Funcionário", "Fase", "Hora Chegada", "Hora Início",
-            "Hora Saída", "Hora Saída do Salão", "Tipo", "Conferido"]
-    for c in cols:
+
+    # garante colunas básicas
+    base_cols = ["Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
+                 "Funcionário", "Fase", "Hora Chegada", "Hora Início",
+                 "Hora Saída", "Hora Saída do Salão", "Tipo"]
+    for c in base_cols:
         if c not in df.columns:
             df[c] = None
 
-    # Parse de datas
+    # ---- Unificar CONFERIDO (pega qualquer variação) ----
+    conf_cols = [c for c in df.columns if _norm_col(c) == "conferido"]
+    if conf_cols:
+        # OR entre todas as variações encontradas
+        conf_series = pd.Series(False, index=df.index)
+        for c in conf_cols:
+            conf_series = conf_series | df[c].apply(_to_bool)
+        df["Conferido"] = conf_series.astype(bool)
+    else:
+        df["Conferido"] = False
+    df.attrs["__conferido_sources__"] = conf_cols or []
+    # ------------------------------------------------------
+
+    # datas
     def parse_data(x):
         if pd.isna(x): return None
         if isinstance(x, (datetime, pd.Timestamp)): return x.date()
         s = str(x).strip()
-        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"]:
+        for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y"):
             try:
                 return datetime.strptime(s, fmt).date()
             except Exception:
@@ -91,7 +122,7 @@ def carregar_base():
         return None
     df["Data_norm"] = df["Data"].apply(parse_data)
 
-    # Parse de valores
+    # valores
     def parse_valor(v):
         if pd.isna(v): return 0.0
         s = str(v).strip().replace("R$", "").replace(" ", "")
@@ -105,18 +136,13 @@ def carregar_base():
             return 0.0
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # Limpeza de strings
+    # strings
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
-        if col not in df.columns:
-            df[col] = ""
+        if col not in df.columns: df[col] = ""
         df[col] = df[col].astype(str).fillna("").str.strip()
 
-    # Conferido → bool
-    def to_bool(x):
-        if isinstance(x, bool): return x
-        s = str(x).strip().lower()
-        return s in ("1", "true", "sim", "ok", "y", "yes")
-    df["Conferido"] = df["Conferido"].apply(to_bool)
+    # garante dtype bool da coluna final
+    df["Conferido"] = df["Conferido"].apply(_to_bool).astype(bool)
 
     return df
 
@@ -157,21 +183,39 @@ def preparar_tabela_exibicao(df):
     out["Valor"] = out["Valor_num"].apply(format_moeda)
     return out[cols_ordem]
 
-def gerar_excel(df_lin, df_cli):
+# ---------- Excel helpers (fallback engine) ----------
+def _choose_excel_engine():
+    """Retorna 'xlsxwriter' se existir, senão 'openpyxl', senão None."""
+    import importlib.util
+    for eng in ("xlsxwriter", "openpyxl"):
+        if importlib.util.find_spec(eng) is not None:
+            return eng
+    return None
+
+def _to_xlsx_bytes(dfs_by_sheet: dict):
+    """Recebe {'NomeAba': df, ...} e devolve bytes do XLSX com a melhor engine disponível."""
+    engine = _choose_excel_engine()
+    if not engine:
+        return None
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        df_lin.to_excel(w, sheet_name="Linhas", index=False)
-        df_cli.to_excel(w, sheet_name="ResumoClientes", index=False)
+    with pd.ExcelWriter(buf, engine=engine) as writer:
+        for sheet, df in dfs_by_sheet.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
     return buf.getvalue()
+
+def gerar_excel(df_lin, df_cli):
+    return _to_xlsx_bytes({"Linhas": df_lin, "ResumoClientes": df_cli})
 
 # ===== helpers Sheets =====
 def _ensure_conferido_column(ws):
-    """Garante coluna 'Conferido' e retorna o índice (1-based)."""
+    """Garante coluna 'Conferido' e retorna índice (1-based), considerando variações."""
     headers = ws.row_values(1)
     if not headers:
         raise RuntimeError("Cabeçalho vazio no Sheets.")
-    if "Conferido" in headers:
-        return headers.index("Conferido") + 1
+    norms = [_norm_col(h) for h in headers]
+    if "conferido" in norms:
+        return norms.index("conferido") + 1
+    # não existe: cria no final
     col = len(headers) + 1
     ws.update_cell(1, col, "Conferido")
     return col
@@ -206,6 +250,11 @@ st.set_page_config(page_title="Atendimentos por Dia (Masculino)", page_icon="�
 st.title("📅 Atendimentos por Dia — Masculino")
 st.caption("KPIs do dia, comparativo por funcionário e histórico dos dias com mais atendimentos (regra de 11/05/2025 aplicada).")
 
+# Sidebar: recarregar
+if st.sidebar.button("🔄 Recarregar dados agora"):
+    st.cache_data.clear()
+    st.rerun()
+
 with st.spinner("Carregando base masculina..."):
     df_base = carregar_base()
 
@@ -216,6 +265,10 @@ df_dia = filtrar_por_dia(df_base, dia_selecionado)
 if df_dia.empty:
     st.info("Nenhum atendimento encontrado para o dia selecionado.")
     st.stop()
+
+# (debug/apoio — mostra colunas usadas e contagem True do dia)
+st.sidebar.caption("Conferido lido das colunas: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
+st.sidebar.caption(f"Conferidos (dia): {int(df_dia['Conferido'].fillna(False).sum())}")
 
 # ========== CSS CARDS ==========
 html("""
@@ -238,13 +291,13 @@ html("""
 """)
 
 # =========================
-# KPIs (RESPONSIVOS) — Ticket Médio + Receita do Salão
+# KPIs (RESPONSIVOS)
 # =========================
 df_v_top = df_dia[df_dia["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
-_, _, rec_v_top, _ = kpis(df_v_top)  # receita do Vinicius no dia
+_, _, rec_v_top, _ = kpis(df_v_top)
 
 cli, srv, rec, tkt = kpis(df_dia)
-receita_salao = rec - (rec_v_top * 0.5)  # total - 50% do Vinicius
+receita_salao = rec - (rec_v_top * 0.5)
 
 html(
     '<div class="metrics-wrap">'
@@ -255,18 +308,15 @@ html(
     + card("🏢 Receita do salão (–50% Vinicius)", format_moeda(receita_salao))
     + "</div>"
 )
-
 html(f'<span class="badge">Fórmula da Receita do salão: Receita total ({format_moeda(rec)}) – 50% da receita do Vinicius ({format_moeda(rec_v_top*0.5)}).</span>')
 st.markdown("---")
 
 # =========================
-# Por Funcionário (RESPONSIVO)
+# Por Funcionário
 # =========================
 st.subheader("📊 Por Funcionário (dia selecionado)")
-
 df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
 df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
-
 cli_j, srv_j, rec_j, tkt_j = kpis(df_j)
 cli_v, srv_v, rec_v, tkt_v = kpis(df_v)
 
@@ -290,7 +340,7 @@ with col_v:
          '</div>')
 
 # =========================
-# Gráfico comparativo (Clientes x Serviços)
+# Gráfico comparativo
 # =========================
 df_comp = pd.DataFrame([
     {"Funcionário": FUNC_JPAULO, "Clientes": cli_j, "Serviços": srv_j},
@@ -304,7 +354,7 @@ fig = px.bar(
 st.plotly_chart(fig, use_container_width=True)
 
 # ========================================================
-# 🔎 MODO DE CONFERÊNCIA (logo após o comparativo)
+# 🔎 MODO DE CONFERÊNCIA
 # ========================================================
 st.markdown("---")
 st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
@@ -312,6 +362,8 @@ st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
 df_conf = df_dia.copy()
 if "Conferido" not in df_conf.columns:
     df_conf["Conferido"] = False
+else:
+    df_conf["Conferido"] = df_conf["Conferido"].apply(_to_bool).astype(bool)
 
 df_conf_view = df_conf[[
     "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
@@ -342,8 +394,8 @@ if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
         sh = gc.open_by_key(SHEET_ID)
         ws = sh.worksheet(ABA_DADOS)
 
-        # Atualiza 'Conferido' 1 a 1 (payload simples e estável)
-        orig_by_row = df_conf.set_index("SheetRow")["Conferido"].to_dict()
+        # Atualiza 'Conferido'
+        orig_by_row = df_conf.set_index("SheetRow")["Conferido"].apply(_to_bool).to_dict()
         updates = []
         for _, r in edited.iterrows():
             rownum = int(r["SheetRow"])
@@ -353,147 +405,174 @@ if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
                 updates.append({"row": rownum, "value": new_val})
         _update_conferido(ws, updates)
 
-        # Exclui linhas marcadas
+        # Exclui marcados
         rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(r["Excluir"])]
         _delete_rows(ws, rows_to_delete)
 
         st.success("Alterações aplicadas com sucesso!")
-        st.experimental_rerun()
-
+        st.cache_data.clear()
+        st.rerun()
     except Exception as e:
         st.error(f"Falha ao aplicar mudanças: {e}")
 
 # -------------------------
-# Histórico — Dias com mais atendimentos
+# FILTRO DE EXPORTAÇÃO (só NÃO conferidos)
 # -------------------------
 st.markdown("---")
-st.subheader("📈 Histórico — Dias com mais atendimentos")
+st.subheader("⚙️ Filtro para exportação")
 
-only_after_cut = st.checkbox(
-    f"Mostrar apenas a partir de {DATA_CORRETA.strftime('%d/%m/%Y')}",
-    value=True
+export_only_unchecked = st.checkbox(
+    "Exportar apenas os registros NÃO conferidos",
+    value=True,
+    help="Quando marcado, os botões de download considerarão somente linhas com Conferido = False."
 )
 
-def contar_atendimentos_bloco(bloco):
-    if bloco.empty: return 0, 0
-    d0 = bloco["Data_norm"].dropna()
-    if d0.empty: return 0, len(bloco)
-    dia = d0.iloc[0]
-    if dia < DATA_CORRETA:
-        clientes = len(bloco)
-    else:
-        clientes = bloco.groupby(["Cliente", "Data_norm"]).ngroups
-    return clientes, len(bloco)
+df_export_base = df_dia.copy()
+if "Conferido" not in df_export_base.columns:
+    df_export_base["Conferido"] = False
+else:
+    df_export_base["Conferido"] = df_export_base["Conferido"].apply(_to_bool).astype(bool)
 
-lista = []
-for dval, bloco in df_base.groupby("Data_norm"):
-    if pd.isna(dval): continue
-    if only_after_cut and dval < DATA_CORRETA: continue
-    cli_h, srv_h = contar_atendimentos_bloco(bloco)
-    lista.append({"Data": dval, "Clientes únicos": cli_h, "Serviços": srv_h})
+if export_only_unchecked:
+    df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
-df_hist = pd.DataFrame(lista).sort_values("Data")
-if not df_hist.empty:
-    df_hist["Data"] = pd.to_datetime(df_hist["Data"], errors="coerce")
+st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")  # << fix
 
-if not df_hist.empty:
-    top_idx = df_hist["Clientes únicos"].idxmax()
-    top_dia = df_hist.loc[top_idx]
-    st.success(
-        f"📅 Recorde: **{_fmt_data(top_dia['Data'])}** — "
-        f"**{int(top_dia['Clientes únicos'])} clientes** e **{int(top_dia['Serviços'])} serviços**."
+# -------------------------
+# Tabela + exportações (respeita filtro)
+# -------------------------
+st.markdown("---")
+st.subheader("Registros selecionados para exportação")
+
+if df_export_base.empty:
+    st.info("Nada a exportar com o filtro atual (todos conferidos).")
+else:
+    df_exibe = preparar_tabela_exibicao(df_export_base)
+    st.dataframe(df_exibe, use_container_width=True, hide_index=True)
+
+    st.subheader("Resumo por Cliente (seleção atual)")
+    grp = (
+        df_export_base
+        .groupby("Cliente", as_index=False)
+        .agg(Quantidade_Serviços=("Serviço", "count"),
+             Valor_Total=("Valor_num", "sum"))
+        .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
     )
-
-    df_top5 = df_hist.sort_values(
-        ["Clientes únicos", "Serviços", "Data"],
-        ascending=[False, False, False]
-    ).head(5).copy()
-    df_top5["Data_fmt"] = df_top5["Data"].apply(_fmt_data)
-
-    ct1, ct2 = st.columns([1, 1])
-    with ct1:
-        st.markdown("**🏆 Top 5 dias (por clientes)**")
-        st.dataframe(
-            df_top5[["Data_fmt", "Clientes únicos", "Serviços"]]
-                .rename(columns={"Data_fmt": "Data"}),
-            use_container_width=True, hide_index=True
-        )
-    with ct2:
-        fig_top = px.bar(
-            df_top5, x="Data_fmt", y="Clientes únicos", text="Clientes únicos",
-            title="Top 5 — Clientes por dia"
-        )
-        st.plotly_chart(fig_top, use_container_width=True)
-
-    st.markdown("**Histórico completo**")
-    df_hist_show = df_hist.copy()
-    df_hist_show["Data_fmt"] = df_hist_show["Data"].apply(_fmt_data)
+    grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
     st.dataframe(
-        df_hist_show[["Data_fmt", "Clientes únicos", "Serviços"]]
-            .rename(columns={"Data_fmt": "Data"}),
+        grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
         use_container_width=True, hide_index=True
     )
 
-    fig2 = px.line(
-        df_hist, x="Data", y="Clientes únicos", markers=True,
-        title="Clientes únicos por dia (histórico)"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.markdown("### Exportar (CSV/XLSX)")
+    df_lin_export = df_exibe.copy()
+    df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
 
-# -------------------------
-# Tabela do dia + exportações
-# -------------------------
-st.markdown("---")
-df_exibe = preparar_tabela_exibicao(df_dia)
-st.subheader("Registros do dia (linhas)")
-st.dataframe(df_exibe, use_container_width=True, hide_index=True)
-
-st.subheader("Resumo por Cliente (no dia)")
-grp = (
-    df_dia
-    .groupby("Cliente", as_index=False)
-    .agg(Quantidade_Serviços=("Serviço", "count"),
-         Valor_Total=("Valor_num", "sum"))
-    .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
-)
-grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
-
-st.dataframe(
-    grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
-    use_container_width=True, hide_index=True
-)
-
-st.markdown("### Exportar")
-df_lin_export = df_exibe.copy()
-df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
-
-st.download_button(
-    "⬇️ Baixar Linhas (CSV)",
-    data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
-    mime="text/csv"
-)
-st.download_button(
-    "⬇️ Baixar Resumo por Cliente (CSV)",
-    data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
-    mime="text/csv"
-)
-
-try:
-    xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
     st.download_button(
-        "⬇️ Baixar Excel (Linhas + Resumo)",
-        data=xlsx_bytes,
-        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "⬇️ Baixar Linhas (CSV)",
+        data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
+        mime="text/csv"
     )
-except Exception as e:
-    st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
+    st.download_button(
+        "⬇️ Baixar Resumo por Cliente (CSV)",
+        data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
+        mime="text/csv"
+    )
 
-st.caption(
-    "• Contagem de clientes aplica a regra: antes de 11/05/2025 cada linha=1 atendimento; "
-    "a partir de 11/05/2025: 1 atendimento por Cliente + Data. "
-    "• 'Por Funcionário' usa o campo **Funcionário** da base. "
-    "• No modo de conferência, a coluna **Conferido** é criada automaticamente se não existir."
-)
+    xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
+    if xlsx_bytes:
+        st.download_button(
+            "⬇️ Baixar Excel (Linhas + Resumo)",
+            data=xlsx_bytes,
+            file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("Nenhuma engine Excel instalada (xlsxwriter/openpyxl). Use os CSVs ou instale uma engine.")
+
+    # Pós-exportação: marcar como conferidos
+    st.markdown("#### Pós-exportação")
+    if st.button("✅ Marcar exportados como Conferidos no Sheets"):
+        try:
+            gc = _conectar_sheets()
+            sh = gc.open_by_key(SHEET_ID)
+            ws = sh.worksheet(ABA_DADOS)
+            updates = [{"row": int(r), "value": True} for r in df_export_base["SheetRow"].tolist()]
+            _update_conferido(ws, updates)
+            st.success(f"Marcados {len(updates)} registros como Conferidos.")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao marcar como conferidos: {e}")
+
+# ===========================================
+# 📤 Exportar Mobills (layout solicitado)
+# ===========================================
+st.markdown("---")
+st.subheader("📤 Exportar Mobills")
+
+conta_fallback = st.text_input("Conta padrão (quando vazio na base)", value="Nubank CNPJ")
+
+def _fmt_data_ddmmyyyy(d):
+    return d.strftime("%d/%m/%Y") if pd.notna(d) else ""
+
+def _descricao(row):
+    func = str(row.get("Funcionário", "")).strip().casefold()
+    if func == FUNC_VINICIUS.casefold():
+        return "Vinicius"
+    return (str(row.get("Serviço", "")).strip() or "Serviço")
+
+def _categoria(row):
+    serv = (str(row.get("Serviço", "")).strip() or "Serviço")
+    func = str(row.get("Funcionário", "")).strip().casefold()
+    if func == FUNC_VINICIUS.casefold():
+        return f"Lucro Vinicius > {serv}"
+    return f"Lucro salão > {serv}"
+
+if not df_export_base.empty:
+    df_mob = df_export_base.copy()  # usa seleção (pode ser só não conferidos)
+
+    df_mob["Data"] = df_mob["Data_norm"].apply(_fmt_data_ddmmyyyy)
+    df_mob["Descrição"] = df_mob.apply(_descricao, axis=1)
+    df_mob["Valor"] = pd.to_numeric(df_mob["Valor_num"], errors="coerce").fillna(0.0)
+
+    df_mob["Conta"] = df_mob["Conta"].fillna("").astype(str).str.strip()
+    df_mob.loc[df_mob["Conta"] == "", "Conta"] = conta_fallback
+
+    df_mob["Categoria"] = df_mob.apply(_categoria, axis=1)
+
+    df_mob["serviço"] = df_mob["Serviço"].astype(str).fillna("").str.strip()
+    df_mob["cliente"] = df_mob["Cliente"].astype(str).fillna("").str.strip()
+    df_mob["Combo"]   = df_mob.get("Combo", "").astype(str).fillna("").str.strip()
+
+    cols_final = ["Data", "Descrição", "Valor", "Conta", "Categoria", "serviço", "cliente", "Combo"]
+    df_mobills = df_mob[cols_final].copy()
+
+    st.markdown("**Prévia (Mobills)**")
+    st.dataframe(df_mobills, use_container_width=True, hide_index=True)
+
+    # CSV (separador ';')
+    csv_bytes = df_mobills.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "⬇️ Baixar CSV (Mobills)",
+        data=csv_bytes,
+        file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.csv",
+        mime="text/csv",
+        type="primary"
+    )
+
+    # XLSX (aba 'Mobills') com fallback
+    xlsx_mob = _to_xlsx_bytes({"Mobills": df_mobills})
+    if xlsx_mob:
+        st.download_button(
+            "⬇️ Baixar XLSX (Mobills)",
+            data=xlsx_mob,
+            file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info("Sem engine Excel instalada (xlsxwriter/openpyxl). Use o CSV ou instale uma engine.")
+else:
+    st.info("Sem dados para exportar (com o filtro atual).")
