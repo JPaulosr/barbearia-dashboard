@@ -24,8 +24,18 @@ MESES_PT = {
 }
 NOMES_EXCLUIR_RANKINGS = ["boliviano", "brasileiro", "menino"]
 
-# Identificação de PRODUTO por nome do serviço
+# Produtos por nome do serviço
 REGEX_PRODUTO = re.compile(r"(produto|gel|pomad|shampoo|cera|spray|po\b|pó\b|p\u00f3\b)", re.IGNORECASE)
+
+# --- URNA: regra de divisão ---
+URNA_SPLIT_YEAR = 2025      # a partir deste ano divide
+URNA_PCT_VINICIUS = 0.50    # 50% Vinicius; restante JP
+
+# Linhas de URNA por nome do serviço (Natal/Urna)
+REGEX_URNA = re.compile(
+    r"(caixinh[aã].*nat|caixinh[aã].*urna|urna.*caixinh[aã]|caixinh[aã]\s*natal|natal\s*caixinh[aã])",
+    re.IGNORECASE
+)
 
 # =========================
 # CSS (cards + blocos)
@@ -62,18 +72,22 @@ def carregar_dados():
     df = df.dropna(subset=["Data"])
     df["ValorNum"] = pd.to_numeric(df.get("Valor"), errors="coerce").fillna(0)
 
-    # Caixinha: vem nas MESMAS LINHAS do atendimento (colunas da planilha)
-    # Procura colunas usuais e soma numa coluna única "CaixinhaTotal"
+    # ---- Caixinha Dia/Fundo: vem nas MESMAS LINHAS dos atendimentos
     cand_cx = ["CaixinhaDia", "Caixinha_Fundo", "CaixinhaFundo", "Caixinha", "Gorjeta"]
     existentes = [c for c in cand_cx if c in df.columns]
     for c in existentes:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-    df["CaixinhaTotal"] = df[existentes].sum(axis=1) if existentes else 0
+    df["CaixinhaDiaTotal"] = df[existentes].sum(axis=1) if existentes else 0
 
     # Derivadas de tempo
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
     df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
+
+    # Flags
+    df["EhProduto"] = df["Serviço"].astype(str).apply(lambda s: bool(REGEX_PRODUTO.search(s)))
+    df["EhUrna"] = df["Serviço"].astype(str).apply(lambda s: bool(REGEX_URNA.search(s)))
+    df["EhServico"] = ~(df["EhProduto"] | df["EhUrna"])  # serviço operacional (exclui produto e URNA)
     return df
 
 df_full = carregar_dados()
@@ -125,7 +139,7 @@ else:
 # Histórico
 mask_historico_full = mask_valores_full if aplicar_hist else pd.Series(True, index=df_full.index)
 
-# Período (ano/meses)
+# Período
 if meses_selecionados:
     meses_numeros = [k for k, v in MESES_PT.items() if v in meses_selecionados]
     mask_periodo = (df_full["Ano"] == ano_escolhido) & (df_full["Mês"].isin(meses_numeros))
@@ -141,18 +155,11 @@ df_valores = df_full[mask_valores_full & mask_periodo].copy()
 def brl(x: float) -> str:
     return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 
-def is_produto(nome_servico: str) -> bool:
-    if not isinstance(nome_servico, str): return False
-    return bool(REGEX_PRODUTO.search(nome_servico))
-
-# Flags de produto/serviço (caixinha já vem por coluna, não por serviço)
-df_valores["EhProduto"] = df_valores["Serviço"].astype(str).apply(is_produto)
-df_valores["EhServico"] = ~df_valores["EhProduto"]  # tudo que não é produto tratamos como serviço
-
 # =========================
 # KPIs + CARDS (LADO A LADO)
 # =========================
-receita_total = float(df_valores["ValorNum"].sum())
+# Receita operacional: exclui URNA para não inflar
+receita_total = float(df_valores.loc[~df_valores["EhUrna"], "ValorNum"].sum())
 total_atendimentos = len(df_hist)
 
 # Clientes únicos com regra de unicidade a partir de 11/05/2025
@@ -162,8 +169,8 @@ clientes_unicos = pd.concat([antes, depois])["Cliente"].nunique()
 
 ticket_medio = (receita_total / total_atendimentos) if total_atendimentos else 0.0
 
-# Caixinha do período (somando colunas de caixinha das linhas do atendimento)
-caixinha_periodo_total = float(df_valores["CaixinhaTotal"].sum())
+# 🎁 Caixinha do período = SOMENTE Caixinha do DIA (linhas dos atendimentos)
+caixinha_periodo_total = float(df_valores.loc[~df_valores["EhUrna"], "CaixinhaDiaTotal"].sum())
 
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
@@ -178,15 +185,16 @@ with c5:
     st.markdown(f'<div class="kpi"><p class="title">🎁 Caixinha (Período)</p><p class="value">{brl(caixinha_periodo_total)}</p></div>', unsafe_allow_html=True)
 
 # =========================
-# CAIXINHAS — POR FUNCIONÁRIO (PERÍODO) + TOTAL ANUAL
+# 🎁 BLOCO: Caixinha do Período (somente DIA)
 # =========================
 col_a, col_b = st.columns([1.1, 1])
 
 with col_a:
-    st.markdown('<div class="block"><b>🎁 Caixinhas por Funcionário (período filtrado)</b>', unsafe_allow_html=True)
+    st.markdown('<div class="block"><b>🎁 Caixinha do Período — por Funcionário</b>', unsafe_allow_html=True)
     df_cx_func = (
-        df_valores.groupby("Funcionário", dropna=False)["CaixinhaTotal"]
-        .sum().reset_index().rename(columns={"CaixinhaTotal":"Caixinha"})
+        df_valores.loc[~df_valores["EhUrna"]]
+        .groupby("Funcionário", dropna=False)["CaixinhaDiaTotal"]
+        .sum().reset_index().rename(columns={"CaixinhaDiaTotal":"Caixinha"})
         .sort_values("Caixinha", ascending=False)
     )
     if not df_cx_func.empty and df_cx_func["Caixinha"].sum() > 0:
@@ -194,17 +202,46 @@ with col_a:
         fig_cx.update_layout(height=340, yaxis_title="Valor (R$)", showlegend=False, margin=dict(l=10,r=10,t=30,b=10))
         st.plotly_chart(fig_cx, use_container_width=True)
     else:
-        st.info("Nenhuma caixinha encontrada no período com os filtros atuais.")
+        st.info("Nenhuma caixinha do dia encontrada no período com os filtros atuais.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col_b:
-    st.markdown('<div class="block"><b>📅 Caixinha Total no Ano</b>', unsafe_allow_html=True)
+    st.markdown('<div class="block"><b>📅 Caixinha do Dia — Total no Ano</b>', unsafe_allow_html=True)
     df_ano = df_full[df_full["Ano"] == ano_escolhido]
-    # respeita mesmo filtro de pagamento aplicado para valores
     df_ano = df_ano[mask_valores_full.loc[df_ano.index]] if len(mask_valores_full) == len(df_full) else df_ano
-    cx_ano = float(df_ano["CaixinhaTotal"].sum())
-    st.metric("Total no Ano", brl(cx_ano))
+    cx_dia_ano = float(df_ano.loc[~df_ano["EhUrna"], "CaixinhaDiaTotal"].sum())
+    st.metric("Total no Ano (Dia)", brl(cx_dia_ano))
     st.markdown('</div>', unsafe_allow_html=True)
+
+# =========================
+# 🎄 BLOCO: Caixinha NATAL (URNA) — divisão por ano
+# =========================
+st.markdown('<div class="block"><b>🎄 Caixinha NATAL (URNA) — Ano</b>', unsafe_allow_html=True)
+df_urna_ano = df_full[(df_full["Ano"] == ano_escolhido) & (df_full["EhUrna"])].copy()
+df_urna_ano = df_urna_ano[mask_valores_full.loc[df_urna_ano.index]] if len(mask_valores_full) == len(df_full) else df_urna_ano
+urna_total_ano = float(df_urna_ano["ValorNum"].sum())
+
+if ano_escolhido >= URNA_SPLIT_YEAR:
+    quota_vinicius = urna_total_ano * URNA_PCT_VINICIUS
+    quota_jpaulo   = urna_total_ano - quota_vinicius
+else:
+    quota_vinicius = 0.0
+    quota_jpaulo   = urna_total_ano
+
+colu1, colu2, colu3 = st.columns(3)
+colu1.metric("Total URNA no Ano", brl(urna_total_ano))
+colu2.metric("Quota JPaulo",       brl(quota_jpaulo))
+colu3.metric("Quota Vinicius",     brl(quota_vinicius))
+
+# (opcional) mostrar quem lançou as linhas de URNA
+if not df_urna_ano.empty:
+    df_urna_lanc = (df_urna_ano.groupby("Funcionário", dropna=False)["ValorNum"]
+                    .sum().reset_index().rename(columns={"ValorNum":"Valor Lançado"}))
+    df_urna_lanc["Valor Lançado"] = df_urna_lanc["Valor Lançado"].astype(float)
+    st.dataframe(df_urna_lanc, use_container_width=True, hide_index=True)
+else:
+    st.info("Nenhuma linha de URNA registrada para o ano selecionado.")
+st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
 # TENDÊNCIA MENSAL (RECEITA) — APENAS DO ANO SELECIONADO
@@ -212,7 +249,11 @@ with col_b:
 st.markdown('<div class="block"><b>📈 Tendência Mensal de Receita (Ano Selecionado)</b>', unsafe_allow_html=True)
 df_anual_val = df_full[(df_full["Ano"] == ano_escolhido)]
 df_anual_val = df_anual_val[mask_valores_full.loc[df_anual_val.index]] if len(mask_valores_full) == len(df_full) else df_anual_val
-df_mensal = df_anual_val.groupby("Mês")["ValorNum"].sum().reset_index().sort_values("Mês")
+# receita operacional (sem URNA)
+df_mensal = (
+    df_anual_val.loc[~df_anual_val["EhUrna"]]
+    .groupby("Mês")["ValorNum"].sum().reset_index().sort_values("Mês")
+)
 if not df_mensal.empty:
     df_mensal["MêsNome"] = df_mensal["Mês"].map(MESES_PT)
     fig_mes = px.bar(df_mensal, x="MêsNome", y="ValorNum", text_auto=True)
@@ -229,7 +270,7 @@ col_p1, col_p2 = st.columns([1.2, 1])
 
 with col_p1:
     st.markdown('<div class="block"><b>🛍️ Produtos Vendidos (quantidade)</b>', unsafe_allow_html=True)
-    df_prod = df_valores[df_valores["EhProduto"]].copy()
+    df_prod = df_valores.loc[~df_valores["EhUrna"] & df_valores["EhProduto"]].copy()
     if not df_prod.empty:
         top_qty = (
             df_prod.groupby("Serviço")["Serviço"].count()
@@ -259,10 +300,10 @@ with col_p2:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# TOP SERVIÇOS (exclui produtos)
+# TOP SERVIÇOS (exclui produto e URNA)
 # =========================
 st.markdown('<div class="block"><b>✂️ Top Serviços por Valor</b>', unsafe_allow_html=True)
-df_serv = df_valores[df_valores["EhServico"]].copy()
+df_serv = df_valores.loc[~df_valores["EhUrna"] & ~df_valores["EhProduto"]].copy()
 if not df_serv.empty:
     top_serv = (
         df_serv.groupby("Serviço")["ValorNum"].sum()
@@ -281,7 +322,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 # =========================
 st.markdown('<div class="block"><b>🥇 Top 10 Clientes</b>', unsafe_allow_html=True)
 cnt = df_hist.groupby("Cliente")["Serviço"].count().rename("Qtd_Serviços")
-val = df_valores.groupby("Cliente")["ValorNum"].sum().rename("Valor")
+val = df_valores.loc[~df_valores["EhUrna"]].groupby("Cliente")["ValorNum"].sum().rename("Valor")
 df_top = pd.concat([cnt, val], axis=1).reset_index().fillna(0)
 df_top = df_top[~df_top["Cliente"].str.lower().isin(NOMES_EXCLUIR_RANKINGS)]
 df_top = df_top.sort_values(by="Valor", ascending=False).head(10)
@@ -293,4 +334,4 @@ else:
 st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("Criado por JPaulo ✨ | Versão modernizada com cards lado a lado e caixinha por linha de atendimento")
+st.caption("Criado por JPaulo ✨ | Cards lado a lado • Caixinha do Dia separada • URNA com divisão 50/50 a partir de 2025")
