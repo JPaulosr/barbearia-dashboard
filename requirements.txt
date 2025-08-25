@@ -14,3 +14,5 @@ cloudinary
 streamlit-aggrid
 streamlit-searchbox
 babel
+XlsxWriter>=3.2
+openpyxl>=3.1
