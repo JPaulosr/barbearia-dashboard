@@ -41,8 +41,8 @@ def _fmt_data(d):
     return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
 
 def _norm_col(name: str) -> str:
-    """Normaliza nome de coluna: minúsculas, sem espaços/pontuação."""
-    return re.sub(r"[\s\W_]+", "", str(name).strip().lower())
+    """Normaliza nome de coluna: minúsculas, sem espaços, pontuação E dígitos."""
+    return re.sub(r"[\s\W_\d]+", "", str(name).strip().lower())
 
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
@@ -417,7 +417,7 @@ if "Conferido" not in df_export_base.columns:
 if export_only_unchecked:
     df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
-st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len[df_dia]}** registros.")
+st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")
 
 # -------------------------
 # Tabela + exportações (respeita filtro)
