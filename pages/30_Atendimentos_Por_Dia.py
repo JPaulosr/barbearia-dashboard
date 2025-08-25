@@ -6,13 +6,13 @@
 import streamlit as st
 import pandas as pd
 import gspread
-import io
+import io, textwrap, re
 import plotly.express as px
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
 from datetime import datetime, date
-import pytz, textwrap, re
-import numpy as np  # << novo
+import pytz
+import numpy as np
 
 # =========================
 # CONFIG
@@ -21,11 +21,8 @@ SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_DADOS = "Base de Dados"  # Masculino
 TZ = "America/Sao_Paulo"
 DATA_FMT = "%d/%m/%Y"
-
 FUNC_JPAULO = "JPaulo"
 FUNC_VINICIUS = "Vinicius"
-
-# Regra de corte: a partir desta data os clientes passaram a ser anotados corretamente
 DATA_CORRETA = datetime(2025, 5, 11).date()
 
 # =========================
@@ -42,12 +39,16 @@ def _fmt_data(d):
     return "" if pd.isna(d2) else d2.strftime(DATA_FMT)
 
 def _norm_col(name: str) -> str:
-    """Normaliza nome de coluna: minúsculas, sem espaços/pontuação."""
     return re.sub(r"[\s\W_]+", "", str(name).strip().lower())
+
+def _to_bool(x):
+    if isinstance(x, (bool, np.bool_)): return bool(x)
+    if isinstance(x, (int, float)) and not pd.isna(x): return float(x) != 0.0
+    s = str(x).strip().lower()
+    return s in ("1", "true", "verdadeiro", "sim", "ok", "y", "yes")
 
 @st.cache_resource(show_spinner=False)
 def _conectar_sheets():
-    """Escopo de ESCRITA para marcar conferido e excluir linhas."""
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
     creds = Credentials.from_service_account_info(
         info,
@@ -58,21 +59,8 @@ def _conectar_sheets():
     )
     return gspread.authorize(creds)
 
-def _to_bool(x):
-    """Conversor robusto para booleano vindo do Sheets."""
-    # já booleano?
-    if isinstance(x, (bool, np.bool_)):
-        return bool(x)
-    # numérico?
-    if isinstance(x, (int, float)) and not pd.isna(x):
-        return float(x) != 0.0
-    # string
-    s = str(x).strip().lower()
-    return s in ("1", "true", "verdadeiro", "sim", "ok", "y", "yes")
-
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_base():
-    """Lê a 'Base de Dados' e unifica qualquer variação de coluna 'Conferido'."""
     gc = _conectar_sheets()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.worksheet(ABA_DADOS)
@@ -82,13 +70,9 @@ def carregar_base():
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # linha real no Sheets (header=1 => primeira linha de dados é 2)
     df["SheetRow"] = df.index + 2
-
-    # cabeçalhos limpos
     df.columns = [str(c).strip() for c in df.columns]
 
-    # garante colunas básicas
     base_cols = ["Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
                  "Funcionário", "Fase", "Hora Chegada", "Hora Início",
                  "Hora Saída", "Hora Saída do Salão", "Tipo"]
@@ -96,10 +80,9 @@ def carregar_base():
         if c not in df.columns:
             df[c] = None
 
-    # ---- Unificar CONFERIDO (pega qualquer variação) ----
+    # === Unificar 'Conferido' (OR de todas as variações) ===
     conf_cols = [c for c in df.columns if _norm_col(c) == "conferido"]
     if conf_cols:
-        # OR entre todas as variações encontradas
         conf_series = pd.Series(False, index=df.index)
         for c in conf_cols:
             conf_series = conf_series | df[c].apply(_to_bool)
@@ -107,7 +90,6 @@ def carregar_base():
     else:
         df["Conferido"] = False
     df.attrs["__conferido_sources__"] = conf_cols or []
-    # ------------------------------------------------------
 
     # datas
     def parse_data(x):
@@ -136,14 +118,11 @@ def carregar_base():
             return 0.0
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # strings
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
         if col not in df.columns: df[col] = ""
         df[col] = df[col].astype(str).fillna("").str.strip()
 
-    # garante dtype bool da coluna final
     df["Conferido"] = df["Conferido"].apply(_to_bool).astype(bool)
-
     return df
 
 def filtrar_por_dia(df, dia):
@@ -183,9 +162,8 @@ def preparar_tabela_exibicao(df):
     out["Valor"] = out["Valor_num"].apply(format_moeda)
     return out[cols_ordem]
 
-# ---------- Excel helpers (fallback engine) ----------
+# ---------- Excel helpers ----------
 def _choose_excel_engine():
-    """Retorna 'xlsxwriter' se existir, senão 'openpyxl', senão None."""
     import importlib.util
     for eng in ("xlsxwriter", "openpyxl"):
         if importlib.util.find_spec(eng) is not None:
@@ -193,7 +171,6 @@ def _choose_excel_engine():
     return None
 
 def _to_xlsx_bytes(dfs_by_sheet: dict):
-    """Recebe {'NomeAba': df, ...} e devolve bytes do XLSX com a melhor engine disponível."""
     engine = _choose_excel_engine()
     if not engine:
         return None
@@ -207,21 +184,25 @@ def gerar_excel(df_lin, df_cli):
     return _to_xlsx_bytes({"Linhas": df_lin, "ResumoClientes": df_cli})
 
 # ===== helpers Sheets =====
-def _ensure_conferido_column(ws):
-    """Garante coluna 'Conferido' e retorna índice (1-based), considerando variações."""
+def _headers_and_indices(ws):
+    """Retorna (headers, norm_headers, indices_conferido, idx_conferido_escolhido)"""
     headers = ws.row_values(1)
-    if not headers:
-        raise RuntimeError("Cabeçalho vazio no Sheets.")
     norms = [_norm_col(h) for h in headers]
-    if "conferido" in norms:
-        return norms.index("conferido") + 1
+    idxs = [i for i, n in enumerate(norms) if n == "conferido"]  # 0-based
+    chosen = idxs[-1] if idxs else None  # SEMPRE a última
+    return headers, norms, idxs, chosen
+
+def _ensure_conferido_column(ws):
+    """Garante coluna 'Conferido' e retorna índice 1-based da **ÚLTIMA** ocorrência."""
+    headers, norms, idxs, chosen = _headers_and_indices(ws)
+    if chosen is not None:
+        return chosen + 1  # 1-based
     # não existe: cria no final
     col = len(headers) + 1
     ws.update_cell(1, col, "Conferido")
     return col
 
 def _update_conferido(ws, updates):
-    """Atualiza 1 a 1 para evitar payload inválido."""
     if not updates: return
     col_conf = _ensure_conferido_column(ws)
     for u in updates:
@@ -248,9 +229,8 @@ def card(label, val):
 # =========================
 st.set_page_config(page_title="Atendimentos por Dia (Masculino)", page_icon="📅", layout="wide")
 st.title("📅 Atendimentos por Dia — Masculino")
-st.caption("KPIs do dia, comparativo por funcionário e histórico dos dias com mais atendimentos (regra de 11/05/2025 aplicada).")
+st.caption("KPIs do dia, comparativo por funcionário e histórico. (Regra de 11/05/2025 aplicada).")
 
-# Sidebar: recarregar
 if st.sidebar.button("🔄 Recarregar dados agora"):
     st.cache_data.clear()
     st.rerun()
@@ -258,7 +238,6 @@ if st.sidebar.button("🔄 Recarregar dados agora"):
 with st.spinner("Carregando base masculina..."):
     df_base = carregar_base()
 
-# Seletor de dia
 hoje = _tz_now().date()
 dia_selecionado = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
 df_dia = filtrar_por_dia(df_base, dia_selecionado)
@@ -266,36 +245,13 @@ if df_dia.empty:
     st.info("Nenhum atendimento encontrado para o dia selecionado.")
     st.stop()
 
-# (debug/apoio — mostra colunas usadas e contagem True do dia)
-st.sidebar.caption("Conferido lido das colunas: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
-st.sidebar.caption(f"Conferidos (dia): {int(df_dia['Conferido'].fillna(False).sum())}")
+# Debug de colunas Conferido
+st.sidebar.caption("Fonte(s) de Conferido lidas: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
+st.sidebar.caption(f"Conferidos no dia (lido): {int(df_dia['Conferido'].fillna(False).sum())}")
 
-# ========== CSS CARDS ==========
-html("""
-<style>
-.metrics-wrap{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}
-.metrics-wrap .card{
-  background:rgba(255,255,255,0.04);
-  border:1px solid rgba(255,255,255,0.08);
-  border-radius:12px;
-  padding:12px 14px;
-  min-width:160px;
-  flex:1 1 200px;
-}
-.metrics-wrap .card .label{font-size:0.9rem;opacity:.85;margin-bottom:6px}
-.metrics-wrap .card .value{font-weight:700;font-size:clamp(18px,3.8vw,28px);line-height:1.15;word-break:break-word}
-.section-h{font-weight:700;margin:12px 0 6px}
-.badge{display:inline-block;padding:6px 10px;border-radius:999px;font-size:.85rem;
-       background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15)}
-</style>
-""")
-
-# =========================
-# KPIs (RESPONSIVOS)
-# =========================
+# ===== KPIs =====
 df_v_top = df_dia[df_dia["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
 _, _, rec_v_top, _ = kpis(df_v_top)
-
 cli, srv, rec, tkt = kpis(df_dia)
 receita_salao = rec - (rec_v_top * 0.5)
 
@@ -308,12 +264,9 @@ html(
     + card("🏢 Receita do salão (–50% Vinicius)", format_moeda(receita_salao))
     + "</div>"
 )
-html(f'<span class="badge">Fórmula da Receita do salão: Receita total ({format_moeda(rec)}) – 50% da receita do Vinicius ({format_moeda(rec_v_top*0.5)}).</span>')
 st.markdown("---")
 
-# =========================
-# Por Funcionário
-# =========================
+# ===== Por Funcionário =====
 st.subheader("📊 Por Funcionário (dia selecionado)")
 df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
 df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
@@ -339,9 +292,7 @@ with col_v:
          card("💵 Comissão (50%)", format_moeda(rec_v * 0.5)) +
          '</div>')
 
-# =========================
-# Gráfico comparativo
-# =========================
+# ===== Gráfico =====
 df_comp = pd.DataFrame([
     {"Funcionário": FUNC_JPAULO, "Clientes": cli_j, "Serviços": srv_j},
     {"Funcionário": FUNC_VINICIUS, "Clientes": cli_v, "Serviços": srv_v},
@@ -388,25 +339,49 @@ edited = st.data_editor(
     key="editor_conferencia"
 )
 
+# ===== DIAGNÓSTICO VISUAL (para a gente validar agora) =====
+with st.expander("🔧 Diagnóstico 'Conferido' (clique para abrir)"):
+    try:
+        gc = _conectar_sheets()
+        sh = gc.open_by_key(SHEET_ID)
+        ws = sh.worksheet(ABA_DADOS)
+        headers, norms, idxs, chosen = _headers_and_indices(ws)
+        st.write("Cabeçalho (1ª linha):", headers)
+        st.write("Índices com 'Conferido' (0-based):", idxs)
+        st.write("Coluna que será ATUALIZADA:", None if chosen is None else chosen + 1, "(1-based)")
+        if idxs:
+            # mostra valores crus em cada coluna conferido para as linhas do dia
+            show = df_conf[["SheetRow"]].copy()
+            for i, idx0 in enumerate(idxs):
+                colname = headers[idx0]
+                # lê um range preciso para as linhas do dia nessa coluna
+                rows = show["SheetRow"].astype(int).tolist()
+                col_letter = gspread.utils.rowcol_to_a1(1, idx0+1)[0]
+                rng = f"{col_letter}{min(rows)}:{col_letter}{max(rows)}"
+                vals = ws.get(rng, value_render_option="FORMULA")
+                flat = [v[0] if v else "" for v in vals]
+                show[f"{colname} (cru)"] = flat[:len(show)]
+            st.dataframe(show, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Diag falhou: {e}")
+
 if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
     try:
         gc = _conectar_sheets()
         sh = gc.open_by_key(SHEET_ID)
         ws = sh.worksheet(ABA_DADOS)
 
-        # Atualiza 'Conferido'
         orig_by_row = df_conf.set_index("SheetRow")["Conferido"].apply(_to_bool).to_dict()
         updates = []
         for _, r in edited.iterrows():
             rownum = int(r["SheetRow"])
-            new_val = bool(r["Conferido"])
-            old_val = bool(orig_by_row.get(rownum, False))
+            new_val = bool(_to_bool(r["Conferido"]))
+            old_val = bool(_to_bool(orig_by_row.get(rownum, False)))
             if new_val != old_val:
                 updates.append({"row": rownum, "value": new_val})
         _update_conferido(ws, updates)
 
-        # Exclui marcados
-        rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(r["Excluir"])]
+        rows_to_delete = [int(r["SheetRow"]) for _, r in edited.iterrows() if bool(_to_bool(r["Excluir"]))]
         _delete_rows(ws, rows_to_delete)
 
         st.success("Alterações aplicadas com sucesso!")
@@ -436,10 +411,10 @@ else:
 if export_only_unchecked:
     df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
-st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")  # << fix
+st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")
 
 # -------------------------
-# Tabela + exportações (respeita filtro)
+# Tabela + exportações
 # -------------------------
 st.markdown("---")
 st.subheader("Registros selecionados para exportação")
@@ -508,7 +483,7 @@ else:
             st.error(f"Falha ao marcar como conferidos: {e}")
 
 # ===========================================
-# 📤 Exportar Mobills (layout solicitado)
+# 📤 Exportar Mobills
 # ===========================================
 st.markdown("---")
 st.subheader("📤 Exportar Mobills")
@@ -532,7 +507,7 @@ def _categoria(row):
     return f"Lucro salão > {serv}"
 
 if not df_export_base.empty:
-    df_mob = df_export_base.copy()  # usa seleção (pode ser só não conferidos)
+    df_mob = df_export_base.copy()
 
     df_mob["Data"] = df_mob["Data_norm"].apply(_fmt_data_ddmmyyyy)
     df_mob["Descrição"] = df_mob.apply(_descricao, axis=1)
@@ -553,7 +528,6 @@ if not df_export_base.empty:
     st.markdown("**Prévia (Mobills)**")
     st.dataframe(df_mobills, use_container_width=True, hide_index=True)
 
-    # CSV (separador ';')
     csv_bytes = df_mobills.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
         "⬇️ Baixar CSV (Mobills)",
@@ -563,7 +537,6 @@ if not df_export_base.empty:
         type="primary"
     )
 
-    # XLSX (aba 'Mobills') com fallback
     xlsx_mob = _to_xlsx_bytes({"Mobills": df_mobills})
     if xlsx_mob:
         st.download_button(
