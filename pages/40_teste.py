@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # 12_Comissoes_Vinicius.py — Comissão por DIA + Caixinha
 # - UMA linha por DIA em Despesas (comissão e, opcionalmente, caixinha).
-# - Trava anti-duplicação oficial via coluna RefID na própria aba Despesas (cria automaticamente + backfill).
-# - Telegram: usa as mesmas chaves das outras páginas (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID_*).
-# - Botão 📲 Reenviar resumo (sem gravar).
-# - Mostra no Telegram separado: NÃO fiado, fiados liberados, caixinha, total e pendentes.
-# - **Sem** a regra "usar preço de tabela no cartão": apenas arredondamento por tolerância.
+# - Trava anti-duplicação via RefID em Despesas (cria/backfill automático).
+# - Telegram opcional.
+# - Exportação para Mobills:
+#   (1) Retroativa: pela terça escolhida (sempre disponível)
+#   (2) Após registrar: exporta os itens novos desta execução
+# - Valores em Mobills saem NEGATIVOS (despesa).
 
 import streamlit as st
 import pandas as pd
@@ -201,7 +202,6 @@ def build_text_resumo(period_ini, period_fim,
         linhas.append(f"   • {qtd_pend} itens • {clientes_pend} clientes • mais antigo: {dt_min}")
     return "\n".join(linhas)
 
-
 # =============================
 # UI
 # =============================
@@ -342,7 +342,7 @@ else:
     if "_dt_serv" not in fiados_pendentes.columns:
         fiados_pendentes["_dt_serv"] = fiados_pendentes["Data"].apply(parse_br_date)
 
-# ---- valor base p/ comissão (apenas arredondamento por tolerância)
+# ---- valor base p/ comissão
 def montar_valor_base(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.assign(Valor_num=[], Competência=[], Valor_base_comissao=[])
@@ -483,19 +483,13 @@ def _backfill_refid_em_despesas(despesas_df: pd.DataFrame) -> pd.DataFrame:
         despesas_df.at[idx, "RefID"] = _refid_despesa(data_br, prest, desc, valf, mepag)
     return despesas_df
 
-# ====== Mapeamento p/ "Conta" do Mobills ======
+# ====== Mapeamento p/ "Conta" no Mobills ======
 def _map_conta_mobills(meio_pag: str) -> str:
-    m = {
-        "dinheiro": "Carteira",
-        "pix": "Carteira",
-        "transferência": "Carteira",
-        "cartão": "Cartão",
-    }
+    m = {"dinheiro": "Carteira", "pix": "Carteira", "transferência": "Carteira", "cartão": "Cartão"}
     return m.get((meio_pag or "").strip().lower(), "Carteira")
 
 # ====== Gerar arquivo Mobills (.xls preferencial; fallback .xlsx) ======
 def _gerar_arquivo_mobills(df_export: pd.DataFrame, nome_base: str) -> tuple[BytesIO, str, str]:
-    # tenta .xls (xlwt). Se não houver, usa .xlsx (openpyxl)
     buf = BytesIO()
     filename = f"{nome_base}.xls"
     mime = "application/vnd.ms-excel"
@@ -512,15 +506,48 @@ def _gerar_arquivo_mobills(df_export: pd.DataFrame, nome_base: str) -> tuple[Byt
     return buf, filename, mime
 
 # =============================
+# ⬇️ EXPORTAÇÃO RETROATIVA (sempre disponível)
+# =============================
+st.markdown("### ⬇️ Exportação retroativa para Mobills")
+if st.button("⬇️ Exportar para Mobills (pela terça escolhida)"):
+    despesas = _read_df(ABA_DESPESAS)
+    despesas = garantir_colunas(despesas, COLS_DESPESAS_FIX)
+    tag_pago_em = f"Pago em {to_br_date(terca_pagto)}"
+
+    mask_vin = despesas["Prestador"].astype(str).str.contains("Vinicius", case=False, na=False)
+    mask_tag = despesas["Descrição"].astype(str).str.contains(tag_pago_em, case=False, na=False)
+    exp_base = despesas[mask_vin & mask_tag].copy()
+
+    if exp_base.empty:
+        st.warning("Não encontrei linhas em Despesas com essa terça para exportar.")
+    else:
+        def _row_to_mobills(r):
+            data = str(r["Data"]).strip()
+            desc = str(r["Descrição"]).strip()
+            val = -abs(_to_float_brl(str(r["Valor"])))  # NEGATIVO = despesa
+            conta = _map_conta_mobills(str(r.get("Me Pag:", "")))
+            cat = "Caixinha Vinícius" if "Caixinha" in str(r["Prestador"]) else "Comissão Vinícius"
+            return {"Data": data, "Descrição": desc, "Valor": val, "Conta": conta, "Categoria": cat}
+
+        df_export = pd.DataFrame([_row_to_mobills(r) for _, r in exp_base.iterrows()],
+                                 columns=["Data","Descrição","Valor","Conta","Categoria"])
+        nome_base = f"mobills_comissao_vinicius_{to_br_date(terca_pagto).replace('/','-')}"
+        buf, fname, mime = _gerar_arquivo_mobills(df_export, nome_base)
+
+        st.download_button("⬇️ Baixar arquivo para Mobills (retroativo)",
+                           data=buf, file_name=fname, mime=mime, use_container_width=True)
+        st.info("Mobills → Transações → Importar planilha → selecione o arquivo baixado.")
+
+# =============================
 # 📲 Botão REENVIAR RESUMO (sem gravar)
 # =============================
 if st.button("📲 Reenviar resumo (sem gravar)"):
     texto = build_text_resumo(
         period_ini=ini, period_fim=fim,
-        valor_nao_fiado=float(total_semana),                 # NÃO fiado
-        valor_fiado_liberado=float(total_fiados),            # fiados liberados
+        valor_nao_fiado=float(total_semana),
+        valor_fiado_liberado=float(total_fiados),
         valor_caixinha=float(total_caixinha if pagar_caixinha else 0.0),
-        total_futuros=float(total_fiados_pend),              # pendentes
+        total_futuros=float(total_fiados_pend),
         df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
         qtd_fiado_pago_hoje=int(qtd_fiados_hoje)
     )
@@ -533,15 +560,15 @@ if st.button("📲 Reenviar resumo (sem gravar)"):
         ok_total = all(ok for _, ok in enviados)
         st.success("Resumo reenviado com sucesso ✅" if ok_total else
                    f"Resumo reenviado, mas houve falha em: {', '.join([n for n, ok in enviados if not ok])}")
-        
+
 # =============================
-# ✅ CONFIRMAR E GRAVAR
+# ✅ CONFIRMAR E GRAVAR + EXPORT
 # =============================
 if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens como pagos"):
     if (semana_grid is None or semana_grid.empty) and (fiados_liberados_grid is None or fiados_liberados_grid.empty) and not (pagar_caixinha and total_caixinha > 0):
         st.warning("Não há itens para pagar.")
     else:
-        # 1) Atualiza cache histórico (não interfere na trava)
+        # 1) Atualiza cache histórico
         novos_cache = []
         for df_part in [semana_grid, fiados_liberados_grid]:
             if df_part is None or df_part.empty:
@@ -564,7 +591,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
         cache_upd = pd.concat([cache_df[cache_cols], pd.DataFrame(novos_cache)], ignore_index=True)
         _write_df(ABA_COMISSOES_CACHE, cache_upd)
 
-        # 2) Lê Despesas e garante RefID em todas as linhas (cria coluna + backfill)
+        # 2) Lê Despesas e garante RefID
         despesas_df = _read_df(ABA_DESPESAS)
         despesas_df = _backfill_refid_em_despesas(despesas_df)
 
@@ -635,43 +662,52 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                 })
             linhas_caixinha = len(cx_df)
 
-        # 5) Dedup por RefID e grava em Despesas
+        # 5) Dedup por RefID e grava em Despesas + botão de export desta execução
         novos = pd.DataFrame(columns=COLS_DESPESAS_FIX)
+        refids_gerados = []
+
         if linhas:
             novos = pd.DataFrame(linhas, columns=COLS_DESPESAS_FIX)
             despesas_df = garantir_colunas(despesas_df, COLS_DESPESAS_FIX)
             ref_exist = set(despesas_df["RefID"].astype(str).tolist())
-            novos = novos[~novos["RefID"].isin(ref_exist)].copy()
-            if not novos.empty:
-                despesas_upd = pd.concat([despesas_df[COLS_DESPESAS_FIX], novos], ignore_index=True)
+            refids_gerados = novos["RefID"].astype(str).tolist()
+
+            a_gravar = novos[~novos["RefID"].isin(ref_exist)].copy()
+            if not a_gravar.empty:
+                despesas_upd = pd.concat([despesas_df[COLS_DESPESAS_FIX], a_gravar], ignore_index=True)
                 _write_df(ABA_DESPESAS, despesas_upd)
-            st.success(f"Gravado em Despesas: {len(novos)} novas linha(s).  "
-                       f"(Comissão: {linhas_comissao}; Caixinha: {linhas_caixinha})")
+                st.success(f"Gravado em Despesas: {len(a_gravar)} novas linha(s).  "
+                           f"(Comissão: {linhas_comissao}; Caixinha: {linhas_caixinha})")
+            else:
+                st.info("Nada novo para gravar em Despesas (tudo já lançado).")
         else:
-            st.info("Nada novo para gravar em Despesas (tudo já lançado).")
+            st.info("Nada a lançar nesta execução.")
 
-        # ===== Mobills: EXPORT =====
-        # constrói DataFrame no layout exigido pelo Mobills, usando apenas as novas linhas lançadas
-        if not novos.empty:
-            conta_mobills = _map_conta_mobills(meio_pag)
-            conta_mobills_cx = _map_conta_mobills(meio_pag_cx)
+        # ===== Export desta execução (ou fallback pela terça) =====
+        despesas_atual = _read_df(ABA_DESPESAS)
+        despesas_atual = garantir_colunas(despesas_atual, COLS_DESPESAS_FIX)
 
+        if refids_gerados:
+            exp_base = despesas_atual[despesas_atual["RefID"].astype(str).isin(refids_gerados)].copy()
+        else:
+            tag_pago_em = f"Pago em {to_br_date(terca_pagto)}"
+            prest_cond = despesas_atual["Prestador"].astype(str).str.contains("Vinicius", case=False, na=False)
+            desc_cond  = despesas_atual["Descrição"].astype(str).str.contains(tag_pago_em, case=False, na=False)
+            exp_base = despesas_atual[prest_cond & desc_cond].copy()
+
+        if exp_base.empty:
+            st.warning("Não encontrei linhas em Despesas para exportar nesta terça.")
+        else:
             def _row_to_mobills(r):
                 data = str(r["Data"]).strip()
                 desc = str(r["Descrição"]).strip()
-                val = -abs(_to_float_brl(str(r["Valor"])))   # NEGATIVO (despesa)
-                if "Caixinha" in str(r["Prestador"]):
-                    conta = conta_mobills_cx
-                    cat = "Caixinha Vinícius"
-                else:
-                    conta = conta_mobills
-                    cat = "Comissão Vinícius"
+                val = -abs(_to_float_brl(str(r["Valor"])))  # NEGATIVO = despesa
+                conta = _map_conta_mobills(str(r.get("Me Pag:", "")))
+                cat = "Caixinha Vinícius" if "Caixinha" in str(r["Prestador"]) else "Comissão Vinícius"
                 return {"Data": data, "Descrição": desc, "Valor": val, "Conta": conta, "Categoria": cat}
 
-            export_rows = [ _row_to_mobills(r) for _, r in novos.iterrows() ]
-            df_export = pd.DataFrame(export_rows, columns=["Data","Descrição","Valor","Conta","Categoria"])
-
-            # gera arquivo para download
+            df_export = pd.DataFrame([_row_to_mobills(r) for _, r in exp_base.iterrows()],
+                                     columns=["Data","Descrição","Valor","Conta","Categoria"])
             nome_base = f"mobills_comissao_vinicius_{to_br_date(terca_pagto).replace('/','-')}"
             buf, fname, mime = _gerar_arquivo_mobills(df_export, nome_base)
 
@@ -682,7 +718,7 @@ if st.button("✅ Registrar comissão (por DIA do atendimento) e marcar itens co
                 mime=mime,
                 use_container_width=True
             )
-            st.info("Depois de baixar, abra o Mobills > Importar planilha > selecione o arquivo e confirme.")
+            st.info("Mobills → Transações → Importar planilha → selecione o arquivo baixado.")
 
         # 6) Telegram (resumo do pagamento)
         if enviar_tg:
