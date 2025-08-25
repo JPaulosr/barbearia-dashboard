@@ -426,7 +426,9 @@ df_export_base["Conferido"] = df_export_base["Conferido"].apply(_to_bool).astype
 if export_only_unchecked:
     df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
-st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len[df_dia]}** registros.")
+st.caption(
+    f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros."
+)
 
 # ===== Resumo por Cliente =====
 st.markdown("### Resumo por Cliente (dia selecionado)")
