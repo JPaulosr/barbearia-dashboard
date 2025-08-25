@@ -3,7 +3,7 @@
 # Página: escolher um dia e ver TODOS os atendimentos (masculino),
 # KPIs gerais, por funcionário, gráfico comparativo e histórico (com Top 5).
 # + MODO DE CONFERÊNCIA: marcar conferido e excluir registros no Sheets.
-# + EXPORTAR MOBILLS: Data | Descrição | Valor | Conta | Categoria | serviço | cliente | Combo
+# + EXPORTAR: só NÃO conferidos (opcional), inclusive no layout Mobills.
 
 import streamlit as st
 import pandas as pd
@@ -158,12 +158,28 @@ def preparar_tabela_exibicao(df):
     out["Valor"] = out["Valor_num"].apply(format_moeda)
     return out[cols_ordem]
 
-def gerar_excel(df_lin, df_cli):
+# ---------- Excel helpers ----------
+def _choose_excel_engine():
+    """Retorna 'xlsxwriter' se existir, senão 'openpyxl', senão None."""
+    import importlib.util
+    for eng in ("xlsxwriter", "openpyxl"):
+        if importlib.util.find_spec(eng) is not None:
+            return eng
+    return None
+
+def _to_xlsx_bytes(dfs_by_sheet: dict):
+    """Recebe {'NomeAba': df, ...} e devolve bytes do XLSX com a melhor engine disponível."""
+    engine = _choose_excel_engine()
+    if not engine:
+        return None
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as w:
-        df_lin.to_excel(w, sheet_name="Linhas", index=False)
-        df_cli.to_excel(w, sheet_name="ResumoClientes", index=False)
+    with pd.ExcelWriter(buf, engine=engine) as writer:
+        for sheet, df in dfs_by_sheet.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
     return buf.getvalue()
+
+def gerar_excel(df_lin, df_cli):
+    return _to_xlsx_bytes({"Linhas": df_lin, "ResumoClientes": df_cli})
 
 # ===== helpers Sheets =====
 def _ensure_conferido_column(ws):
@@ -365,139 +381,96 @@ if st.button("✅ Aplicar mudanças (gravar no Sheets)", type="primary"):
         st.error(f"Falha ao aplicar mudanças: {e}")
 
 # -------------------------
-# Histórico — Dias com mais atendimentos
+# FILTRO DE EXPORTAÇÃO: só NÃO conferidos (opcional)
 # -------------------------
 st.markdown("---")
-st.subheader("📈 Histórico — Dias com mais atendimentos")
+st.subheader("⚙️ Filtro para exportação")
 
-only_after_cut = st.checkbox(
-    f"Mostrar apenas a partir de {DATA_CORRETA.strftime('%d/%m/%Y')}",
-    value=True
+export_only_unchecked = st.checkbox(
+    "Exportar apenas os registros NÃO conferidos",
+    value=True,
+    help="Quando marcado, os botões de download considerarão somente linhas com Conferido = False."
 )
 
-def contar_atendimentos_bloco(bloco):
-    if bloco.empty: return 0, 0
-    d0 = bloco["Data_norm"].dropna()
-    if d0.empty: return 0, len(bloco)
-    dia = d0.iloc[0]
-    if dia < DATA_CORRETA:
-        clientes = len(bloco)
-    else:
-        clientes = bloco.groupby(["Cliente", "Data_norm"]).ngroups
-    return clientes, len(bloco)
+# Base de exportação (dia selecionado), já filtrando pelo checkbox
+df_export_base = df_dia.copy()
+if "Conferido" not in df_export_base.columns:
+    df_export_base["Conferido"] = False
+if export_only_unchecked:
+    df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
-lista = []
-for dval, bloco in df_base.groupby("Data_norm"):
-    if pd.isna(dval): continue
-    if only_after_cut and dval < DATA_CORRETA: continue
-    cli_h, srv_h = contar_atendimentos_bloco(bloco)
-    lista.append({"Data": dval, "Clientes únicos": cli_h, "Serviços": srv_h})
+st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")
 
-df_hist = pd.DataFrame(lista).sort_values("Data")
-if not df_hist.empty:
-    df_hist["Data"] = pd.to_datetime(df_hist["Data"], errors="coerce")
+# -------------------------
+# Tabela do dia + exportações (respeita o filtro NÃO conferidos)
+# -------------------------
+st.markdown("---")
+st.subheader("Registros selecionados para exportação")
 
-if not df_hist.empty:
-    top_idx = df_hist["Clientes únicos"].idxmax()
-    top_dia = df_hist.loc[top_idx]
-    st.success(
-        f"📅 Recorde: **{_fmt_data(top_dia['Data'])}** — "
-        f"**{int(top_dia['Clientes únicos'])} clientes** e **{int(top_dia['Serviços'])} serviços**."
+if df_export_base.empty:
+    st.info("Nada a exportar com o filtro atual (todos conferidos). Desmarque o filtro acima para ver todos.")
+else:
+    df_exibe = preparar_tabela_exibicao(df_export_base)
+    st.dataframe(df_exibe, use_container_width=True, hide_index=True)
+
+    st.subheader("Resumo por Cliente (seleção atual)")
+    grp = (
+        df_export_base
+        .groupby("Cliente", as_index=False)
+        .agg(Quantidade_Serviços=("Serviço", "count"),
+             Valor_Total=("Valor_num", "sum"))
+        .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
     )
-
-    df_top5 = df_hist.sort_values(
-        ["Clientes únicos", "Serviços", "Data"],
-        ascending=[False, False, False]
-    ).head(5).copy()
-    df_top5["Data_fmt"] = df_top5["Data"].apply(_fmt_data)
-
-    ct1, ct2 = st.columns([1, 1])
-    with ct1:
-        st.markdown("**🏆 Top 5 dias (por clientes)**")
-        st.dataframe(
-            df_top5[["Data_fmt", "Clientes únicos", "Serviços"]]
-                .rename(columns={"Data_fmt": "Data"}),
-            use_container_width=True, hide_index=True
-        )
-    with ct2:
-        fig_top = px.bar(
-            df_top5, x="Data_fmt", y="Clientes únicos", text="Clientes únicos",
-            title="Top 5 — Clientes por dia"
-        )
-        st.plotly_chart(fig_top, use_container_width=True)
-
-    st.markdown("**Histórico completo**")
-    df_hist_show = df_hist.copy()
-    df_hist_show["Data_fmt"] = df_hist_show["Data"].apply(_fmt_data)
+    grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
     st.dataframe(
-        df_hist_show[["Data_fmt", "Clientes únicos", "Serviços"]]
-            .rename(columns={"Data_fmt": "Data"}),
+        grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
         use_container_width=True, hide_index=True
     )
 
-    fig2 = px.line(
-        df_hist, x="Data", y="Clientes únicos", markers=True,
-        title="Clientes únicos por dia (histórico)"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    st.markdown("### Exportar (CSV/XLSX)")
+    df_lin_export = df_exibe.copy()
+    df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
 
-# -------------------------
-# Tabela do dia + exportações
-# -------------------------
-st.markdown("---")
-df_exibe = preparar_tabela_exibicao(df_dia)
-st.subheader("Registros do dia (linhas)")
-st.dataframe(df_exibe, use_container_width=True, hide_index=True)
-
-st.subheader("Resumo por Cliente (no dia)")
-grp = (
-    df_dia
-    .groupby("Cliente", as_index=False)
-    .agg(Quantidade_Serviços=("Serviço", "count"),
-         Valor_Total=("Valor_num", "sum"))
-    .sort_values(["Valor_Total", "Quantidade_Serviços"], ascending=[False, False])
-)
-grp["Valor_Total"] = grp["Valor_Total"].apply(format_moeda)
-
-st.dataframe(
-    grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
-    use_container_width=True, hide_index=True
-)
-
-st.markdown("### Exportar")
-df_lin_export = df_exibe.copy()
-df_cli_export = grp.rename(columns={"Quantidade_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}).copy()
-
-st.download_button(
-    "⬇️ Baixar Linhas (CSV)",
-    data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
-    mime="text/csv"
-)
-st.download_button(
-    "⬇️ Baixar Resumo por Cliente (CSV)",
-    data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
-    file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
-    mime="text/csv"
-)
-
-try:
-    xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
     st.download_button(
-        "⬇️ Baixar Excel (Linhas + Resumo)",
-        data=xlsx_bytes,
-        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "⬇️ Baixar Linhas (CSV)",
+        data=df_lin_export.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_linhas.csv",
+        mime="text/csv"
     )
-except Exception as e:
-    st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
+    st.download_button(
+        "⬇️ Baixar Resumo por Cliente (CSV)",
+        data=df_cli_export.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}_resumo_clientes.csv",
+        mime="text/csv"
+    )
 
-st.caption(
-    "• Contagem de clientes aplica a regra: antes de 11/05/2025 cada linha=1 atendimento; "
-    "a partir de 11/05/2025: 1 atendimento por Cliente + Data. "
-    "• 'Por Funcionário' usa o campo **Funcionário** da base. "
-    "• No modo de conferência, a coluna **Conferido** é criada automaticamente se não existir."
-)
+    try:
+        xlsx_bytes = gerar_excel(df_lin_export, df_cli_export)
+        if xlsx_bytes:
+            st.download_button(
+                "⬇️ Baixar Excel (Linhas + Resumo)",
+                data=xlsx_bytes,
+                file_name=f"Atendimentos_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("Nenhuma engine Excel instalada (xlsxwriter/openpyxl). Use os CSVs ou instale uma engine.")
+    except Exception as e:
+        st.warning(f"Não foi possível gerar o Excel agora. Detalhe: {e}")
+
+    # Botão para marcar exportados como Conferidos
+    st.markdown("#### Pós-exportação")
+    if st.button("✅ Marcar exportados como Conferidos no Sheets"):
+        try:
+            gc = _conectar_sheets()
+            sh = gc.open_by_key(SHEET_ID)
+            ws = sh.worksheet(ABA_DADOS)
+            updates = [{"row": int(r), "value": True} for r in df_export_base["SheetRow"].tolist()]
+            _update_conferido(ws, updates)
+            st.success(f"Marcados {len(updates)} registros como Conferidos.")
+            st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Falha ao marcar como conferidos: {e}")
 
 # ===========================================
 # 📤 Exportar Mobills (layout solicitado) + CSV/XLSX
@@ -524,8 +497,8 @@ def _categoria(row):
         return f"Lucro Vinicius > {serv}"
     return f"Lucro salão > {serv}"
 
-if not df_dia.empty:
-    df_mob = df_dia.copy()
+if not df_export_base.empty:
+    df_mob = df_export_base.copy()  # usa a seleção (pode ser só NÃO conferidos)
 
     # Campos base
     df_mob["Data"] = df_mob["Data_norm"].apply(_fmt_data_ddmmyyyy)
@@ -561,15 +534,16 @@ if not df_dia.empty:
         type="primary"
     )
 
-    # XLSX (aba 'Mobills')
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        df_mobills.to_excel(writer, sheet_name="Mobills", index=False)
-    st.download_button(
-        "⬇️ Baixar XLSX (Mobills)",
-        data=buf.getvalue(),
-        file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # XLSX (aba 'Mobills') com fallback de engine
+    xlsx_mob = _to_xlsx_bytes({"Mobills": df_mobills})
+    if xlsx_mob:
+        st.download_button(
+            "⬇️ Baixar XLSX (Mobills)",
+            data=xlsx_mob,
+            file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.info("Sem engine Excel instalada (xlsxwriter/openpyxl). Use o CSV ou instale uma engine para liberar o XLSX.")
 else:
-    st.info("Sem dados para exportar no dia selecionado.")
+    st.info("Sem dados para exportar (com o filtro atual).")
