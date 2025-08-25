@@ -221,6 +221,30 @@ def preparar_tabela_exibicao(df):
     out["Valor"] = out["Valor_num"].apply(format_moeda)
     return out[cols_ordem]
 
+# ---------- Excel helpers ----------
+def _choose_excel_engine():
+    """Retorna 'xlsxwriter' se existir, senão 'openpyxl', senão None."""
+    import importlib.util
+    for eng in ("xlsxwriter", "openpyxl"):
+        if importlib.util.find_spec(eng) is not None:
+            return eng
+    return None
+
+def _to_xlsx_bytes(dfs_by_sheet: dict):
+    """
+    Recebe {'NomeAba': df, ...} e devolve bytes do XLSX.
+    Usa a melhor engine disponível (xlsxwriter/openpyxl). Se nenhuma existir, retorna None.
+    """
+    engine = _choose_excel_engine()
+    if not engine:
+        return None
+    import io
+    with io.BytesIO() as buf:
+        with pd.ExcelWriter(buf, engine=engine) as writer:
+            for sheet, df in dfs_by_sheet.items():
+                df.to_excel(writer, sheet_name=sheet, index=False)
+        return buf.getvalue()
+
 # ============= HELPER HTML (render seguro) =============
 def html(s: str):
     st.markdown(textwrap.dedent(s), unsafe_allow_html=True)
@@ -402,7 +426,41 @@ df_export_base["Conferido"] = df_export_base["Conferido"].apply(_to_bool).astype
 if export_only_unchecked:
     df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
-st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros.")
+st.caption(f"Selecionados para exportação: **{len(df_export_base)}** de **{len[df_dia]}** registros.")
+
+# ===== Resumo por Cliente =====
+st.markdown("### Resumo por Cliente (dia selecionado)")
+grp_dia = (
+    df_dia
+    .groupby("Cliente", as_index=False)
+    .agg(Qtd_Serviços=("Serviço", "count"),
+         Valor_Total=("Valor_num", "sum"))
+    .sort_values(["Valor_Total", "Qtd_Serviços"], ascending=[False, False])
+)
+grp_dia["Valor_Total"] = grp_dia["Valor_Total"].apply(format_moeda)
+st.dataframe(
+    grp_dia.rename(columns={"Qtd_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
+    use_container_width=True,
+    hide_index=True
+)
+
+st.markdown("### Resumo por Cliente (seleção para exportação)")
+if df_export_base.empty:
+    st.info("Nada na seleção atual (verifique o filtro de NÃO conferidos).")
+else:
+    grp_sel = (
+        df_export_base
+        .groupby("Cliente", as_index=False)
+        .agg(Qtd_Serviços=("Serviço", "count"),
+             Valor_Total=("Valor_num", "sum"))
+        .sort_values(["Valor_Total", "Qtd_Serviços"], ascending=[False, False])
+    )
+    grp_sel["Valor_Total"] = grp_sel["Valor_Total"].apply(format_moeda)
+    st.dataframe(
+        grp_sel.rename(columns={"Qtd_Serviços": "Qtd. Serviços", "Valor_Total": "Valor Total"}),
+        use_container_width=True,
+        hide_index=True
+    )
 
 conta_fallback = st.text_input("Conta padrão (quando vazio na base)", value="Nubank CNPJ")
 
@@ -454,6 +512,18 @@ else:
         type="primary"
     )
 
+    # ✅ XLSX (Excel) – aba 'Mobills'
+    xlsx_bytes = _to_xlsx_bytes({"Mobills": df_mobills})
+    if xlsx_bytes:
+        st.download_button(
+            "⬇️ Baixar XLSX (Mobills)",
+            data=xlsx_bytes,
+            file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("Para gerar Excel, instale 'xlsxwriter' ou 'openpyxl' no ambiente.")
+
     # Pós-exportação: marcar como conferidos
     st.markdown("#### Pós-exportação")
     if st.button("✅ Marcar exportados como Conferidos no Sheets"):
@@ -468,4 +538,3 @@ else:
             st.rerun()
         except Exception as e:
             st.error(f"Falha ao marcar como conferidos: {e}")
-
