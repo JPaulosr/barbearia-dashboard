@@ -157,6 +157,7 @@ def _get_chat_jp(): return (st.secrets.get("TELEGRAM_CHAT_ID_JPAULO","") or TELE
 def _get_chat_vini(): return (st.secrets.get("TELEGRAM_CHAT_ID_VINICIUS","") or TELEGRAM_CHAT_ID_VINICIUS_FALLBACK).strip()
 
 def tg_send_html(text: str, chat_id: str) -> tuple[bool, str]:
+    """Envia HTML e retorna (ok, detalhe). Sempre traz o erro bruto da API se falhar."""
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{_get_token()}/sendMessage",
@@ -169,11 +170,11 @@ def tg_send_html(text: str, chat_id: str) -> tuple[bool, str]:
         else:
             try:
                 j = r.json()
-                return False, f"HTTP {r.status_code} • {j.get('description','sem descrição')}"
+                return False, f"HTTP {r.status_code} • {j.get('description','sem descrição')} • chat_id={chat_id}"
             except Exception:
-                return False, f"HTTP {r.status_code} • {r.text}"
+                return False, f"HTTP {r.status_code} • {r.text} • chat_id={chat_id}"
     except Exception as e:
-        return False, f"EXC: {e}"
+        return False, f"EXC: {e} • chat_id={chat_id}"
 
 # =============================
 # VALOR BASE P/ COMISSÃO
@@ -350,6 +351,52 @@ def main():
     with colT3:
         chatid_vini_override = st.text_input("Chat ID do canal do Vinícius (opcional: -100... ou @canal)", value="", placeholder="-100xxxxxxxxxx ou @seu_canal")
 
+    # 🧪 Painel de teste do Telegram (debug)
+    with st.expander("🧪 Painel de teste do Telegram (debug)"):
+        tok = _get_token()
+        tok_mask = f"{tok[:8]}...{tok[-6:]}" if len(tok) > 16 else tok
+        st.caption(f"Token em uso: {tok_mask}")
+
+        colTT1, colTT2 = st.columns(2)
+        with colTT1:
+            chat_test = st.text_input("Chat para testar envio (ex.: -100..., @canal ou seu ID)", value=chatid_vini_override.strip() or _get_chat_vini(), key="chat_test")
+            msg_test  = st.text_area("Mensagem de teste", value="Teste de envio do bot (HTML OK?) <b>Negrito</b>", height=80, key="msg_test")
+            if st.button("▶️ Testar sendMessage", use_container_width=True, key="btn_send_test"):
+                ok, info = tg_send_html(msg_test, chat_test)
+                st.write("Resultado:", "✅ OK" if ok else "❌ Falhou")
+                st.code(info, language="text")
+
+        with colTT2:
+            if st.button("🔍 getChat (ver se o bot enxerga o chat)", use_container_width=True, key="btn_getchat"):
+                try:
+                    r = requests.get(f"https://api.telegram.org/bot{_get_token()}/getChat", params={"chat_id": chat_test}, timeout=30)
+                    st.code(r.text, language="json")
+                except Exception as e:
+                    st.error(f"getChat EXC: {e}")
+
+            # getChatMember (status do bot no chat)
+            try:
+                r_me = requests.get(f"https://api.telegram.org/bot{_get_token()}/getMe", timeout=30)
+                jme = r_me.json()
+                bot_id = jme.get("result",{}).get("id")
+                bot_username = jme.get("result",{}).get("username")
+            except Exception:
+                bot_id, bot_username = None, None
+
+            if bot_id:
+                if st.button(f"🛡️ getChatMember (bot @{bot_username})", use_container_width=True, key="btn_getmember"):
+                    try:
+                        r = requests.get(
+                            f"https://api.telegram.org/bot{_get_token()}/getChatMember",
+                            params={"chat_id": chat_test, "user_id": bot_id},
+                            timeout=30
+                        )
+                        st.code(r.text, language="json")
+                    except Exception as e:
+                        st.error(f"getChatMember EXC: {e}")
+            else:
+                st.caption("Não consegui obter o @ do bot (getMe).")
+
     reprocessar_terca = st.checkbox("Reprocessar esta terça (regravar cache de comissão)", value=False)
 
     # ===== Pré-filtros =====
@@ -401,10 +448,6 @@ def main():
 
     # ===== Conjuntos =====
     na_janela = dfv[(dfv["_dt_serv"].notna()) & (dfv["_dt_serv"] >= ini) & (dfv["_dt_serv"] <= fim)]
-    nao_fiado = na_janela[(s_lower(nao_fiado["StatusFiado"]) == "") | (s_lower(nao_fiado["StatusFiado"]) == "nao")] if not na_janela.empty else na_janela
-    fiado_all = dfv[(s_lower(dfv["StatusFiado"]) != "") | (s_lower(dfv["IDLancFiado"]) != "")]
-    fiados_ok = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"] <= terca_pagto)]
-    fiados_pend_all = fiado_all[(fiado_all["_dt_pagto"].isna()) | (fiado_all["_dt_pagto"] > terca_pagto)]
 
     # 1) Semana não fiado
     mask_semana = (
@@ -415,7 +458,8 @@ def main():
     )
     semana_df = dfv[mask_semana].copy()
 
-    # 2) Fiados liberados
+    # 2) Fiados liberados (pagos até a terça)
+    fiado_all = dfv[(s_lower(dfv["StatusFiado"]) != "") | (s_lower(dfv["IDLancFiado"]) != "")]
     fiados_liberados = fiado_all[(fiado_all["_dt_pagto"].notna()) & (fiado_all["_dt_pagto"] <= terca_pagto)].copy()
 
     # 3) Fiados pendentes (para info futura)
@@ -440,7 +484,7 @@ def main():
     st.caption(
         f"Na janela (não fiado): {len(semana_df)} | "
         f"Fiados liberados: {len(fiados_liberados)} | "
-        f"Fiados pendentes: {len(fiados_pend_all)}"
+        f"Fiados pendentes: {len(fiados_pendentes)}"
     )
 
     # ------- GRADES EDITÁVEIS -------
@@ -510,7 +554,6 @@ def main():
                           valor_nao_fiado, valor_fiado_liberado, valor_caixinha,
                           total_futuros, df_semana, df_fiados, df_pend,
                           qtd_fiado_pago_hoje=0):
-        # compactado: só os totais interessam (mantive original aqui)
         clientes, servs = 0, {}
         if any(d is not None and not d.empty for d in [df_semana, df_fiados]):
             df_all = pd.concat([d for d in [df_semana, df_fiados] if d is not None and not d.empty], ignore_index=True)
@@ -785,10 +828,7 @@ def main():
                 desc = str(r["Descrição"]).strip()
                 val  = -abs(_to_float_brl(str(r["Valor"])))  # NEGATIVO
                 conta = _map_conta_mobills(str(r.get("Me Pag:","")))
-                cat = "Caixinha Vinícius" if "Caixinha" in str(r["Prestador"]) else "Comissão Vinínius"
-                # corrigindo typo em categoria:
-                if cat == "Comissão Vinínius":
-                    cat = "Comissão Vinícius"
+                cat = "Caixinha Vinícius" if "Caixinha" in str(r["Prestador"]) else "Comissão Vinícius"
                 return {"Data": data, "Descrição": desc, "Valor": val, "Conta": conta, "Categoria": cat}
 
             df_export = pd.DataFrame([_row_to_mobills(r) for _, r in exp_base.iterrows()],
