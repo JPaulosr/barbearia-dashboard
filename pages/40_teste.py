@@ -62,10 +62,6 @@ def _dev_clear_everything(mod_prefixes=("utils","commons","shared")):
                 importlib.reload(sys.modules[name])
     except: pass
 
-with st.expander("🛠️ Dev • Cache/Módulos (temporário)"):
-    if st.button("♻️ Limpar cache + recarregar módulos"):
-        _dev_clear_everything()
-        st.success("Caches limpos. Clique em Rerun.")
 
 # =============================
 # CONEXÃO SHEETS
