@@ -656,7 +656,7 @@ else:
         "Categoria": "Comissão",
         "Conta": ddf["Me Pag:"].replace("", "Dinheiro"),
         "Observação": ddf["Descrição"].astype(str),
-    })[["Data","Descrição","Valor","Categoria","Conta","Observação"]]
+    })[["Data","Descrição","Valor","Conta","Categoria","Observação"]]
 
 st.dataframe(export_df.reset_index(drop=True), use_container_width=True)
 
