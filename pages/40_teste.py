@@ -17,6 +17,28 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import pytz
+# --- DEV: limpador de caches e recarga de módulos auxiliares ---
+def _dev_clear_everything(mod_prefixes=("utils", "commons", "shared")):
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    try:
+        st.cache_resource.clear()
+    except Exception:
+        pass
+    try:
+        import sys, import importlib
+        for name in list(sys.modules):
+            if any(name.startswith(pfx) for pfx in mod_prefixes):
+                importlib.reload(sys.modules[name])
+    except Exception:
+        pass
+
+with st.expander("🛠️ Dev • Cache/Módulos (temporário)"):
+    if st.button("♻️ Limpar cache + recarregar módulos"):
+        _dev_clear_everything()
+        st.success("Caches limpos. Dê um Rerun.")
 
 # =============================
 # CONFIG
