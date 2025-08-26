@@ -251,7 +251,7 @@ with col_r1:
         help="Ex.: 23,00 / 24,75 / 25,10 → 25,00 (se dentro da tolerância)."
     )
 with col_r2:
-    tol_reais = st.number_input("Tolerância (R$)", value=2.00, step=0.50, min_value=0.0)
+    tol_reais = st.number_input("Tolerância (R$)", value=1.70, step=0.50, min_value=0.0)
 
 # ⚙️ Caixinha & Telegram
 st.markdown("### 🎁 Caixinha & 📲 Telegram")
