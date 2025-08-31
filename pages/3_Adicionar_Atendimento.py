@@ -37,8 +37,8 @@ COLS_PAG_EXTRAS = [
     "FormaPagDetalhe", "PagamentoID"
 ]
 
-# Caixinhas (opcionais)
-COLS_CAIXINHAS = ["CaixinhaDia", "CaixinhaFundo"]
+# Caixinha (opcional) — agora sempre na MESMA LINHA do serviço
+COLS_CAIXINHAS = ["CaixinhaDia"]
 
 # =========================
 # UTILS
@@ -387,38 +387,22 @@ def _secao_pag_cartao(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
     return "\n".join(linhas)
 
 def _secao_caixinha(df_all: pd.DataFrame, cliente: str, data_str: str) -> str:
-    """Monta a seção de caixinhas (dia, fundo e total) para o cliente/data."""
+    """Soma CaixinhaDia nas linhas do cliente/data e mostra se houver valor."""
     d = df_all[
         (df_all["Cliente"].astype(str).str.strip() == cliente) &
         (df_all["Data"].astype(str).str.strip() == data_str)
     ].copy()
-    if d.empty:
+    if d.empty or "CaixinhaDia" not in d.columns:
         return ""
 
-    # Preferir linhas dedicadas de Caixinha (novo formato)
-    d_cx = d[
-        (d["Serviço"].astype(str).str.strip().str.casefold() == "caixinha") |
-        (d["Tipo"].astype(str).str.strip().str.casefold() == "caixinha")
-    ].copy()
-
-    if not d_cx.empty:
-        v_dia = pd.to_numeric(d_cx.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
-        v_fundo = pd.to_numeric(d_cx.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
-    else:
-        # Compatibilidade com lançamentos antigos (caixinha nos serviços)
-        v_dia = pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
-        v_fundo = pd.to_numeric(d.get("CaixinhaFundo", 0), errors="coerce").fillna(0).sum()
-
-    total = float(v_dia + v_fundo)
-    if total <= 0:
+    v_dia = pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum()
+    if v_dia <= 0:
         return ""
 
     linhas = [
         "------------------------------",
         "💝 <b>Caixinha</b>",
         f"Dia: <b>{_fmt_brl(v_dia)}</b>",
-        f"Fundo: <b>{_fmt_brl(v_fundo)}</b>",
-        f"Total: <b>{_fmt_brl(total)}</b>",
     ]
     return "\n".join(linhas)
 
@@ -450,7 +434,7 @@ def make_card_caption_v2(df_all, cliente, data_str, funcionario, servico_label, 
 
     if len(unique_days) >= 2:
         ts = [pd.to_datetime(x) for x in unique_days]
-        diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))]
+        diffs = [(ts[i] - ts[i-1]).days for i in range(1, len(ts))] if len(ts) > 1 else []
         media = sum(diffs) / len(diffs) if diffs else None
     else:
         media = None
@@ -519,7 +503,6 @@ def enviar_card(df_all, cliente, funcionario, data_str, servico=None, valor=None
         append_sections=extras_jp
     )
 
-    # >>> Telegram permanece como estava originalmente <<<
     ok = False
     if funcionario == "JPaulo":
         chat_jp = _get_chat_id_jp()
@@ -616,7 +599,6 @@ combos_existentes = sorted([c for c in df_2025["Combo"].dropna().astype(str).str
 modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", value=False)
 
 # Data sempre visível
-# garantir fuso horário de Brasília (UTC-3)
 hoje_br = datetime.now(pytz.timezone("America/Sao_Paulo")).date()
 data = st.date_input("Data", value=hoje_br).strftime("%d/%m/%Y")
 
@@ -652,7 +634,6 @@ if not modo_lote:
         novo_nome = st.text_input("Ou digite um novo nome de cliente")
         cliente = novo_nome if novo_nome else cliente
     with cB:
-        # >>> Foto pequena aqui (width=128) <<<
         foto_url = get_foto_url(cliente)
         if foto_url:
             st.image(foto_url, caption=(cliente or "Cliente"), width=250)
@@ -708,10 +689,9 @@ if not modo_lote:
                 value=obter_valor_servico(s2), step=1.0, key=f"valor_{s2}"
             )
 
-        # 💝 Caixinhas (opcional)
-        with st.expander("💝 Caixinhas (opcional)", expanded=False):
-            caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
-            caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
+        # 💝 Caixinha (opcional) — NA MESMA LINHA
+        with st.expander("💝 Caixinha (opcional)", expanded=False):
+            caixinha_dia = st.number_input("Caixinha do dia", value=0.0, step=1.0, format="%.2f")
 
         # UI cartão + distribuição (apenas se marcado)
         liquido_total = None
@@ -766,6 +746,9 @@ if not modo_lote:
                 if usar_cartao_efetivo and dist_modo == "Concentrar em um serviço" and alvo_servico:
                     soma_outros = sum(v for k, v in valores_customizados.items() if k != alvo_servico)
 
+                # precisão: primeiro item do combo
+                primeiro_raw = combo.split("+")[0].strip() if "+" in combo else combo.strip()
+
                 for s in combo.split("+"):
                     s2_raw = s.strip()
                     s2_norm = _cap_first(s2_raw)
@@ -803,6 +786,11 @@ if not modo_lote:
                         "Funcionário": funcionario, "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
                         **extras
                     })
+
+                    # Caixinha na MESMA LINHA, somente no primeiro item do combo
+                    if s2_raw == primeiro_raw and float(caixinha_dia or 0) > 0:
+                        linha["CaixinhaDia"] = float(caixinha_dia or 0)
+
                     novas.append(linha)
 
                 if usar_cartao_efetivo and novas:
@@ -823,22 +811,13 @@ if not modo_lote:
                         novas[idx_ajuste]["TaxaCartaoValor"] = tsel
                         novas[idx_ajuste]["TaxaCartaoPct"] = round(psel, 4)
 
-                # Linha única de caixinha (se houver)
-                if (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0:
-                    novas.append(_preencher_fiado_vazio({
-                        "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta,
-                        "Cliente": cliente, "Combo": "", "Funcionário": funcionario,
-                        "Fase": fase, "Tipo": "Caixinha", "Período": periodo_opcao,
-                        "CaixinhaDia": float(caixinha_dia or 0.0), "CaixinhaFundo": float(caixinha_anual or 0.0),
-                    }))
-
                 df_final = pd.concat([df_all, pd.DataFrame(novas)], ignore_index=True)
                 salvar_base(df_final)
                 st.session_state.combo_salvo = True
                 ok_tg = enviar_card(
                     df_final, cliente, funcionario, data,
                     servico=combo.replace("+", " + "),
-                    valor=sum(float(n["Valor"]) for n in novas if n["Serviço"] != "Caixinha"),
+                    valor=sum(float(n["Valor"]) for n in novas),
                     combo=combo
                 )
                 st.success(
@@ -850,7 +829,6 @@ if not modo_lote:
     else:
         st.subheader("✂️ Selecione o serviço e valor:")
 
-        # usa lista com "Corte" garantido e chave nova para evitar conflito de estado
         servico = st.selectbox(
             "Serviço",
             servicos_ui,
@@ -860,10 +838,9 @@ if not modo_lote:
 
         valor = st.number_input("Valor", value=obter_valor_servico(servico), step=1.0)
 
-        # 💝 Caixinhas (opcional)
-        with st.expander("💝 Caixinhas (opcional)", expanded=False):
-            caixinha_dia = st.number_input("Caixinha do dia (repasse semanal)", value=0.0, step=1.0, format="%.2f")
-            caixinha_anual = st.number_input("Caixinha anual (fundo de fim de ano)", value=0.0, step=1.0, format="%.2f")
+        # 💝 Caixinha (opcional) — NA MESMA LINHA
+        with st.expander("💝 Caixinha (opcional)", expanded=False):
+            caixinha_dia = st.number_input("Caixinha do dia", value=0.0, step=1.0, format="%.2f")
 
         if usar_cartao and not is_nao_cartao(conta):
             def bloco_cartao_ui(total_bruto_padrao: float):
@@ -886,7 +863,6 @@ if not modo_lote:
         if "simples_salvo" not in st.session_state:
             st.session_state.simples_salvo = False
 
-        # Salvar atendimento normal (com caixinha junto se houver)
         if not st.session_state.simples_salvo and st.button("📁 Salvar Atendimento"):
             servico_norm = _cap_first(servico)
             if ja_existe_atendimento(cliente, data, servico_norm):
@@ -917,46 +893,18 @@ if not modo_lote:
                         "Cliente": cliente, "Combo": "", "Funcionário": funcionario,
                         "Fase": fase, "Tipo": tipo, "Período": periodo_opcao,
                     })
+
+                # Caixinha na MESMA LINHA do serviço simples
+                if float(caixinha_dia or 0) > 0:
+                    nova["CaixinhaDia"] = float(caixinha_dia or 0)
+
                 df_final = pd.concat([df_all, pd.DataFrame([nova])], ignore_index=True)
-
-                # Linha única de caixinha (se houver)
-                add_cx = (caixinha_dia or 0) > 0 or (caixinha_anual or 0) > 0
-                if add_cx:
-                    df_final = pd.concat([df_final, pd.DataFrame([_preencher_fiado_vazio({
-                        "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta,
-                        "Cliente": cliente, "Combo": "", "Funcionário": funcionario,
-                        "Fase": fase, "Tipo": "Caixinha", "Período": periodo_opcao,
-                        "CaixinhaDia": float(caixinha_dia or 0.0), "CaixinhaFundo": float(caixinha_anual or 0.0),
-                    })])], ignore_index=True)
-
                 salvar_base(df_final)
                 st.session_state.simples_salvo = True
                 ok_tg = enviar_card(df_final, cliente, funcionario, data, servico=servico_norm, valor=float(nova["Valor"]), combo="")
                 st.success(
                     f"✅ Atendimento salvo com sucesso para {cliente} no dia {data}."
                     + (" 📲 Notificação enviada." if ok_tg else " ⚠️ Não consegui notificar no Telegram.")
-                )
-
-        # Salvar SÓ a caixinha (sem relançar serviço)
-        if st.button("💝 Salvar SÓ a caixinha"):
-            if (caixinha_dia or 0) <= 0 and (caixinha_anual or 0) <= 0:
-                st.warning("⚠️ Informe algum valor de caixinha antes de salvar.")
-            else:
-                df_all, _ = carregar_base()
-                nova_cx = _preencher_fiado_vazio({
-                    "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta,
-                    "Cliente": cliente, "Combo": "", "Funcionário": funcionario,
-                    "Fase": fase, "Tipo": "Caixinha", "Período": periodo_opcao,
-                    "CaixinhaDia": float(caixinha_dia or 0.0), "CaixinhaFundo": float(caixinha_anual or 0.0),
-                })
-                df_final = pd.concat([df_all, pd.DataFrame([nova_cx])], ignore_index=True)
-                salvar_base(df_final)
-                ok_tg = enviar_card(df_final, cliente, funcionario, data, servico="Caixinha", valor=0.0, combo="")
-                st.success(
-                    ("💝 Caixinha registrada para {0} no dia {1}. 📲 Notificação enviada."
-                     if ok_tg else
-                     "💝 Caixinha registrada para {0} no dia {1}. ⚠️ Não consegui notificar no Telegram."
-                    ).format(cliente, data)
                 )
 
 # =========================
@@ -975,7 +923,6 @@ else:
 
     for cli in lista_final:
         with st.container(border=True):
-            # >>> Foto pequena no topo de cada cliente (width=128) <<<
             foto_url = get_foto_url(cli)
             if foto_url:
                 st.image(foto_url, caption=cli, width=200)
@@ -1005,12 +952,10 @@ else:
                 help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off_cli else None),
             )
 
-            # Caixinhas no modo lote
-            with st.expander(f"💝 Caixinhas de {cli} (opcional)", expanded=False):
+            # Caixinha no modo lote — NA MESMA LINHA
+            with st.expander(f"💝 Caixinha de {cli} (opcional)", expanded=False):
                 st.number_input(f"{cli} - Caixinha do dia", value=0.0, step=1.0, format="%.2f", key=f"cx_dia_{cli}")
-                st.number_input(f"{cli} - Caixinha anual", value=0.0, step=1.0, format="%.2f", key=f"cx_anual_{cli}")
 
-            # uso efetivo (sem escrever no session_state do widget)
             use_card_cli = (not force_off_cli) and bool(st.session_state.get(f"flag_card_{cli}", False))
 
             st.selectbox(f"Período do Atendimento de {cli}", ["Manhã", "Tarde", "Noite"],
@@ -1031,7 +976,6 @@ else:
                         itens.append((s2, val))
                         total_padrao += float(val)
 
-                    # Cartão + distribuição
                     if use_card_cli and not is_nao_cartao(st.session_state.get(f"conta_{cli}", "")):
                         with st.expander(f"💳 {cli} - Pagamento no cartão", expanded=True):
                             c1, c2 = st.columns(2)
@@ -1050,7 +994,6 @@ else:
                                              [nm for (nm, _) in itens], key=f"alvo_{cli}")
 
             else:
-                # usa lista com "Corte" garantido e key nova por cliente
                 st.selectbox(
                     f"Serviço simples para {cli}",
                     servicos_ui,
@@ -1090,7 +1033,6 @@ else:
                 periodo_cli = st.session_state.get(f"periodo_{cli}", periodo_global)
                 func_cli = st.session_state.get(f"func_{cli}", funcionario_global)
                 cx_dia = float(st.session_state.get(f"cx_dia_{cli}", 0.0) or 0.0)
-                cx_anual = float(st.session_state.get(f"cx_anual_{cli}", 0.0) or 0.0)
 
                 if tipo_at == "Combo":
                     combo_cli = st.session_state.get(f"combo_{cli}", "")
@@ -1116,6 +1058,8 @@ else:
                     soma_outros = None
                     if use_card_cli and dist_modo == "Concentrar em um serviço" and alvo:
                         soma_outros = sum(val for (r, _, val) in itens if r != alvo)
+
+                    primeiro_raw = str(combo_cli).split("+")[0].strip() if "+" in str(combo_cli) else str(combo_cli).strip()
 
                     for (s_raw, s_norm, bruto_i) in itens:
                         if use_card_cli and total_bruto > 0:
@@ -1143,12 +1087,18 @@ else:
                             extras = {}
                             valor_para_base = bruto_i
 
-                        novas.append(_preencher_fiado_vazio({
+                        registro = _preencher_fiado_vazio({
                             "Data": data, "Serviço": s_norm, "Valor": valor_para_base, "Conta": conta_cli,
                             "Cliente": cli, "Combo": combo_cli, "Funcionário": func_cli,
                             "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
                             **extras
-                        }))
+                        })
+
+                        # injeta caixinha na primeira linha do combo
+                        if s_raw == primeiro_raw and float(cx_dia or 0) > 0:
+                            registro["CaixinhaDia"] = float(cx_dia or 0)
+
+                        novas.append(registro)
 
                     if use_card_cli:
                         indices_cli = [i for i, n in enumerate(novas) if n["Cliente"] == cli and n["Combo"] == combo_cli]
@@ -1185,33 +1135,30 @@ else:
                         liq = float(st.session_state.get(f"liq_{cli}", bruto))
                         taxa_v = round(max(0.0, bruto - liq), 2)
                         taxa_pct = round((taxa_v / bruto * 100.0), 4) if bruto > 0 else 0.0
-                        novas.append(_preencher_fiado_vazio({
-                            "Data": data, "Serviço": serv_norm, "Valor": liq, "Conta": conta_cli,
-                            "Cliente": cli, "Combo": "", "Funcionário": func_cli,
-                            "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
+                        extras_cartao = {
                             "ValorBrutoRecebido": bruto, "ValorLiquidoRecebido": liq,
                             "TaxaCartaoValor": taxa_v, "TaxaCartaoPct": taxa_pct,
                             "FormaPagDetalhe": f"{st.session_state.get(f'bandeira_{cli}','-')} | {st.session_state.get(f'tipo_cartao_{cli}','Crédito')} | {int(st.session_state.get(f'parc_{cli}',1))}x",
                             "PagamentoID": gerar_pag_id("A"),
-                        }))
+                        }
+                        valor_base = liq
                     else:
-                        novas.append(_preencher_fiado_vazio({
-                            "Data": data, "Serviço": serv_norm, "Valor": bruto, "Conta": conta_cli,
-                            "Cliente": cli, "Combo": "", "Funcionário": func_cli,
-                            "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
-                        }))
+                        extras_cartao = {}
+                        valor_base = bruto
+
+                    registro = _preencher_fiado_vazio({
+                        "Data": data, "Serviço": serv_norm, "Valor": valor_base, "Conta": conta_cli,
+                        "Cliente": cli, "Combo": "", "Funcionário": func_cli,
+                        "Fase": fase, "Tipo": tipo, "Período": periodo_cli,
+                        **extras_cartao
+                    })
+                    if float(cx_dia or 0) > 0:
+                        registro["CaixinhaDia"] = float(cx_dia or 0)
+
+                    novas.append(registro)
 
                     clientes_salvos.add(cli)
                     funcionario_por_cliente[cli] = func_cli
-
-                # Caixinha 1x por cliente (se houver)
-                if (cx_dia or 0) > 0 or (cx_anual or 0) > 0:
-                    novas.append(_preencher_fiado_vazio({
-                        "Data": data, "Serviço": "Caixinha", "Valor": 0.0, "Conta": conta_cli,
-                        "Cliente": cli, "Combo": "", "Funcionário": func_cli,
-                        "Fase": fase, "Tipo": "Caixinha", "Período": periodo_cli,
-                        "CaixinhaDia": float(cx_dia or 0.0), "CaixinhaFundo": float(cx_anual or 0.0),
-                    }))
 
             if not novas:
                 st.warning("Nenhuma linha válida para inserir.")
