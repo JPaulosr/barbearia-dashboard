@@ -1069,27 +1069,27 @@ elif acao == "💰 Registrar pagamento":
             # ---- Mensagens (quitado + cópia enriquecida)
             try:
                 # -------- Card 1: ✅ Fiado quitado (competência)
-                 ids_lanc_set = sorted(set(subset_all["IDLancFiado"].astype(str)))
-            ids_lanc_txt = "; ".join(ids_lanc_set)
-            servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
+                ids_lanc_set = sorted(set(subset_all["IDLancFiado"].astype(str)))
+                ids_lanc_txt = "; ".join(ids_lanc_set)
+                servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
 
-            msg_quit = (
-                "✅ <b>Fiado quitado (competência)</b>\n"
-                f"👤 Cliente: <b>{cliente_sel}</b>\n"
-                f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
-                f"💳 Forma: <b>{forma_pag}</b>\n"
-                f"🧾 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
-                f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
-                f"📅 Data pagto: <b>{data_pag_str}</b>\n"
-                f"🆔 IDs: <code>{ids_lanc_txt}</code>\n"
-                f"🧾 Pag.: <code>{id_pag}</code>"
-                + (f"\n📝 Obs.: {obs}" if obs else "")
-            )
+                msg_quit = (
+                    "✅ <b>Fiado quitado (competência)</b>\n"
+                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                    f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
+                    f"💳 Forma: <b>{forma_pag}</b>\n"
+                    f"🧾 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
+                    f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
+                    f"📅 Data pagto: <b>{data_pag_str}</b>\n"
+                    f"🆔 IDs: <code>{ids_lanc_txt}</code>\n"
+                    f"🧾 Pag.: <code>{id_pag}</code>"
+                    + (f"\n📝 Obs.: {obs}" if obs else "")
+                )
 
-            foto_cli = FOTOS.get(_norm(cliente_sel))
+                foto_cli = FOTOS.get(_norm(cliente_sel))
 
-            # Destinos sem duplicar: sempre JP + canal do Vinicius quando o atendimento é dele
-            destinos = {_get_chat_id_jp()}  # set dedup
+                # Destinos sem duplicar: sempre JP + canal do Vinicius quando for atendimento dele
+                destinos = {_get_chat_id_jp()}  # set dedup
                 funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
 
                 chat_func = None
@@ -1105,7 +1105,7 @@ elif acao == "💰 Registrar pagamento":
                         tg_send_photo(foto_cli, msg_quit, chat_id=dest)
                     else:
                         tg_send(msg_quit, chat_id=dest)
-                  
+
                 # -------- Card 2: Cópia para controle (enriquecida)
                 datas_sel = pd.to_datetime(subset_all["Data"], format=DATA_FMT, errors="coerce").dropna().dt.date
                 periodos = [p for p in subset_all.get("Período","").astype(str).tolist() if p.strip()]
@@ -1397,6 +1397,7 @@ else:  # acao == "📗 Pagos (histórico)"
         hide_index=True
     )
 
+    # Export: tenta Excel; CSV sempre disponível
     try:
         from openpyxl import Workbook  # noqa
         buf = BytesIO()
@@ -1406,7 +1407,8 @@ else:  # acao == "📗 Pagos (histórico)"
             )
         st.download_button("⬇️ Exportar (Excel)", data=buf.getvalue(), file_name="fiados_pagos.xlsx")
     except Exception:
-        csv_bytes = vis[cols_show].sort_values("DataPagamento", ascending=False).to_csv(index=False).encode("utf-8-sig")
+        pass
+    csv_bytes = vis[cols_show].sort_values("DataPagamento", ascending=False).to_csv(index=False).encode("utf-8-sig")
     st.download_button("⬇️ Exportar (CSV)", data=csv_bytes, file_name="fiados_pagos.csv")
 
     st.markdown("---")
