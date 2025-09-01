@@ -1087,10 +1087,17 @@ elif acao == "💰 Registrar pagamento":
                 )
 
                 foto_cli = FOTOS.get(_norm(cliente_sel))
-                destinos = [_get_chat_id_jp()]
+                destinos = {_get_chat_id_jp()}  # set para deduplicar
                 funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
-                if len(funcs_set) == 1:
-                    destinos.append(_chat_id_por_func(funcs_set[0]))
+
+          if len(funcs_set) == 1:
+                chat_func = _chat_id_por_func(funcs_set[0])
+          if chat_func and chat_func != _get_chat_id_jp():
+                destinos.add(chat_func)
+
+   for dest in destinos:
+          if foto_cli: tg_send_photo(foto_cli, msg_quit, chat_id=dest)
+          else:        tg_send(msg_quit, chat_id=dest)
 
                 for dest in destinos:
                     if foto_cli: tg_send_photo(foto_cli, msg_quit, chat_id=dest)
