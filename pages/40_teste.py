@@ -214,16 +214,39 @@ def col_map(ws):
     return cmap
 
 def ensure_headers(ws, desired_headers):
+    """Garante headers sem duplicação, comparando por nome normalizado."""
+    import unicodedata
+    def _norm(s: str) -> str:
+        s = unicodedata.normalize("NFKC", str(s or "")).strip()
+        return s.casefold()
+
     headers = ws.row_values(1)
     if not headers:
         ws.append_row(desired_headers)
         return {h: i+1 for i, h in enumerate(desired_headers)}
-    missing = [h for h in desired_headers if h not in headers]
+
+    # normaliza existentes e remove duplicatas mantendo o 1º
+    seen = set()
+    fixed = []
+    for h in headers:
+        k = _norm(h)
+        if k in seen:
+            continue
+        seen.add(k)
+        fixed.append(h.strip())
+
+    # se houve mudança (duplicatas removidas), reescreve a linha 1 “limpa”
+    if fixed != headers:
+        ws.update('A1', [fixed])
+
+    # adiciona apenas os que realmente faltam (por normalização)
+    existing_norm = {_norm(h) for h in fixed}
+    missing = [h for h in desired_headers if _norm(h) not in existing_norm]
     if missing:
-        new_headers = headers + missing
-        ws.update('A1', [new_headers])
-        headers = new_headers
-    return {h: i+1 for i, h in enumerate(headers)}
+        ws.update('A1', [fixed + missing])
+
+    headers_final = ws.row_values(1)
+    return {h: i+1 for i, h in enumerate(headers_final)}
 
 def append_rows_generic(ws, dicts, default_headers=None):
     headers = ws.row_values(1)
