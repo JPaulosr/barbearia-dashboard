@@ -9,6 +9,10 @@
 # - 📗 Histórico de pagos (filtros + exportação)
 # - Datas de REGISTRO extraídas do ID (L-YYYYMMDDHHMMSSmmm) — SEM hora
 # - Em lote: campo "Valor" para serviço único; combos seguem valores padrão
+# - 💝 CaixinhaDia: padrão único (MESMA LINHA DO ATENDIMENTO). Na quitação:
+#     • Por ID: grava CaixinhaDia apenas na PRIMEIRA linha de cada ID selecionado
+#     • Por Linha: grava CaixinhaDia apenas na PRIMEIRA linha selecionada
+#   (não cria nova linha!)
 
 import streamlit as st
 import pandas as pd
@@ -40,7 +44,6 @@ TZ = pytz.timezone("America/Sao_Paulo")
 DATA_FMT = "%d/%m/%Y"
 
 def today_local() -> date:
-    """Data local respeitando o fuso definido em TZ (evita adiantar 1 dia)."""
     return datetime.now(TZ).date()
 
 BASE_COLS_MIN = ["Data","Serviço","Valor","Conta","Cliente","Combo","Funcionário","Fase","Tipo","Período"]
@@ -50,14 +53,16 @@ BASE_PAG_EXTRAS = [
     "TaxaCartaoValor", "TaxaCartaoPct",
     "FormaPagDetalhe", "PagamentoID"
 ]
-BASE_COLS_ALL = BASE_COLS_MIN + EXTRA_COLS + BASE_PAG_EXTRAS
+CAIXA_COLS = ["CaixinhaDia"]
+
+BASE_COLS_ALL = BASE_COLS_MIN + EXTRA_COLS + BASE_PAG_EXTRAS + CAIXA_COLS
 
 VALORES_PADRAO = {
     "Corte": 25.0, "Pezinho": 7.0, "Barba": 15.0, "Sobrancelha": 7.0,
     "Luzes": 45.0, "Pintura": 35.0, "Alisamento": 40.0, "Gel": 10.0, "Pomada": 15.0
 }
 
-COMISSAO_FUNCIONARIOS = {"vinicius"}   # case-insensitive
+COMISSAO_FUNCIONARIOS = {"vinicius"}
 COMISSAO_PERC_PADRAO = 0.50
 
 TAXAS_COLS = ["IDPagamento","Cliente","DataPag","Bandeira","Tipo","Parcelas","Bruto","Liquido","TaxaValor","TaxaPct","IDLancs"]
@@ -272,39 +277,47 @@ def servicos_compactos_por_ids_parcial(df_rows: pd.DataFrame) -> str:
             vistos.append(p); out.append(p)
     return " | ".join(out) if out else "-"
 
+# ========= NOVO: histórico inclui Caixinha =========
 def historico_cliente_por_ano(df_base: pd.DataFrame, cliente: str) -> dict[int, float]:
+    """Soma Valor + CaixinhaDia por ano do cliente."""
     if df_base is None or df_base.empty or not cliente:
         return {}
     df = df_base.copy()
     df["__dt"] = pd.to_datetime(df["Data"], format="%d/%m/%Y", errors="coerce")
     df["__valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+    df["__cx"]    = pd.to_numeric(df.get("CaixinhaDia", 0), errors="coerce").fillna(0.0)
     df = df[(df["Cliente"].astype(str).str.strip() == str(cliente).strip()) & df["__dt"].notna()]
     if df.empty:
         return {}
-    grp = df.groupby(df["__dt"].dt.year)["__valor"].sum().to_dict()
-    return {int(ano): float(round(v, 2)) for ano, v in grp.items()}
+    grp_val = df.groupby(df["__dt"].dt.year)["__valor"].sum()
+    grp_cx  = df.groupby(df["__dt"].dt.year)["__cx"].sum()
+    tot = grp_val.add(grp_cx, fill_value=0.0).to_dict()
+    return {int(ano): float(round(v, 2)) for ano, v in tot.items()}
 
+# ========= NOVO: breakdown retorna Caixinha do ano =========
 def breakdown_por_servico_no_ano(df_base: pd.DataFrame, cliente: str, ano: int, max_itens: int = 8):
     if df_base is None or df_base.empty or not cliente or not ano:
-        return pd.DataFrame(columns=["Serviço","Qtd","Total"]), 0, 0.0, 0, 0.0
+        return pd.DataFrame(columns=["Serviço","Qtd","Total"]), 0, 0.0, 0, 0.0, 0.0
     df = df_base.copy()
     df["__dt"] = pd.to_datetime(df["Data"], format="%d/%m/%Y", errors="coerce")
     df["__valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+    df["__cx"]    = pd.to_numeric(df.get("CaixinhaDia", 0), errors="coerce").fillna(0.0)
     df = df[(df["Cliente"].astype(str).str.strip() == str(cliente).strip()) & (df["__dt"].dt.year == ano)]
     if df.empty:
-        return pd.DataFrame(columns=["Serviço","Qtd","Total"]), 0, 0.0, 0, 0.0
+        return pd.DataFrame(columns=["Serviço","Qtd","Total"]), 0, 0.0, 0, 0.0, 0.0
     agg = (df.groupby("Serviço", dropna=True)
              .agg(Qtd=("Serviço","count"), Total=("__valor","sum"))
              .reset_index()).sort_values("Total", ascending=False)
     total_qtd = int(agg["Qtd"].sum())
     total_val = float(agg["Total"].sum())
+    cx_total  = float(df["__cx"].sum())
     top = agg.head(max_itens).copy()
     outros = agg.iloc[max_itens:] if len(agg) > max_itens else pd.DataFrame(columns=agg.columns)
     outros_qtd = int(outros["Qtd"].sum()) if not outros.empty else 0
     outros_val = float(outros["Total"].sum()) if not outros.empty else 0.0
     top["Qtd"] = top["Qtd"].astype(int)
     top["Total"] = top["Total"].astype(float).round(2)
-    return top, total_qtd, total_val, outros_qtd, outros_val
+    return top, total_qtd, total_val, outros_qtd, outros_val, cx_total
 
 def format_extras_numeric(ws):
     cmap = col_map(ws)
@@ -322,13 +335,12 @@ def format_extras_numeric(ws):
     fmt("ValorLiquidoRecebido", "NUMBER",  "0.00")
     fmt("TaxaCartaoValor",      "NUMBER",  "0.00")
     fmt("TaxaCartaoPct",        "PERCENT", "0.00%")
+    fmt("CaixinhaDia",          "NUMBER",  "0.00")
 
-# ---------- NOVO: datas/periodo de REGISTRO a partir do ID ----------
 def _so_digitos(s: str) -> str:
     return "".join(ch for ch in str(s) if ch.isdigit())
 
 def data_reg_do_id(idl: str):
-    """Extrai a DATA (date) do IDLancFiado (L-YYYYMMDDHHMMSSmmm)."""
     try:
         digs = _so_digitos(idl)
         if len(digs) >= 8:
@@ -338,7 +350,6 @@ def data_reg_do_id(idl: str):
     return None
 
 def periodo_do_id(df: pd.DataFrame, idl: str) -> str:
-    """Se todas as linhas do ID tiverem o mesmo Período, retorna ele; senão, ''. """
     try:
         vals = (df.loc[df["IDLancFiado"] == idl, "Período"]
                   .dropna().astype(str).str.strip())
@@ -435,8 +446,7 @@ def ultima_forma_pagto_cliente(df_base, cliente):
         pass
     return str(df.iloc[0]["Conta"]) if not df.empty else None
 
-# ===== Caches
-clientes, combos_exist, servs_exist, contas_exist = carregar_listas()
+clientes, combos_exist, servs_exist, base_contas = carregar_listas()
 FOTOS = carregar_fotos_mapa()
 
 # =============================
@@ -508,7 +518,7 @@ if acao == "➕ Lançar fiado":
                         "StatusFiado": "Em aberto", "IDLancFiado": idl, "VencimentoFiado": venc_str,
                         "DataPagamento": "",
                         "ValorBrutoRecebido":"", "ValorLiquidoRecebido":"", "TaxaCartaoValor":"", "TaxaCartaoPct":"",
-                        "FormaPagDetalhe":"", "PagamentoID":""
+                        "FormaPagDetalhe":"", "PagamentoID":"", "CaixinhaDia":""
                     })
                 ss = conectar_sheets()
                 ws_base = garantir_aba(ss, ABA_BASE, BASE_COLS_ALL)
@@ -551,7 +561,6 @@ if acao == "➕ Lançar fiado":
                    "Se for serviço único, edite o campo Valor. Para combos o valor segue a tabela padrão por serviço.")
         num_linhas = st.number_input("Quantidade de linhas", min_value=1, max_value=200, value=5, step=1, key="fiado_qtd_lote")
 
-        # opções combinadas: combos+serviços; default "Corte"
         opcoes_combo_serv_brutas = [*sorted(combos_exist), *sorted(servs_exist)]
         opcoes_combo_serv = list(dict.fromkeys(["Corte", *opcoes_combo_serv_brutas]))
         valor_corte = float(VALORES_PADRAO.get("Corte", 0.0))
@@ -564,8 +573,8 @@ if acao == "➕ Lançar fiado":
             "Fase": ["Dono + funcionário" for _ in range(num_linhas)],
             "Tipo": ["Serviço" for _ in range(num_linhas)],
             "Período": ["" for _ in range(num_linhas)],
-            "Combo_ou_Serviço": ["Corte" for _ in range(num_linhas)],  # "corte+barba" OU "Corte"
-            "Valor": [valor_corte for _ in range(num_linhas)],         # usado para serviço único
+            "Combo_ou_Serviço": ["Corte" for _ in range(num_linhas)],
+            "Valor": [valor_corte for _ in range(num_linhas)],
         })
 
         col_editor, col_foto = st.columns([3,1])
@@ -602,7 +611,6 @@ if acao == "➕ Lançar fiado":
             except Exception:
                 pass
 
-        # autopreenche valor quando serviço único e valor 0
         try:
             for idx in edited.index:
                 nome = str(edited.at[idx, "Combo_ou_Serviço"]).strip() or "Corte"
@@ -673,7 +681,7 @@ if acao == "➕ Lançar fiado":
                             "StatusFiado": "Em aberto", "IDLancFiado": idl, "VencimentoFiado": venc_str,
                             "DataPagamento": "",
                             "ValorBrutoRecebido":"", "ValorLiquidoRecebido":"", "TaxaCartaoValor":"", "TaxaCartaoPct":"",
-                            "FormaPagDetalhe":"", "PagamentoID":""
+                            "FormaPagDetalhe":"", "PagamentoID":"", "CaixinhaDia":""
                         })
 
                     append_rows_base(ws_base, novas)
@@ -728,7 +736,7 @@ elif acao == "💰 Registrar pagamento":
     ultima = ultima_forma_pagto_cliente(df_base_full, cliente_sel) if cliente_sel else None
     lista_contas_default = ["Pix","Dinheiro","Cartão","Transferência","Pagseguro","Mercado Pago","Nubank CNPJ",
                             "SumUp","Cielo","Stone","Getnet","Outro","Nubank"]
-    lista_contas = sorted(set(contas_exist + lista_contas_default), key=lambda s: s.lower())
+    lista_contas = sorted(set(base_contas + lista_contas_default), key=lambda s: s.lower())
     default_idx = lista_contas.index(ultima) if (ultima in lista_contas) else 0
     with colc2:
         forma_pag = st.selectbox("Forma de pagamento (quitação)", options=lista_contas, index=default_idx)
@@ -837,6 +845,12 @@ elif acao == "💰 Registrar pagamento":
             st.caption(f"Registro do ID: {registro_caption}")
     with cold2:
         obs = st.text_input("Observação (opcional)", "", key="obs")
+
+    # 💝 Caixinha (opcional) — MESMA LINHA do(s) atendimento(s)
+    caixinha_dia_val = st.number_input(
+        "💝 Caixinha do dia (opcional) — será gravada na mesma linha do atendimento",
+        min_value=0.0, step=1.0, format="%.2f", value=0.00
+    )
 
     # Preview / totais
     total_sel = 0.0
@@ -959,6 +973,33 @@ elif acao == "💰 Registrar pagamento":
             if updates:
                 ws_base2.batch_update(updates, value_input_option="USER_ENTERED")
 
+            # 💝 CaixinhaDia — MESMA LINHA (por ID: 1ª linha de cada ID; por linha: 1ª selecionada)
+            if caixinha_dia_val and float(caixinha_dia_val) > 0:
+                col_cx = headers_map.get(_norm_key("CaixinhaDia"))
+                updates_cx = []
+                if col_cx:
+                    if modo_sel.startswith("Por ID"):
+                        for idl in sorted(set(subset_all["IDLancFiado"].astype(str))):
+                            linhas_id = subset_all[subset_all["IDLancFiado"].astype(str) == idl]
+                            if not linhas_id.empty:
+                                idx_primeiro = int(linhas_id.index[0])
+                                row_no = idx_primeiro + 2
+                                updates_cx.append({
+                                    "range": rowcol_to_a1(row_no, col_cx),
+                                    "values": [[float(caixinha_dia_val)]],
+                                })
+                    else:
+                        idx_primeiro = int(subset_all.index[0])
+                        row_no = idx_primeiro + 2
+                        updates_cx.append({
+                            "range": rowcol_to_a1(row_no, col_cx),
+                            "values": [[float(caixinha_dia_val)]],
+                        })
+
+                if updates_cx:
+                    ws_base2.batch_update(updates_cx, value_input_option="USER_ENTERED")
+
+            # Registros auxiliares (taxas e pagamentos)
             if usar_cartao:
                 try:
                     ws_taxas = garantir_aba(ss, ABA_TAXAS, TAXAS_COLS)
@@ -997,12 +1038,13 @@ elif acao == "💰 Registrar pagamento":
             st.success(
                 f"Pagamento registrado para **{cliente_sel}**. "
                 f"Total líquido: {_fmt_brl(total_liquido)} (bruto {_fmt_brl(total_bruto)})."
+                + (f" 💝 Caixinha gravada: {_fmt_brl(float(caixinha_dia_val))}" if caixinha_dia_val and float(caixinha_dia_val)>0 else "")
             )
             st.cache_data.clear()
 
-            # ---- Mensagens (quitado + cópia enriquecida) ----
+            # ---- Mensagens (quitado + cópia enriquecida)
             try:
-                # -------- Card 1: ✅ Fiado quitado (competência)
+                # -------- Card 1: ✅ Fiado quitado (competência) — **sem duplicar destino**
                 ids_lanc_set = sorted(set(subset_all["IDLancFiado"].astype(str)))
                 ids_lanc_txt = "; ".join(ids_lanc_set)
                 servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
@@ -1026,19 +1068,39 @@ elif acao == "💰 Registrar pagamento":
                 if len(funcs_set) == 1:
                     destinos.append(_chat_id_por_func(funcs_set[0]))
 
+                # DEDUPLICA destinos para evitar mensagem dupla (ex.: JPaulo)
+                destinos = [d for i, d in enumerate(destinos) if d and d not in destinos[:i]]
+
                 for dest in destinos:
                     if foto_cli: tg_send_photo(foto_cli, msg_quit, chat_id=dest)
                     else:        tg_send(msg_quit, chat_id=dest)
 
                 # -------- Card 2: Cópia para controle (enriquecida)
-                datas_sel = pd.to_datetime(subset_all["Data"], format=DATA_FMT, errors="coerce").dropna().dt.date
+                df_priv, _ = read_base_raw(conectar_sheets())  # estado mais recente (inclui Caixinha salva)
+
+                # Caixinha TOTAL do(s) selecionado(s) para compor "Recebido"
+                if modo_sel.startswith("Por ID"):
+                    cx_total_sel = pd.to_numeric(
+                        df_priv[df_priv["IDLancFiado"].astype(str).isin(ids_lanc_set)].get("CaixinhaDia", 0),
+                        errors="coerce"
+                    ).fillna(0).sum()
+                else:
+                    datas_sel = subset_all["Data"].astype(str).tolist()
+                    cx_total_sel = pd.to_numeric(
+                        df_priv[(df_priv["Cliente"]==cliente_sel) & (df_priv["Data"].astype(str).isin(datas_sel))].get("CaixinhaDia", 0),
+                        errors="coerce"
+                    ).fillna(0).sum()
+
+                recebido_total = float(total_liquido) + float(cx_total_sel or 0.0)
+
+                datas_sel_series = pd.to_datetime(subset_all["Data"], format=DATA_FMT, errors="coerce").dropna().dt.date
                 periodos = [p for p in subset_all.get("Período","").astype(str).tolist() if p.strip()]
                 funcs    = [f for f in subset_all.get("Funcionário","").astype(str).tolist() if f.strip()]
 
-                if len(set(datas_sel)) == 1:
-                    data_atend_txt = next(iter(set(datas_sel))).strftime(DATA_FMT)
-                elif len(set(datas_sel)) > 1:
-                    dmin = min(datas_sel).strftime(DATA_FMT); dmax = max(datas_sel).strftime(DATA_FMT)
+                if len(set(datas_sel_series)) == 1:
+                    data_atend_txt = next(iter(set(datas_sel_series))).strftime(DATA_FMT)
+                elif len(set(datas_sel_series)) > 1:
+                    dmin = min(datas_sel_series).strftime(DATA_FMT); dmax = max(datas_sel_series).strftime(DATA_FMT)
                     data_atend_txt = f"{dmin} → {dmax}"
                 else:
                     data_atend_txt = "-"
@@ -1046,8 +1108,27 @@ elif acao == "💰 Registrar pagamento":
                 periodo_txt = (periodos[0] if len(set(periodos)) == 1 else "—")
                 atendido_por_txt = (funcs[0] if len(set(funcs)) == 1 else ", ".join(sorted(set(funcs))))
 
-                df_priv, _ = read_base_raw(conectar_sheets())
+                # Blocos
+                bloco_atend = (
+                    "📌 <b>Atendimento registrado</b>\n"
+                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                    f"📅 Data: <b>{data_atend_txt}</b>\n"
+                    f"🕑 Período: <b>{periodo_txt or '-'}</b>\n"
+                    f"✂️ Serviço(s): <b>{servicos_txt}</b>\n"
+                    f"🧑‍🤝‍🧑 Atendido por: <b>{atendido_por_txt or '-'}</b>"
+                )
+                linha_taxa_cp = (f"\n🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>" if usar_cartao else "")
+                linha_caixinha = f"\n💝 Caixinha: <b>{_fmt_brl(float(cx_total_sel))}</b>" if float(cx_total_sel) > 0 else ""
 
+                msg_jp = (
+                    "🧾 <b>Cópia para controle</b>\n" + bloco_atend +
+                    f"\n💳 Forma: <b>{forma_pag}</b>\n"
+                    f"🧾 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>"
+                    + linha_taxa_cp + linha_caixinha +
+                    f"\n📥 <b>Recebido:</b> <b>{_fmt_brl(recebido_total)}</b>"
+                )
+
+                # Indicadores de histórico (incluem Caixinha)
                 def _resumo_visitas(df_base: pd.DataFrame, cliente: str):
                     if df_base is None or df_base.empty or not cliente: return None, None, 0, "-"
                     df = df_base.copy()
@@ -1064,17 +1145,6 @@ elif acao == "💰 Registrar pagamento":
                     return media, dist, total, (ultimo_func or "-")
 
                 media_dias, dist_ult, total_atends, ult_func = _resumo_visitas(df_priv, cliente_sel)
-
-                bloco_atend = (
-                    "📌 <b>Atendimento registrado</b>\n"
-                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
-                    f"📅 Data: <b>{data_atend_txt}</b>\n"
-                    f"🕑 Período: <b>{periodo_txt or '-'}</b>\n"
-                    f"✂️ Serviço(s): <b>{servicos_txt}</b>\n"
-                    f"🧑‍🤝‍🧑 Atendido por: <b>{atendido_por_txt or '-'}</b>"
-                )
-                linha_taxa_cp = (f"\n🧾 Taxa total: <b>{_fmt_brl(taxa_total_valor)} ({_fmt_pct(taxa_total_pct)})</b>" if usar_cartao else "")
-
                 bloco_hist_indic = (
                     "\n\n📊 <b>Histórico</b>\n"
                     f"• Média: <b>{(f'{media_dias:.1f} dias' if media_dias is not None else '-')}</b>\n"
@@ -1083,6 +1153,7 @@ elif acao == "💰 Registrar pagamento":
                     f"• Último atendente: <b>{ult_func}</b>"
                 )
 
+                # Histórico por ano (inclui Caixinha)
                 hist = historico_cliente_por_ano(df_priv, cliente_sel)
                 if hist:
                     anos_ord = sorted(hist.keys(), reverse=True)
@@ -1091,8 +1162,9 @@ elif acao == "💰 Registrar pagamento":
                 else:
                     bloco_hist = "\n\n📚 <b>Histórico por ano</b>\n• (sem registros)"
 
+                #  Ano corrente: serviços + Caixinha + Total com Caixinha
                 ano_corr = today_local().year
-                brk, tq, tv, oq, ov = breakdown_por_servico_no_ano(df_priv, cliente_sel, ano_corr, max_itens=8)
+                brk, tq, tv, oq, ov, cx_ano = breakdown_por_servico_no_ano(df_priv, cliente_sel, ano_corr, max_itens=8)
                 if not brk.empty:
                     linhas_srv = "\n".join(
                         f"• {r['Serviço']}: {int(r['Qtd'])}× · <b>{_fmt_brl(float(r['Total']))}</b>"
@@ -1100,11 +1172,15 @@ elif acao == "💰 Registrar pagamento":
                     )
                     if oq > 0:
                         linhas_srv += f"\n• Outros: {oq}× · <b>{_fmt_brl(ov)}</b>"
-                    bloco_srv = f"\n\n🔎 <b>{ano_corr}: por serviço</b>\n{linhas_srv}\nTotal ({ano_corr}): <b>{_fmt_brl(tv)}</b>"
+                    if cx_ano > 0:
+                        linhas_srv += f"\n• 💝 Caixinha: <b>{_fmt_brl(cx_ano)}</b>"
+                    total_ano_com_cx = float(tv) + float(cx_ano)
+                    bloco_srv = f"\n\n🔎 <b>{ano_corr}: por serviço</b>\n{linhas_srv}\nTotal ({ano_corr}): <b>{_fmt_brl(total_ano_com_cx)}</b>"
                 else:
-                    bloco_srv = f"\n\n🔎 <b>{ano_corr}: por serviço</b>\n• (sem registros)"
+                    prefixo_cx = f"\n• 💝 Caixinha: <b>{_fmt_brl(cx_ano)}</b>" if cx_ano > 0 else ""
+                    bloco_srv = f"\n\n🔎 <b>{ano_corr}: por serviço</b>\n• (sem registros){prefixo_cx}\nTotal ({ano_corr}): <b>{_fmt_brl(cx_ano)}</b>"
 
-                # Frequência por funcionário (visitas por dia)
+                # Frequência por funcionário
                 freq_lines = ""
                 try:
                     df_vis = df_priv.copy()
@@ -1113,20 +1189,13 @@ elif acao == "💰 Registrar pagamento":
                     if not df_vis.empty:
                         df_day = df_vis.sort_values("__dt").groupby("__dt", as_index=False).agg({"Funcionário":"last"})
                         vc = df_day["Funcionário"].astype(str).value_counts()
-                        itens = [f"• {k}: <b>{int(v)} visita(s)</b>" for k, v in vc.items()]
+                        itens = [f"• {k}: <b>{int(v)}</b> visita(s)" for k, v in vc.items()]
                         if itens:
                             freq_lines = "\n\n📊 <b>Frequência por funcionário</b>\n" + "\n".join(itens)
                 except Exception:
                     pass
 
-                msg_jp = (
-                    "🧾 <b>Cópia para controle</b>\n" + bloco_atend +
-                    f"\n💳 Forma: <b>{forma_pag}</b>\n"
-                    f"💵 Bruto: <b>{_fmt_brl(total_bruto)}</b> · Líquido: <b>{_fmt_brl(total_liquido)}</b>"
-                    + linha_taxa_cp +
-                    bloco_hist_indic + bloco_hist + bloco_srv + freq_lines +
-                    (f"\n\n📝 Obs.: {obs}" if obs else "")
-                )
+                msg_jp = msg_jp + bloco_hist_indic + bloco_hist + bloco_srv + freq_lines + (f"\n\n📝 Obs.: {obs}" if obs else "")
 
                 if foto_cli: tg_send_photo(foto_cli, msg_jp, chat_id=_get_chat_id_jp())
                 else:        tg_send(msg_jp, chat_id=_get_chat_id_jp())
@@ -1205,7 +1274,6 @@ elif acao == "📋 Em aberto & exportação":
             )
             resumo["Situação"] = resumo["MaxAtraso"].apply(lambda n: "Em dia" if n<=0 else f"{int(n)}d atraso")
 
-            # NOVO: data de registro e período
             resumo["RegistradoEm"] = resumo["IDLancFiado"].apply(
                 lambda x: (data_reg_do_id(x).strftime(DATA_FMT) if data_reg_do_id(x) else "-")
             )
@@ -1279,7 +1347,6 @@ else:  # acao == "📗 Pagos (histórico)"
 
     vis = df_pag[mask].copy()
 
-    # NOVO: apenas "RegistradoDe"
     def _registrado_de(idl_str: str) -> str:
         ids = [s.strip() for s in str(idl_str or "").split(";") if s.strip()]
         datas = [data_reg_do_id(s) for s in ids if data_reg_do_id(s)]
