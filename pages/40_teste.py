@@ -1069,40 +1069,41 @@ elif acao == "💰 Registrar pagamento":
             # ---- Mensagens (quitado + cópia enriquecida)
             try:
                 # -------- Card 1: ✅ Fiado quitado (competência)
-                ids_lanc_set = sorted(set(subset_all["IDLancFiado"].astype(str)))
-                ids_lanc_txt = "; ".join(ids_lanc_set)
-                servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
+                 ids_lanc_set = sorted(set(subset_all["IDLancFiado"].astype(str)))
+            ids_lanc_txt = "; ".join(ids_lanc_set)
+            servicos_txt = servicos_compactos_por_ids_parcial(subset_all)
 
-                msg_quit = (
-                    "✅ <b>Fiado quitado (competência)</b>\n"
-                    f"👤 Cliente: <b>{cliente_sel}</b>\n"
-                    f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
-                    f"💳 Forma: <b>{forma_pag}</b>\n"
-                    f"🧾 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
-                    f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
-                    f"📅 Data pagto: <b>{data_pag_str}</b>\n"
-                    f"🆔 IDs: <code>{ids_lanc_txt}</code>\n"
-                    f"🧾 Pag.: <code>{id_pag}</code>"
-                    + (f"\n📝 Obs.: {obs}" if obs else "")
-                )
+            msg_quit = (
+                "✅ <b>Fiado quitado (competência)</b>\n"
+                f"👤 Cliente: <b>{cliente_sel}</b>\n"
+                f"🧰 Serviço(s): <b>{servicos_txt}</b>\n"
+                f"💳 Forma: <b>{forma_pag}</b>\n"
+                f"🧾 Bruto: <b>{_fmt_brl(total_bruto)}</b>\n"
+                f"💵 Líquido: <b>{_fmt_brl(total_liquido)}</b>\n"
+                f"📅 Data pagto: <b>{data_pag_str}</b>\n"
+                f"🆔 IDs: <code>{ids_lanc_txt}</code>\n"
+                f"🧾 Pag.: <code>{id_pag}</code>"
+                + (f"\n📝 Obs.: {obs}" if obs else "")
+            )
 
-                foto_cli = FOTOS.get(_norm(cliente_sel))
-                destinos = {_get_chat_id_jp()}  # set para deduplicar
-                funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
+            foto_cli = FOTOS.get(_norm(cliente_sel))
 
-          if len(funcs_set) == 1:
+            # Destinos sem duplicar: sempre JP + canal do Vinicius quando o atendimento é dele
+            destinos = {_get_chat_id_jp()}  # set para deduplicar
+            funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
+            if len(funcs_set) == 1:
                 chat_func = _chat_id_por_func(funcs_set[0])
-          if chat_func and chat_func != _get_chat_id_jp():
-                destinos.add(chat_func)
+                if chat_func and chat_func != _get_chat_id_jp():
+                    destinos.add(chat_func)
 
-   for dest in destinos:
-          if foto_cli: tg_send_photo(foto_cli, msg_quit, chat_id=dest)
-          else:        tg_send(msg_quit, chat_id=dest)
-
-                for dest in destinos:
-                    if foto_cli: tg_send_photo(foto_cli, msg_quit, chat_id=dest)
-                    else:        tg_send(msg_quit, chat_id=dest)
-
+            for dest in destinos:
+                if not dest:
+                    continue
+                if foto_cli:
+                    tg_send_photo(foto_cli, msg_quit, chat_id=dest)
+                else:
+                    tg_send(msg_quit, chat_id=dest)
+                  
                 # -------- Card 2: Cópia para controle (enriquecida)
                 datas_sel = pd.to_datetime(subset_all["Data"], format=DATA_FMT, errors="coerce").dropna().dt.date
                 periodos = [p for p in subset_all.get("Período","").astype(str).tolist() if p.strip()]
