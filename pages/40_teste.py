@@ -1089,20 +1089,22 @@ elif acao == "💰 Registrar pagamento":
             foto_cli = FOTOS.get(_norm(cliente_sel))
 
             # Destinos sem duplicar: sempre JP + canal do Vinicius quando o atendimento é dele
-            destinos = {_get_chat_id_jp()}  # set para deduplicar
-            funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
-            if len(funcs_set) == 1:
-                chat_func = _chat_id_por_func(funcs_set[0])
-                if chat_func and chat_func != _get_chat_id_jp():
-                    destinos.add(chat_func)
+            destinos = {_get_chat_id_jp()}  # set dedup
+                funcs_set = sorted(set(subset_all.get("Funcionário", "").astype(str).str.strip()))
 
-            for dest in destinos:
-                if not dest:
-                    continue
-                if foto_cli:
-                    tg_send_photo(foto_cli, msg_quit, chat_id=dest)
-                else:
-                    tg_send(msg_quit, chat_id=dest)
+                chat_func = None
+                if len(funcs_set) == 1:
+                    chat_func = _chat_id_por_func(funcs_set[0])
+                    if chat_func and chat_func != _get_chat_id_jp():
+                        destinos.add(chat_func)
+
+                for dest in destinos:
+                    if not dest:
+                        continue
+                    if foto_cli:
+                        tg_send_photo(foto_cli, msg_quit, chat_id=dest)
+                    else:
+                        tg_send(msg_quit, chat_id=dest)
                   
                 # -------- Card 2: Cópia para controle (enriquecida)
                 datas_sel = pd.to_datetime(subset_all["Data"], format=DATA_FMT, errors="coerce").dropna().dt.date
