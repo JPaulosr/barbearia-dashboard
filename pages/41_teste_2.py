@@ -696,31 +696,79 @@ def _df_pagaveis(sem_grid, fiad_grid):
 
 df_pagaveis = _df_pagaveis(semana_grid, fiados_liberados_grid)
 
-# 2) Agrega por serviço (Qtde e Valor do sistema)
-def _agg_por_servico(df):
-    if df.empty:
-        return pd.DataFrame(columns=["Serviço","Qtde","Valor (para comissão)"])
+# 2) Agrega por serviço (Qtde e Comissão a pagar)
+def _ensure_comissao(df: pd.DataFrame) -> pd.DataFrame:
     tmp = df.copy()
+    # coluna com valor base
     base_col = "Valor (para comissão)" if "Valor (para comissão)" in tmp.columns else "Valor_base_comissao"
-    tmp["__valor"] = pd.to_numeric(tmp[base_col], errors="coerce").fillna(0.0)
-    out = (tmp.groupby("Serviço", dropna=False)["__valor"]
-           .agg(Qtde="count", Valor="sum")
-           .reset_index()
-           .rename(columns={"Valor":"Valor (para comissão)"}))
-    return out.sort_values("Valor (para comissão)", ascending=False)
+    base = pd.to_numeric(tmp[base_col], errors="coerce").fillna(0.0)
 
-agg_sis = _agg_por_servico(df_pagaveis)
+    if "ComissaoValor" in tmp.columns:
+        com = pd.to_numeric(tmp["ComissaoValor"], errors="coerce").fillna(0.0)
+    else:
+        # se não existir ComissaoValor (caso raro), calcula usando a % da linha ou o padrão
+        if "% Comissão" in tmp.columns:
+            pct = pd.to_numeric(tmp["% Comissão"], errors="coerce").fillna(float(perc_padrao))
+        else:
+            pct = float(perc_padrao)
+        com = (base * pct / 100.0).astype(float)
 
-# 3) Mostra a grade resumida
+    tmp["__comissao"] = com
+    return tmp
+
+def _agg_por_servico_comissao(df):
+    if df.empty:
+        return pd.DataFrame(columns=["Serviço","Qtde","Comissão (R$)"])
+    tmp = _ensure_comissao(df)
+    out = (tmp.groupby("Serviço", dropna=False)
+               .agg(Qtde=("Serviço","count"), **{"Comissão (R$)":("__comissao","sum")})
+               .reset_index())
+    return out.sort_values("Comissão (R$)", ascending=False)
+
+agg_sis = _agg_por_servico_comissao(df_pagaveis)
+
+# 3) Métricas e grade
 if agg_sis.empty:
     st.info("Nenhum item pagável hoje.")
 else:
-    col_tot1, col_tot2 = st.columns(2)
-    with col_tot1:
-        st.metric("Total por serviços (sem caixinha)", format_brl(float(agg_sis["Valor (para comissão)"].sum())))
-    with col_tot2:
-        st.metric("Qtde total de serviços", int(agg_sis["Qtde"].sum()))
-    st.dataframe(agg_sis.reset_index(drop=True), use_container_width=True)
+    tot_com_sis = float(pd.to_numeric(agg_sis["Comissão (R$)"], errors="coerce").fillna(0.0).sum())
+    tot_qtd_sis = int(pd.to_numeric(agg_sis["Qtde"], errors="coerce").fillna(0).sum())
+
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.metric("Comissão (sistema, sem caixinha)", format_brl(tot_com_sis))
+    with col_m2:
+        st.metric("Qtde total de serviços (sistema)", tot_qtd_sis)
+
+    st.dataframe(
+        agg_sis.rename(columns={"Comissão (R$)":"Comissão (R$)"}).reset_index(drop=True),
+        use_container_width=True
+    )
+
+# 3.1) Inputs rápidos do Vinícius + comparação
+st.markdown("### 🧮 Conferência rápida (digite o que o Vinícius te passou)")
+
+col_in1, col_in2, col_in3 = st.columns(3)
+with col_in1:
+    qtd_vini = st.number_input("Total de serviços (Vini)", min_value=0, step=1, value=0)
+with col_in2:
+    total_sem_cx_vini = st.number_input("Total de comissão SEM caixinha (Vini)", min_value=0.0, step=1.0, value=0.0, format="%.2f")
+with col_in3:
+    caixinha_vini = st.number_input("Caixinha (Vini) — opcional", min_value=0.0, step=1.0, value=0.0, format="%.2f")
+
+# compara
+delta_com_sem_cx = round(total_sem_cx_vini - (tot_com_sis if not agg_sis.empty else 0.0), 2)
+delta_qtd = (qtd_vini - (tot_qtd_sis if not agg_sis.empty else 0))
+
+col_c1, col_c2, col_c3 = st.columns(3)
+with col_c1:
+    st.metric("Δ Comissão (sem caixinha)", format_brl(delta_com_sem_cx))
+with col_c2:
+    st.metric("Δ Qtde de serviços", delta_qtd)
+with col_c3:
+    total_vini_com_cx = float(total_sem_cx_vini) + float(caixinha_vini or 0.0)
+    total_sis_com_cx = float(tot_com_sis if not agg_sis.empty else 0.0) + float(total_caixinha if pagar_caixinha else 0.0)
+    st.metric("Δ TOTAL (com caixinha)", format_brl(round(total_vini_com_cx - total_sis_com_cx, 2)))
 
 # 4) Ver as linhas que compõem um serviço
 st.markdown("### 🔍 Ver linhas por serviço")
