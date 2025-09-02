@@ -509,144 +509,6 @@ st.subheader("💵 Total GERAL a pagar nesta terça")
 st.success(f"**{format_brl(total_geral_hoje)}**  "
            f"{'(inclui caixinha)' if pagar_caixinha and total_caixinha>0 else '(sem caixinha)'}")
 
-# ============================================
-# 🔎 CONFERÊNCIA COM VINÍCIUS (reconciliação)
-# ============================================
-st.markdown("## 🔎 Conferência com Vinícius (comparar com o controle dele)")
-
-# 1) Base do que será pago HOJE (usa exatamente os itens dos GRIDS)
-def _df_pagaveis(sem_grid, fiad_grid):
-    partes = []
-    for d in [sem_grid, fiad_grid]:
-        if d is not None and not d.empty:
-            partes.append(d.copy())
-    if not partes:
-        return pd.DataFrame(columns=["Data","Cliente","Serviço","Valor_base_comissao","Competência"])
-    df = pd.concat(partes, ignore_index=True)
-    # normaliza nomes de serviço para evitar duplicidades
-    if "Serviço" in df.columns:
-        df["Serviço"] = df["Serviço"].astype(str).map(normalizar_servico)
-    return df
-
-df_pagaveis = _df_pagaveis(semana_grid, fiados_liberados_grid)
-
-# 2) Agrega por serviço (quantidade e total de comissão bruta, antes do %)
-def _agg_por_servico(df):
-    if df.empty:
-        return pd.DataFrame(columns=["Serviço","Qtde (Sistema)","Valor Sist."])
-    tmp = df.copy()
-    if "Valor (para comissão)" in tmp.columns:
-        base_col = "Valor (para comissão)"
-    else:
-        base_col = "Valor_base_comissao"
-    tmp["__valor"] = pd.to_numeric(tmp[base_col], errors="coerce").fillna(0.0)
-
-    agg = (tmp.groupby("Serviço", dropna=False)["__valor"]
-           .agg(Qtd="count", Total="sum")
-           .reset_index()
-           .rename(columns={"Qtd":"Qtde (Sistema)","Total":"Valor Sist."}))
-    # ordena por impacto financeiro
-    agg = agg.sort_values("Valor Sist.", ascending=False)
-    return agg
-
-agg_sis = _agg_por_servico(df_pagaveis)
-
-with st.expander("Ver itens do sistema (pagáveis hoje) por serviço"):
-    st.dataframe(agg_sis.reset_index(drop=True), use_container_width=True)
-
-# 3) Editor para você digitar os números do Vinícius
-st.markdown("### 🧾 Números do Vinícius")
-st.caption("Preencha as quantidades que o Vinícius reportou; o valor unitário usa a tabela padrão.")
-
-# Monta tabela editável com todos os serviços encontrados + tabela fixa
-servicos_base = sorted(set(list(agg_sis["Serviço"].astype(str))) | set(VALOR_TABELA.keys()))
-df_editor = pd.DataFrame({
-    "Serviço": servicos_base,
-    "Qtde (Sistema)": [int(agg_sis.set_index("Serviço").get("Qtde (Sistema)", pd.Series()).get(s, 0)) for s in servicos_base],
-    "Qtde (Vinícius)": [0]*len(servicos_base),
-    "Valor Tabela": [float(VALOR_TABELA.get(s, 0.0)) for s in servicos_base],
-})
-
-ed = st.data_editor(
-    df_editor,
-    key="editor_conferencia_vini",
-    num_rows="fixed",
-    use_container_width=True,
-    column_config={
-        "Qtde (Sistema)": st.column_config.NumberColumn(format="%d", min_value=0, step=1, disabled=True),
-        "Qtde (Vinícius)": st.column_config.NumberColumn(format="%d", min_value=0, step=1),
-        "Valor Tabela": st.column_config.NumberColumn(format="R$ %.2f", min_value=0.0, step=0.5),
-    }
-)
-
-# 4) Caixinha informado pelo Vinícius (opcional)
-colcx1, colcx2 = st.columns(2)
-with colcx1:
-    caixinha_vini = st.number_input("🎁 Caixinha (Vinícius)", value=0.0, step=1.0, min_value=0.0)
-with colcx2:
-    tol_comparacao = st.number_input("Tolerância p/ diferença (R$)", value=0.50, step=0.50, min_value=0.0,
-                                     help="Diferenças absolutas menores ou iguais a esta tolerância são consideradas OK.")
-
-# 5) Calcula diferenças
-def _calc_diferencas(ed_df, agg_sis_df, total_cx_sis, total_cx_vini):
-    base = ed_df.copy()
-    base["Valor Sist."] = [
-        float(agg_sis_df.set_index("Serviço").get("Valor Sist.", pd.Series()).get(s, 0.0)) for s in base["Serviço"]
-    ]
-    base["Valor Vinícius"] = (base["Qtde (Vinícius)"].astype(float) * base["Valor Tabela"].astype(float)).round(2)
-
-    base["Δ Qtde"] = base["Qtde (Vinícius)"].astype(int) - base["Qtde (Sistema)"].astype(int)
-    base["Δ Valor"] = (base["Valor Vinícius"] - base["Valor Sist."]).round(2)
-
-    tot_sis = float(base["Valor Sist."].sum())
-    tot_vin = float(base["Valor Vinícius"].sum())
-
-    # inclui caixinha na linha-resumo
-    tot_sis_geral = tot_sis + float(total_cx_sis or 0.0)
-    tot_vin_geral = tot_vin + float(total_cx_vini or 0.0)
-    delta_geral   = round(tot_vin_geral - tot_sis_geral, 2)
-
-    resumo = {
-        "Sistema (sem caixinha)": format_brl(tot_sis),
-        "Vinícius (sem caixinha)": format_brl(tot_vin),
-        "Caixinha (Sistema)": format_brl(total_cx_sis),
-        "Caixinha (Vinícius)": format_brl(total_cx_vini),
-        "Δ TOTAL (com caixinha)": format_brl(delta_geral),
-        "Status": "OK ✅" if abs(delta_geral) <= tol_comparacao else "Difere ⚠️"
-    }
-    return base, resumo, delta_geral
-
-diff_df, resumo_vals, delta_geral = _calc_diferencas(ed, agg_sis, total_caixinha if pagar_caixinha else 0.0, caixinha_vini)
-
-st.markdown("### 📊 Diferenças por serviço")
-st.dataframe(
-    diff_df[["Serviço","Qtde (Sistema)","Qtde (Vinícius)","Valor Tabela","Valor Sist.","Valor Vinícius","Δ Qtde","Δ Valor"]]
-        .sort_values(["Δ Valor","Δ Qtde"], ascending=[False, False])
-        .reset_index(drop=True),
-    use_container_width=True
-)
-
-# 6) Resumo final
-st.markdown("### ✅ Resumo da conferência")
-colr1, colr2, colr3 = st.columns(3)
-with colr1: st.metric("Sistema (sem caixinha)", resumo_vals["Sistema (sem caixinha)"])
-with colr2: st.metric("Vinícius (sem caixinha)", resumo_vals["Vinícius (sem caixinha)"])
-with colr3: st.metric("Δ TOTAL (com caixinha)", resumo_vals["Δ TOTAL (com caixinha)"], help=f'Cx Sist: {resumo_vals["Caixinha (Sistema)"]} | Cx Vini: {resumo_vals["Caixinha (Vinícius)"]}')
-st.success(resumo_vals["Status"])
-
-# 7) Atalhos para localizar as linhas que explicam a diferença de um serviço
-st.markdown("### 🔍 Ver linhas do sistema por serviço (para conferir)")
-serv_sel = st.selectbox("Filtrar linhas do sistema por serviço com diferença:", 
-                        [s for s, dq in zip(diff_df["Serviço"], diff_df["Δ Qtde"]) if dq != 0] or ["—"])
-if serv_sel != "—":
-    mask = df_pagaveis["Serviço"].astype(str) == serv_sel
-    cols_show = ["Data","Cliente","Serviço"]
-    # tenta mostrar também valor e competência
-    for extra in ["Valor_base_comissao","Valor (para comissão)","Competência","RefID"]:
-        if extra in df_pagaveis.columns: cols_show.append(extra)
-    st.dataframe(df_pagaveis.loc[mask, cols_show].reset_index(drop=True), use_container_width=True)
-    st.caption("Essas são as linhas consideradas pelo sistema para este serviço.")
-
 # =============================
 # Funções de agrupamento por competência
 # =============================
@@ -812,6 +674,65 @@ if st.button("✅ Registrar comissão (1 linha por competência) e marcar itens 
             if dest_vini: tg_send_html(texto, _get_chat_vini())
             if dest_jp:   tg_send_html(texto, _get_chat_jp())
         st.success("Processo concluído ✅")
+
+# ============================================
+# 🔎 CONFERÊNCIA RÁPIDA (só sistema, sem digitar nada)
+# ============================================
+st.markdown("## 🔎 Conferência rápida (serviços pagáveis hoje)")
+
+# 1) Junta os itens que serão pagos HOJE (usa os GRIDS já filtrados)
+def _df_pagaveis(sem_grid, fiad_grid):
+    partes = []
+    for d in [sem_grid, fiad_grid]:
+        if d is not None and not d.empty:
+            partes.append(d.copy())
+    if not partes:
+        return pd.DataFrame(columns=["Data","Cliente","Serviço","Valor_base_comissao","Competência","RefID"])
+    df = pd.concat(partes, ignore_index=True)
+    # normaliza nomes de serviço para evitar duplicidades
+    if "Serviço" in df.columns:
+        df["Serviço"] = df["Serviço"].astype(str).map(normalizar_servico)
+    return df
+
+df_pagaveis = _df_pagaveis(semana_grid, fiados_liberados_grid)
+
+# 2) Agrega por serviço (Qtde e Valor do sistema)
+def _agg_por_servico(df):
+    if df.empty:
+        return pd.DataFrame(columns=["Serviço","Qtde","Valor (para comissão)"])
+    tmp = df.copy()
+    base_col = "Valor (para comissão)" if "Valor (para comissão)" in tmp.columns else "Valor_base_comissao"
+    tmp["__valor"] = pd.to_numeric(tmp[base_col], errors="coerce").fillna(0.0)
+    out = (tmp.groupby("Serviço", dropna=False)["__valor"]
+           .agg(Qtde="count", Valor="sum")
+           .reset_index()
+           .rename(columns={"Valor":"Valor (para comissão)"}))
+    return out.sort_values("Valor (para comissão)", ascending=False)
+
+agg_sis = _agg_por_servico(df_pagaveis)
+
+# 3) Mostra a grade resumida
+if agg_sis.empty:
+    st.info("Nenhum item pagável hoje.")
+else:
+    col_tot1, col_tot2 = st.columns(2)
+    with col_tot1:
+        st.metric("Total por serviços (sem caixinha)", format_brl(float(agg_sis["Valor (para comissão)"].sum())))
+    with col_tot2:
+        st.metric("Qtde total de serviços", int(agg_sis["Qtde"].sum()))
+    st.dataframe(agg_sis.reset_index(drop=True), use_container_width=True)
+
+# 4) Ver as linhas que compõem um serviço
+st.markdown("### 🔍 Ver linhas por serviço")
+serv_list = sorted(agg_sis["Serviço"].astype(str).unique()) if not agg_sis.empty else []
+serv_sel = st.selectbox("Escolha um serviço para listar as linhas:", serv_list or ["—"])
+if serv_sel and serv_sel != "—":
+    mask = df_pagaveis["Serviço"].astype(str) == serv_sel
+    cols_show = ["Data","Cliente","Serviço"]
+    for extra in ["Valor (para comissão)","Valor_base_comissao","Competência","RefID"]:
+        if extra in df_pagaveis.columns: cols_show.append(extra)
+    st.dataframe(df_pagaveis.loc[mask, cols_show].reset_index(drop=True), use_container_width=True)
+    st.caption("Essas são as linhas consideradas pelo sistema para este serviço.")
 
 # =============================
 # 📤 Exportar para Mobills (SEM gravar) — atual ou histórico
