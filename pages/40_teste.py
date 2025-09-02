@@ -226,9 +226,9 @@ st.dataframe(
 )
 
 # =========================
-# ⏰ Atendimentos por Período (Manhã/Tarde/Noite)
+# ⏰ Atendimentos por Período (Manhã/Tarde/Noite) – sem "Outro"
 # =========================
-def _normalize_period_value(x: str) -> str:
+def _normalize_period_value(x: str) -> str | None:
     s = str(x).strip().lower()
     s = (s.replace("ã", "a").replace("á", "a").replace("â", "a").replace("é", "e"))
     if s.startswith("man"):   # manha, manhã
@@ -237,12 +237,14 @@ def _normalize_period_value(x: str) -> str:
         return "Tarde"
     if s.startswith("noi"):   # noite
         return "Noite"
-    return "Outro"
+    return None  # <<-- em vez de "Outro", ignora
 
-# detecta a coluna de período (pega "Período" do seu print)
+# detecta a coluna de período
 periodo_col = None
 for c in df_cliente_val.columns:
-    if _norm_name(c) in {"periodo","período","periodododia","periodo_dia","periodoatendimento","turno","faixahoraria"}:
+    if re.sub(r"[\W_]+", "", str(c).strip().lower()) in {
+        "periodo","período","periodododia","periodo_dia","periodoatendimento","turno","faixahoraria"
+    }:
         periodo_col = c
         break
 
@@ -251,31 +253,30 @@ if periodo_col:
     df_per = df_cliente_val[[periodo_col]].copy()
     df_per["__periodo__"] = df_per[periodo_col].map(_normalize_period_value)
 
-    ordem = ["Manhã", "Tarde", "Noite", "Outro"]
-    counts = df_per["__periodo__"].value_counts(dropna=False)
+    # mantém só Manhã/Tarde/Noite
+    validos = {"Manhã", "Tarde", "Noite"}
+    df_per = df_per[df_per["__periodo__"].isin(validos)]
 
-    # monta DataFrame final com tipagem garantida
+    ordem = ["Manhã", "Tarde", "Noite"]
+    counts = df_per["__periodo__"].value_counts()
     dist_periodo = pd.DataFrame({
         "Período": ordem,
         "Qtd": [int(counts.get(p, 0)) for p in ordem]
     })
-    dist_periodo["Qtd"] = pd.to_numeric(dist_periodo["Qtd"], errors="coerce").fillna(0).astype(int)
 
     if dist_periodo["Qtd"].sum() == 0:
-        st.info("Sem informação de período para este cliente nos filtros atuais.")
-        periodo_preferido = "Indefinido"
+        st.info("Sem informação de período (Manhã/Tarde/Noite) para este cliente nos filtros atuais.")
+        periodo_preferido = "Sem registro"
     else:
         fig_per = px.bar(dist_periodo, x="Período", y="Qtd", text="Qtd")
-        fig_per.update_layout(
-            height=320, yaxis_title="Qtde", xaxis_title=None,
-            margin=dict(l=10, r=10, t=30, b=10), showlegend=False
-        )
+        fig_per.update_layout(height=320, yaxis_title="Qtde", xaxis_title=None,
+                              margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
         st.plotly_chart(fig_per, use_container_width=True)
         periodo_preferido = dist_periodo.sort_values("Qtd", ascending=False).iloc[0]["Período"]
 else:
     st.info("Coluna de Período (Manhã/Tarde/Noite) não encontrada.")
-    periodo_preferido = "Indefinido"
-
+    periodo_preferido = "Sem registro"
+    
 # =========================
 # 🎁 Caixinha do Cliente
 # =========================
