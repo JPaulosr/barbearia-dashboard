@@ -325,41 +325,56 @@ somar_cx_mensal = st.checkbox(
     help="Quando ligado, a receita mensal considera Valor + Caixinha do cliente."
 )
 
-if df_cliente_val.empty:
-    st.info("Sem valores recebidos para exibir.")
-else:
-    df_cliente_val["ValorNum"] = df_cliente_val["ValorNum"].astype(float)
-    if "CaixinhaDiaTotal" not in df_cliente_val.columns:
-        df_cliente_val["CaixinhaDiaTotal"] = 0.0
-    df_cliente_val["CaixinhaDiaTotal"] = df_cliente_val["CaixinhaDiaTotal"].astype(float).fillna(0.0)
+# base da série a somar (com ou sem caixinha)
+df_cliente_val["ValorNum"] = df_cliente_val["ValorNum"].astype(float)
+if "CaixinhaDiaTotal" not in df_cliente_val.columns:
+    df_cliente_val["CaixinhaDiaTotal"] = 0.0
+df_cliente_val["CaixinhaDiaTotal"] = df_cliente_val["CaixinhaDiaTotal"].astype(float).fillna(0.0)
 
-    base_col = "ValorNum"
-    if somar_cx_mensal:
-        df_cliente_val["ValorComCx"] = df_cliente_val["ValorNum"] + df_cliente_val["CaixinhaDiaTotal"]
-        base_col = "ValorComCx"
+base_col = "ValorNum"
+if somar_cx_mensal:
+    df_cliente_val["ValorComCx"] = df_cliente_val["ValorNum"] + df_cliente_val["CaixinhaDiaTotal"]
+    base_col = "ValorComCx"
 
-    df_cliente_val["Data_Ref_Mensal"] = df_cliente_val["Data"].dt.to_period("M").dt.to_timestamp()
-    receita_mensal = (
-        df_cliente_val.groupby("Data_Ref_Mensal")[base_col]
-        .sum()
+# referência mensal (normalizada para o 1º dia de cada mês)
+df_cliente_val["Data_Ref_Mensal"] = df_cliente_val["Data"].dt.to_period("M").dt.to_timestamp()
+
+# soma por mês
+receita_mensal = (
+    df_cliente_val.groupby("Data_Ref_Mensal")[base_col]
+    .sum()
+    .reset_index()
+    .rename(columns={base_col: "ValorGrafico"})
+)
+
+# >>> completa meses faltantes com 0 entre o 1º e o último mês do cliente
+if not receita_mensal.empty:
+    start = receita_mensal["Data_Ref_Mensal"].min().to_period("M").to_timestamp()
+    end   = receita_mensal["Data_Ref_Mensal"].max().to_period("M").to_timestamp()
+    idx_completo = pd.date_range(start=start, end=end, freq="MS")  # Month Start
+    receita_mensal = (receita_mensal
+        .set_index("Data_Ref_Mensal")
+        .reindex(idx_completo, fill_value=0.0)
+        .rename_axis("Data_Ref_Mensal")
         .reset_index()
-        .rename(columns={base_col: "ValorGrafico"})
     )
-    receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].apply(
-        lambda d: format_date(d, format="MMMM 'de' y", locale="pt_BR").capitalize()
-    )
-    receita_mensal["Valor_str"] = receita_mensal["ValorGrafico"].apply(brl)
-    subt = " (inclui caixinha)" if somar_cx_mensal else ""
-    fig_receita = px.bar(
-        receita_mensal,
-        x="Mês_Ano",
-        y="ValorGrafico",
-        text="Valor_str",
-        labels={"ValorGrafico": f"Receita{subt} (R$)", "Mês_Ano": "Mês"},
-    )
-    fig_receita.update_traces(textposition="inside")
-    fig_receita.update_layout(height=400)
-    st.plotly_chart(fig_receita, use_container_width=True)
+
+# rótulos pt-BR e gráfico
+receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].apply(
+    lambda d: format_date(d, format="MMMM 'de' y", locale="pt_BR").capitalize()
+)
+receita_mensal["Valor_str"] = receita_mensal["ValorGrafico"].apply(brl)
+subt = " (inclui caixinha)" if somar_cx_mensal else ""
+fig_receita = px.bar(
+    receita_mensal,
+    x="Mês_Ano",
+    y="ValorGrafico",
+    text="Valor_str",
+    labels={"ValorGrafico": f"Receita{subt} (R$)", "Mês_Ano": "Mês"},
+)
+fig_receita.update_traces(textposition="inside")
+fig_receita.update_layout(height=400)
+st.plotly_chart(fig_receita, use_container_width=True)
 
 # =========================
 # Receita por Serviço e Produto
