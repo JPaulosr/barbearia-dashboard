@@ -731,29 +731,31 @@ agg_sis = _agg_por_servico_comissao(df_pagaveis)
 if agg_sis.empty:
     st.info("Nenhum item pagável hoje.")
 else:
-    # total bruto (soma dos valores antes da %)
+    # Garante coluna de comissão por linha (__comissao)
     tmp_full = _ensure_comissao(df_pagaveis)
+
+    # total BRUTO (antes do %)
     base_col = "Valor (para comissão)" if "Valor (para comissão)" in tmp_full.columns else "Valor_base_comissao"
     tot_bruto_sis = float(pd.to_numeric(tmp_full[base_col], errors="coerce").fillna(0.0).sum())
 
-    # total comissão já calculada
+    # total de COMISSÃO (já com % da linha)
     tot_com_sis = float(pd.to_numeric(tmp_full["__comissao"], errors="coerce").fillna(0.0).sum())
 
-    # total de atendimentos
-    tot_qtd_sis = int(pd.to_numeric(tmp_full["Serviço"], errors="coerce").count())
+    # total de ATENDIMENTOS (conta de linhas dos grids)
+    tot_atend_sis = int(tmp_full.shape[0])  # << aqui corrige!
 
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
-        st.metric("💰 Valor bruto (sistema, sem caixinha)", format_brl(tot_bruto_sis))
+        st.metric("💰 Valor bruto (sistema, sem caixinha)", format_brl(round(tot_bruto_sis, 2)))
     with col_m2:
-        st.metric("💵 Comissão (sistema, sem caixinha)", format_brl(tot_com_sis))
+        st.metric("💵 Comissão (sistema, sem caixinha)", format_brl(round(tot_com_sis, 2)))
     with col_m3:
-        st.metric("✂️ Qtde total de serviços (sistema)", tot_qtd_sis)
+        st.metric("🧾 Qtde total de atendimentos (sistema)", f"{tot_atend_sis}")
 
-    st.dataframe(
-        agg_sis.rename(columns={"Comissão (R$)": "Comissão (R$)"}).reset_index(drop=True),
-        use_container_width=True
-    )
+    # tabela por serviço (com comissão arredondada)
+    agg_show = agg_sis.copy()
+    agg_show["Comissão (R$)"] = pd.to_numeric(agg_show["Comissão (R$)"], errors="coerce").round(2)
+    st.dataframe(agg_show.reset_index(drop=True), use_container_width=True)
 
 # 4) Ver as linhas que compõem um serviço
 st.markdown("### 🔍 Ver linhas por serviço")
