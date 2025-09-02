@@ -279,37 +279,6 @@ with c6:
     st.markdown(f'<div class="kpi"><p class="title">💳 Taxa de Cartão (Período)</p><p class="value">{brl(taxa_cartao_total)}</p></div>', unsafe_allow_html=True)
     st.caption(f"Método: {taxa_metodo}{' • Coluna: ' + taxa_col if taxa_col else ''}")
 
-# 🔍 Auditoria – Taxa de Cartão
-with st.expander("🔍 Auditoria – Taxa de Cartão"):
-    col_q = next((c for c in df_valores.columns if _norm(c) == "taxacartaovalor"), None)
-    bruto_col = next((c for c in df_valores.columns if _norm(c) in {"valorbrutorecebido","valorbruto","bruto"}), None)
-    liq_col   = next((c for c in df_valores.columns if _norm(c) in {"valorliquidorecebido","valorliquido","valor"}), None)
-    pct_col   = next((c for c in df_valores.columns if "pct" in c.lower() or "%" in c.lower() or "taxacartaopct" in c.lower()), None)
-
-    if col_q:
-        serie_q = df_valores[col_q].map(_to_num)
-        st.write("• Soma TaxaCartaoValor:", brl(float(serie_q.sum())))
-        st.write("• Linhas com TaxaCartaoValor > 0:", int((serie_q > 0).sum()))
-        st.dataframe(
-            df_valores.loc[serie_q > 0, ["Data", col_conta if col_conta else "Funcionário", col_q]]
-            .sort_values("Data")
-            .tail(50),
-            use_container_width=True, hide_index=True
-        )
-    else:
-        st.info("Coluna 'TaxaCartaoValor' não encontrada — usando fallback.")
-
-    if bruto_col and liq_col:
-        diff = (df_valores[bruto_col].map(_to_num) - df_valores[liq_col].map(_to_num)).clip(lower=0)
-        if col_conta:
-            patt = re.compile(r"(cart|cr[eé]dit|d[eé]bit|visa|master|elo|hiper|maquin|pos|sumup|pagbank|cielo|rede|nubank)", re.IGNORECASE)
-            mask_cartao = df_valores[col_conta].astype(str).str.contains(patt, na=False)
-            diff = diff.where(mask_cartao, 0)
-        st.write("• Soma (Bruto–Líquido) cartão:", brl(float(diff.sum())))
-
-    if pct_col:
-        st.write("• Coluna de % detectada:", pct_col)
-
 # =========================
 # 🎁 Caixinha por funcionário
 # =========================
