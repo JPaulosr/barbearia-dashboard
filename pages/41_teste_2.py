@@ -301,21 +301,49 @@ else:
 # Receita mensal (base filtrada)
 # =========================
 st.subheader("📊 Receita mensal")
+
+# opcional: permitir ligar/desligar a caixinha no cálculo mensal
+somar_cx_mensal = st.checkbox(
+    "Somar caixinha na receita mensal do cliente",
+    value=True,
+    help="Quando ligado, a receita mensal considera Valor + Caixinha do cliente."
+)
+
 if df_cliente_val.empty:
     st.info("Sem valores recebidos para exibir.")
 else:
+    # base de valor para o gráfico mensal
+    df_cliente_val["ValorNum"] = df_cliente_val["ValorNum"].astype(float)
+    if "CaixinhaDiaTotal" not in df_cliente_val.columns:
+        df_cliente_val["CaixinhaDiaTotal"] = 0.0
+    df_cliente_val["CaixinhaDiaTotal"] = df_cliente_val["CaixinhaDiaTotal"].astype(float).fillna(0.0)
+
+    base_col = "ValorNum"
+    if somar_cx_mensal:
+        df_cliente_val["ValorComCx"] = df_cliente_val["ValorNum"] + df_cliente_val["CaixinhaDiaTotal"]
+        base_col = "ValorComCx"
+
     df_cliente_val["Data_Ref_Mensal"] = df_cliente_val["Data"].dt.to_period("M").dt.to_timestamp()
-    receita_mensal = df_cliente_val.groupby("Data_Ref_Mensal")["ValorNum"].sum().reset_index()
+
+    receita_mensal = (
+        df_cliente_val.groupby("Data_Ref_Mensal")[base_col]
+        .sum()
+        .reset_index()
+        .rename(columns={base_col: "ValorGrafico"})
+    )
+
     receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].apply(
         lambda d: format_date(d, format="MMMM 'de' y", locale="pt_BR").capitalize()
     )
-    receita_mensal["Valor_str"] = receita_mensal["ValorNum"].apply(brl)
+    receita_mensal["Valor_str"] = receita_mensal["ValorGrafico"].apply(brl)
+
+    subt = " (inclui caixinha)" if somar_cx_mensal else ""
     fig_receita = px.bar(
         receita_mensal,
         x="Mês_Ano",
-        y="ValorNum",
+        y="ValorGrafico",
         text="Valor_str",
-        labels={"ValorNum": "Receita (R$)", "Mês_Ano": "Mês"},
+        labels={"ValorGrafico": f"Receita{subt} (R$)", "Mês_Ano": "Mês"},
         category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
     )
     fig_receita.update_traces(textposition="inside")
