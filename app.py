@@ -278,20 +278,23 @@ ticket_medio = (receita_total / total_atendimentos) if total_atendimentos else 0
 # Taxa de cartão
 taxa_cartao_total, taxa_metodo, taxa_col = calcular_taxa_cartao(df_valores.copy())
 
-# KPIs (cards)
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1:
-    st.markdown(f'<div class="kpi"><p class="title">💰 Receita Total<br/><small>(+ Caixinha JP)</small></p><p class="value">{brl(receita_total)}</p></div>', unsafe_allow_html=True)
-with c2:
-    st.markdown(f'<div class="kpi"><p class="title">📅 Total de Atendimentos</p><p class="value">{total_atendimentos}</p></div>', unsafe_allow_html=True)
-with c3:
-    st.markdown(f'<div class="kpi"><p class="title">🎯 Ticket Médio</p><p class="value">{brl(ticket_medio)}</p></div>', unsafe_allow_html=True)
-with c4:
-    st.markdown(f'<div class="kpi"><p class="title">🟢 Clientes Ativos</p><p class="value">{clientes_unicos}</p></div>', unsafe_allow_html=True)
-with c5:
-    st.markdown(f'<div class="kpi"><p class="title">🎁 Caixinha (Período)</p><p class="value">{brl(caixinha_periodo_total)}</p></div>', unsafe_allow_html=True)
-with c6:
-    st.markdown(f'<div class="kpi"><p class="title">💳 Taxa de Cartão (Período)</p><p class="value">{brl(taxa_cartao_total)}</p></div>', unsafe_allow_html=True)
+# KPIs (cards) — versão grid responsiva
+def kpi_card(title_html, value_html, sub_html=""):
+    sub = f'<p class="sub">{sub_html}</p>' if sub_html else ""
+    return f'<div class="kpi"><p class="title">{title_html}</p><p class="value">{value_html}</p>{sub}</div>'
+
+kpis_html = f"""
+<div class="kpi-grid">
+  {kpi_card("💰 Receita Total<br/><small>(+ Caixinha JP)</small>", brl(receita_total))}
+  {kpi_card("📅 Total de Atendimentos", f"{total_atendimentos}")}
+  {kpi_card("🎯 Ticket Médio", brl(ticket_medio))}
+  {kpi_card("🟢 Clientes Ativos", f"{clientes_unicos}")}
+  {kpi_card("🎁 Caixinha (Período)", brl(caixinha_periodo_total))}
+  {kpi_card("💳 Taxa de Cartão (Período)", brl(taxa_cartao_total))}
+</div>
+"""
+st.markdown(kpis_html, unsafe_allow_html=True)
+
 
 # =========================
 # 🎁 Caixinha por funcionário
