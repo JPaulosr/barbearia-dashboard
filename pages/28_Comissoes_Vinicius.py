@@ -732,7 +732,7 @@ if agg_sis.empty:
     st.info("Nenhum item pagável hoje.")
 else:
     # Garante coluna de comissão por linha (__comissao)
-    tmp_full = _ensure_comissao(df_pagaveis)
+    tmp_full = _ensure_comissao(df_pagaveis).copy()
 
     # total BRUTO (antes do %)
     base_col = "Valor (para comissão)" if "Valor (para comissão)" in tmp_full.columns else "Valor_base_comissao"
@@ -741,20 +741,30 @@ else:
     # total de COMISSÃO (já com % da linha)
     tot_com_sis = float(pd.to_numeric(tmp_full["__comissao"], errors="coerce").fillna(0.0).sum())
 
-    # total de ATENDIMENTOS ÚNICOS (Cliente+Data)
-if "Cliente" in tmp_full.columns and "Data" in tmp_full.columns:
-    cli = (tmp_full["Cliente"].astype(str).str.strip().str.lower()
-           .str.replace(r"\s+", " ", regex=True))
-    data_norm = (pd.to_datetime(
-        tmp_full["Data"].astype(str).str.strip().str.replace("-", "/"),
-        errors="coerce"
-    ).dt.date)
-    invalid = {"", "-", "—", "desconhecido"}
-    mask_valid = (~cli.isin(invalid)) & data_norm.notna()
-    pares = pd.Series(list(zip(cli[mask_valid], data_norm[mask_valid])))
-    tot_atend_sis = int(pares.nunique())
-else:
-    tot_atend_sis = int(tmp_full.shape[0])
+    # total de ATENDIMENTOS ÚNICOS (Cliente+Data), ignorando vazios/“desconhecido”
+    def _count_atendimentos_unicos(df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        if not {"Cliente", "Data"}.issubset(df.columns):
+            # fallback: conta linhas se colunas não existirem
+            return int(df.shape[0])
+
+        cli = (df["Cliente"].astype(str).str.strip().str.lower()
+               .str.replace(r"\s+", " ", regex=True))
+        data_norm = pd.to_datetime(
+            df["Data"].astype(str).str.strip().str.replace("-", "/"),
+            errors="coerce"
+        ).dt.date
+
+        invalid = {"", "-", "—", "desconhecido"}
+        mask_valid = (~cli.isin(invalid)) & data_norm.notna()
+        if not mask_valid.any():
+            return 0
+
+        pares = pd.Series(list(zip(cli[mask_valid], data_norm[mask_valid])))
+        return int(pares.nunique())
+
+    tot_atend_sis = _count_atendimentos_unicos(tmp_full)
 
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
