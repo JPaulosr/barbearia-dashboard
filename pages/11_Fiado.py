@@ -909,7 +909,7 @@ elif acao == "💰 Registrar pagamento":
                         step=1.0, format="%.2f"
                     )
                     bandeira_cartao = st.selectbox(
-                        "Bandeira", ["", "Visa", "Mastercard", "Elo", "Hipercard", "Amex", "Outros"], index=0
+                        "Bandeira", ["", "Visa", "Mastercard", "Maestro", "Elo", "Hipercard", "Amex", "Outros"], index=0
                     )
                 with cdc2:
                     tipo_cartao = st.selectbox("Tipo", ["Débito", "Crédito"], index=1)
