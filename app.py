@@ -47,10 +47,25 @@ REGEX_URNA = re.compile(
 # =========================
 st.markdown("""
 <style>
-.block {background:#0c0f13; border:1px solid #1e242d; border-radius:16px; padding:14px; margin-bottom:14px;}
-.kpi {background:#111418; border:1px solid #262b33; border-radius:16px; padding:16px;}
+.block{
+  background:#0c0f13;border:1px solid #1e242d;border-radius:16px;
+  padding:14px;margin-bottom:18px;
+}
+/* grade responsiva para KPIs */
+.kpi-grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap:18px;               /* espaço ENTRE os cards */
+  margin:6px 0 18px 0;    /* espaço acima/abaixo do bloco */
+}
+.kpi{
+  background:#111418;border:1px solid #262b33;border-radius:16px;
+  padding:16px;min-height:110px;           /* altura uniforme */
+  display:flex;flex-direction:column;justify-content:center;
+}
 .kpi .title{font-size:.9rem;color:#aab2c5;margin:0 0 6px 0;}
 .kpi .value{font-size:1.4rem;font-weight:700;margin:0;}
+.kpi .sub{margin:6px 0 0 0;color:#94a1b2;font-size:.8rem;}
 </style>
 """, unsafe_allow_html=True)
 
