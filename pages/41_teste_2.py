@@ -1,62 +1,65 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import gspread
 from gspread_dataframe import get_as_dataframe
 from google.oauth2.service_account import Credentials
-import re
-import numpy as np
+import requests
+from PIL import Image
+from io import BytesIO
+from babel.dates import format_date  # meses pt-BR
 
-st.set_page_config(layout="wide", page_title="Dashboard Salão JP", page_icon="💈")
-st.title("📊 Dashboard Salão JP")
+st.set_page_config(layout="wide")
+st.title("📌 Detalhamento do Cliente")
 
 # =========================
-# CONFIG / CONSTANTES
+# Constantes
 # =========================
-SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-BASE_ABA = "Base de Dados"
-DATA_CORTE_UNICIDADE = pd.to_datetime("2025-05-11")
-
-MESES_PT = {
-    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-}
-NOMES_EXCLUIR_RANKINGS = ["boliviano", "brasileiro", "menino"]
-
-# Funcionários (para regra da caixinha no total)
 FUNC_JPAULO = "JPaulo"
 FUNC_VINICIUS = "Vinicius"
 
-# Produtos por nome do serviço
-REGEX_PRODUTO = re.compile(r"(produto|gel|pomad|shampoo|cera|spray|po\b|pó\b|p\u00f3\b)", re.IGNORECASE)
+# =========================
+# Funções auxiliares
+# =========================
+def formatar_tempo(minutos):
+    if pd.isna(minutos) or minutos is None:
+        return "Indisponível"
+    try:
+        minutos = int(minutos)
+    except Exception:
+        return "Indisponível"
+    horas = minutos // 60
+    resto = minutos % 60
+    return f"{horas}h {resto}min" if horas > 0 else f"{resto} min"
 
-# --- URNA: regra de divisão ---
-URNA_SPLIT_YEAR = 2025      # a partir deste ano divide
-URNA_PCT_VINICIUS = 0.50    # 50% Vinicius; restante JP
+def parse_valor_col(series: pd.Series) -> pd.Series:
+    def parse_cell(x):
+        if pd.isna(x): return 0.0
+        if isinstance(x, (int, float)): return float(x)
+        s = str(x).strip()
+        if not s: return 0.0
+        s = s.replace("R$", "").replace(" ", "")
+        # pt-BR -> float robusto
+        if "," in s and "." in s:
+            s = s.replace(".", "").replace(",", ".")
+        elif s.count(".") > 1:
+            left, last = s.rsplit(".", 1)
+            left = left.replace(".", "")
+            s = f"{left}.{last}"
+        else:
+            s = s.replace(",", ".")
+        return pd.to_numeric(s, errors="coerce")
+    return series.map(parse_cell).fillna(0.0)
 
-# Linhas de URNA por nome do serviço (Natal/Urna)
-REGEX_URNA = re.compile(
-    r"(caixinh[aã].*nat|caixinh[aã].*urna|urna.*caixinh[aã]|caixinh[aã]\s*natal|natal\s*caixinh[aã])",
-    re.IGNORECASE
-)
+def brl(x: float) -> str:
+    return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 
 # =========================
-# CSS (cards + blocos)
+# CONFIGURAÇÃO GOOGLE SHEETS
 # =========================
-st.markdown("""
-<style>
-.block {background:#0c0f13; border:1px solid #1e242d; border-radius:16px; padding:14px; margin-bottom:14px;}
-.kpi {background:#111418; border:1px solid #262b33; border-radius:16px; padding:16px;}
-.kpi .title{font-size:.9rem;color:#aab2c5;margin:0 0 6px 0;}
-.kpi .value{font-size:1.4rem;font-weight:700;margin:0;}
-</style>
-""", unsafe_allow_html=True)
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
+BASE_ABA = "Base de Dados"
 
-# =========================
-# GOOGLE SHEETS
-# =========================
 @st.cache_resource
 def conectar_sheets():
     info = st.secrets["GCP_SERVICE_ACCOUNT"]
@@ -65,370 +68,363 @@ def conectar_sheets():
     cliente = gspread.authorize(credenciais)
     return cliente.open_by_key(SHEET_ID)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data
 def carregar_dados():
     planilha = conectar_sheets()
     aba = planilha.worksheet(BASE_ABA)
     df = get_as_dataframe(aba).dropna(how="all")
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [str(col).strip() for col in df.columns]
 
-    # Datas e valores
-    df["Data"] = pd.to_datetime(df.get("Data"), errors="coerce")
+    # Datas
+    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
     df = df.dropna(subset=["Data"])
-    df["ValorNum"] = pd.to_numeric(df.get("Valor"), errors="coerce").fillna(0)
-
-    # ---- Caixinha Dia/Fundo: vem nas MESMAS LINHAS dos atendimentos
-    cand_cx = ["CaixinhaDia", "Caixinha_Fundo", "CaixinhaFundo", "Caixinha", "Gorjeta"]
-    existentes = [c for c in cand_cx if c in df.columns]
-    for c in existentes:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-    df["CaixinhaDiaTotal"] = df[existentes].sum(axis=1) if existentes else 0
-
-    # Derivadas de tempo
+    df["Data_str"] = df["Data"].dt.strftime("%d/%m/%Y")
     df["Ano"] = df["Data"].dt.year
     df["Mês"] = df["Data"].dt.month
-    df["Ano-Mês"] = df["Data"].dt.to_period("M").astype(str)
+    meses_pt = {1:"Janeiro",2:"Fevereiro",3:"Março",4:"Abril",5:"Maio",6:"Junho",7:"Julho",8:"Agosto",9:"Setembro",10:"Outubro",11:"Novembro",12:"Dezembro"}
+    df["Mês_Ano"] = df["Data"].dt.month.map(meses_pt) + "/" + df["Data"].dt.year.astype(str)
 
-    # Flags
-    df["EhProduto"] = df["Serviço"].astype(str).apply(lambda s: bool(REGEX_PRODUTO.search(s)))
-    df["EhUrna"] = df["Serviço"].astype(str).apply(lambda s: bool(REGEX_URNA.search(s)))
-    df["EhServico"] = ~(df["EhProduto"] | df["EhUrna"])  # serviço operacional (exclui produto e URNA)
+    # Duração (fallback pelos horários, se necessário)
+    if "Duração (min)" not in df.columns or df["Duração (min)"].isna().all():
+        if set(["Hora Chegada", "Hora Saída do Salão", "Hora Saída"]).intersection(df.columns):
+            def calcular_duracao(row):
+                try:
+                    chegada = pd.to_datetime(row.get("Hora Chegada"), format="%H:%M:%S", errors="coerce")
+                    saida_salao = pd.to_datetime(row.get("Hora Saída do Salão"), format="%H:%M:%S", errors="coerce")
+                    saida_cadeira = pd.to_datetime(row.get("Hora Saída"), format="%H:%M:%S", errors="coerce")
+                    fim = saida_salao if pd.notnull(saida_salao) else saida_cadeira
+                    if pd.notnull(chegada) and pd.notnull(fim) and fim > chegada:
+                        return (fim - chegada).total_seconds() / 60
+                    return None
+                except Exception:
+                    return None
+            df["Duração (min)"] = df.apply(calcular_duracao, axis=1)
+
+    # Valor numérico (serviços/produtos)
+    if "Valor" in df.columns:
+        df["ValorNumBruto"] = parse_valor_col(df["Valor"])
+    else:
+        df["ValorNumBruto"] = 0.0
+
+    # -------------------------
+    # Caixinha (colunas robustas)
+    # -------------------------
+    cand_cx = ["CaixinhaDia", "Caixinha_Fundo", "CaixinhaFundo", "Caixinha", "Gorjeta"]
+    presentes = [c for c in cand_cx if c in df.columns]
+    for c in presentes:
+        df[c] = parse_valor_col(df[c])
+    df["CaixinhaDiaTotal"] = df[presentes].sum(axis=1) if presentes else 0.0
+
+    # Garantir texto em campos usados para split por funcionário/cliente
+    for col in ["Cliente", "Funcionário", "Tipo", "Serviço"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).fillna("").str.strip()
+
+    # Guardar para auditoria rápida
+    df.attrs["__cx_cols__"] = presentes
     return df
 
-df_full = carregar_dados()
+df = carregar_dados()
 
 # =========================
-# DETECÇÃO DE COLUNA DE PAGAMENTO / FIADO
+# Filtro de pagamento (impacta SOMAS/GRÁFICOS)
+# Usa: Conta, StatusFiado, DataPagamento
 # =========================
-col_conta = next(
-    (c for c in df_full.columns if c.strip().lower() in ["conta", "forma de pagamento", "pagamento", "status"]),
-    None
-)
-if col_conta:
-    is_fiado_full = df_full[col_conta].astype(str).str.strip().str.lower().eq("fiado")
-else:
-    is_fiado_full = pd.Series(False, index=df_full.index)
+def norm_pair(df, name):
+    if name not in df.columns:
+        return pd.Series("", index=df.index), pd.Series("", index=df.index)
+    s = df[name].astype(str).str.strip().fillna("")
+    s_low = (s.str.lower()
+               .str.replace("ã", "a")
+               .str.replace("á", "a")
+               .str.replace("â", "a")
+               .str.replace("ç", "c"))
+    return s, s_low
 
-# =========================
-# SIDEBAR: FILTROS
-# =========================
-st.sidebar.header("🎛️ Filtros")
+col_conta = "Conta"
+col_status_fiado = "StatusFiado"
+col_data_pag = "DataPagamento"
 
-pagamento_opcao = st.sidebar.radio(
-    "Filtro de pagamento",
-    ["Apenas pagos", "Apenas fiado", "Incluir tudo"],
-    index=0,
-    help="Pagos = tudo que NÃO é 'Fiado'."
-)
+serie_conta_raw, serie_conta = norm_pair(df, col_conta)
+serie_status_raw, serie_status = norm_pair(df, col_status_fiado)
 
-aplicar_hist = st.sidebar.checkbox("Aplicar no histórico (contagens e tabelas)", value=False)
-
-anos_disponiveis = sorted(df_full["Ano"].dropna().unique(), reverse=True)
-ano_escolhido = st.sidebar.selectbox("🗓️ Ano", anos_disponiveis)
-
-meses_disponiveis = sorted(df_full[df_full["Ano"] == ano_escolhido]["Mês"].dropna().unique())
-mes_opcoes = [MESES_PT[m] for m in meses_disponiveis]
-meses_selecionados = st.sidebar.multiselect("📆 Meses (opcional)", mes_opcoes, default=mes_opcoes)
-
-# =========================
-# MÁSCARAS / FILTROS
-# =========================
-# Pagamento
-if pagamento_opcao == "Apenas pagos":
-    mask_valores_full = ~is_fiado_full
-elif pagamento_opcao == "Apenas fiado":
-    mask_valores_full = is_fiado_full
-else:
-    mask_valores_full = pd.Series(True, index=df_full.index)
-
-# Histórico
-mask_historico_full = mask_valores_full if aplicar_hist else pd.Series(True, index=df_full.index)
-
-# Período
-if meses_selecionados:
-    meses_numeros = [k for k, v in MESES_PT.items() if v in meses_selecionados]
-    mask_periodo = (df_full["Ano"] == ano_escolhido) & (df_full["Mês"].isin(meses_numeros))
-else:
-    mask_periodo = (df_full["Ano"] == ano_escolhido)
-
-df_hist    = df_full[mask_historico_full & mask_periodo].copy()
-df_valores = df_full[mask_valores_full & mask_periodo].copy()
-
-# =========================
-# AUX
-# =========================
-def brl(x: float) -> str:
-    return f"R$ {x:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
-
-def _is_func(df, nome):
-    return df["Funcionário"].astype(str).str.casefold() == str(nome).casefold()
-
-# ===== Taxa de cartão (auto-detecção) =====
-def _to_num(s):
-    if isinstance(s, (int, float, np.number)): return float(s)
-    if s is None: return 0.0
-    s = str(s).strip().replace("R$", "").replace(" ", "")
-    # 3,84  -> 3.84
-    if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
+# DataPagamento preenchida?
+if col_data_pag in df.columns:
+    s_pag = df[col_data_pag]
+    if pd.api.types.is_datetime64_any_dtype(s_pag):
+        mask_datapag = s_pag.notna()
     else:
-        s = s.replace(",", ".")
-    try:
-        return float(s)
-    except:
-        return 0.0
+        mask_datapag = s_pag.astype(str).str.strip().ne("") & s_pag.notna()
+else:
+    mask_datapag = pd.Series(False, index=df.index)
 
-def calcular_taxa_cartao(df_periodo: pd.DataFrame) -> float:
-    if df_periodo.empty:
-        return 0.0
+# Regras
+mask_conta_fiado = serie_conta.eq("fiado")  # exatamente como na planilha
+mask_status_pago = serie_status.str.contains("pag", na=False)  # "pago", "pagamento", etc.
 
-    # A) colunas explícitas de valor de taxa (ex.: 'TaxaCartao', 'DescontoMaquininha' etc.)
-    amount_cols = []
-    for c in df_periodo.columns:
-        cl = c.lower()
-        if ("taxa" in cl or "desconto" in cl) and any(k in cl for k in ["cart", "créd", "cred", "déb", "deb", "maq", "maqui"]):
-            amount_cols.append(c)
-        # casos diretos comuns
-        if cl in {"taxacartao", "taxa_cartao", "taxa cartão", "desconto_maquininha"}:
-            if c not in amount_cols:
-                amount_cols.append(c)
+mask_fiado_quitado = mask_conta_fiado & (mask_status_pago | mask_datapag)
+mask_fiado_em_aberto = mask_conta_fiado & ~mask_fiado_quitado
+mask_nao_fiado = ~mask_conta_fiado
 
-    total = 0.0
-    for c in amount_cols:
-        total += pd.to_numeric(df_periodo[c], errors="coerce").fillna(0).clip(lower=0).sum()
-
-    # B) diferença entre Bruto e Líquido (se houver)
-    tem_bruto = "Valor Bruto" in df_periodo.columns or "ValorBruto" in df_periodo.columns
-    col_bruto = "Valor Bruto" if "Valor Bruto" in df_periodo.columns else ("ValorBruto" if "ValorBruto" in df_periodo.columns else None)
-    if total <= 0 and col_bruto is not None:
-        bruto = pd.to_numeric(df_periodo[col_bruto], errors="coerce").fillna(0)
-        liquido = pd.to_numeric(df_periodo.get("Valor", 0), errors="coerce").fillna(0)
-        diff = (bruto - liquido).clip(lower=0)
-
-        # restringe a linhas de cartão se a coluna de conta existir
-        if col_conta:
-            patt = re.compile(r"(cart|cr[eé]dit|d[eé]bit|maq|maqui|nubank)", re.IGNORECASE)
-            mask_cartao = df_periodo[col_conta].astype(str).str.contains(patt, na=False)
-            diff = diff.where(mask_cartao, 0)
-        total = float(diff.sum())
-
-    # C) coluna de PCT da taxa (ex.: TaxaCartaoPCT) — estimar pela fórmula correta
-    if total <= 0:
-        pct_cols = [c for c in df_periodo.columns if re.search(r"(pct|%|taxa.*pct)", c.lower())]
-        if pct_cols:
-            col_pct = pct_cols[0]
-            pct = df_periodo[col_pct].apply(_to_num) / 100.0
-            pct = pct.clip(lower=0, upper=0.2)  # sanidade (0–20%)
-            if tem_bruto and col_bruto:
-                base = pd.to_numeric(df_periodo[col_bruto], errors="coerce").fillna(0)
-                total = float((base * pct).sum())
-            else:
-                # se só temos o líquido (Valor), aplica: fee = net * p / (1 - p)
-                net = pd.to_numeric(df_periodo.get("Valor", 0), errors="coerce").fillna(0)
-                fee = net * pct / (1 - pct.clip(upper=0.99))
-                total = float(fee.sum())
-
-    return max(total, 0.0)
-
-# =========================
-# KPIs + CARDS (LADO A LADO)
-# =========================
-# Receita operacional: exclui URNA para não inflar
-receita_operacional = float(df_valores.loc[~df_valores["EhUrna"], "ValorNum"].sum())
-
-# 🎁 Caixinha do período = SOMENTE Caixinha do DIA (linhas dos atendimentos) — soma de TODOS
-caixinha_periodo_total = float(df_valores.loc[~df_valores["EhUrna"], "CaixinhaDiaTotal"].sum())
-
-# 🎁 Caixinha do JPaulo (entra na Receita Total)
-cx_jp = float(
-    df_valores.loc[
-        (~df_valores["EhUrna"]) & _is_func(df_valores, FUNC_JPAULO),
-        "CaixinhaDiaTotal"
-    ].sum()
+st.sidebar.subheader("Filtro de pagamento")
+opcao_pagto = st.sidebar.radio(
+    label="",
+    options=["Apenas pagos", "Apenas fiado", "Incluir tudo"],
+    index=0,
+    help="Controla o que entra nos gráficos e somas de valor."
 )
 
-# 🎁 Caixinha do Vinicius (NÃO entra na Receita Total, mas continua somando no bloco de caixinha)
-# cx_vini = float(df_valores.loc[(~df_valores["EhUrna"]) & _is_func(df_valores, FUNC_VINICIUS), "CaixinhaDiaTotal"].sum())
+# Base para valores/gráficos
+if opcao_pagto == "Apenas pagos":
+    base_val = df[mask_nao_fiado | mask_fiado_quitado].copy()
+elif opcao_pagto == "Apenas fiado":
+    base_val = df[mask_fiado_em_aberto].copy()
+else:
+    base_val = df.copy()
 
-# Receita Total ajustada: operacional + caixinha do JP
-receita_total = receita_operacional + cx_jp
+# (Opcional) aplicar o filtro também à TABELA de histórico
+aplicar_no_historico = st.sidebar.checkbox("Aplicar no histórico (tabela)", value=False)
 
-# Total de atendimentos (linhas) no histórico filtrado
-total_atendimentos = len(df_hist)
+with st.sidebar.expander("Ver contagem (conferência)"):
+    st.write(f"Total linhas: **{len(df)}**")
+    st.write(f"Fiado em aberto: **{int(mask_fiado_em_aberto.sum())}**")
+    st.write(f"Fiado quitado: **{int(mask_fiado_quitado.sum())}**")
+    st.write(f"Não fiado: **{int(mask_nao_fiado.sum())}**")
+    st.caption("Colunas de Caixinha detectadas: " + ", ".join(df.attrs.get("__cx_cols__", [])))
 
-# Clientes únicos com regra de unicidade a partir de 11/05/2025
-antes = df_hist[df_hist["Data"] < DATA_CORTE_UNICIDADE]
-depois = df_hist[df_hist["Data"] >= DATA_CORTE_UNICIDADE].drop_duplicates(subset=["Cliente", "Data"])
-clientes_unicos = pd.concat([antes, depois])["Cliente"].nunique()
-
-ticket_medio = (receita_total / total_atendimentos) if total_atendimentos else 0.0
-
-# 💳 Taxa de Cartão (Período) — detecta automaticamente
-taxa_cartao_total = calcular_taxa_cartao(df_valores.copy())
-
-# KPIs
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1:
-    st.markdown(f'<div class="kpi"><p class="title">💰 Receita Total<br/><small>(+ Caixinha JP)</small></p><p class="value">{brl(receita_total)}</p></div>', unsafe_allow_html=True)
-with c2:
-    st.markdown(f'<div class="kpi"><p class="title">📅 Total de Atendimentos</p><p class="value">{total_atendimentos}</p></div>', unsafe_allow_html=True)
-with c3:
-    st.markdown(f'<div class="kpi"><p class="title">🎯 Ticket Médio</p><p class="value">{brl(ticket_medio)}</p></div>', unsafe_allow_html=True)
-with c4:
-    st.markdown(f'<div class="kpi"><p class="title">🟢 Clientes Ativos</p><p class="value">{clientes_unicos}</p></div>', unsafe_allow_html=True)
-with c5:
-    st.markdown(f'<div class="kpi"><p class="title">🎁 Caixinha (Período)</p><p class="value">{brl(caixinha_periodo_total)}</p></div>', unsafe_allow_html=True)
-with c6:
-    st.markdown(f'<div class="kpi"><p class="title">💳 Taxa de Cartão (Período)</p><p class="value">{brl(taxa_cartao_total)}</p></div>', unsafe_allow_html=True)
+base_val["ValorNum"] = base_val["ValorNumBruto"].astype(float)
 
 # =========================
-# 🎁 BLOCO: Caixinha do Período (somente DIA)
+# Seleção do Cliente
 # =========================
-col_a, col_b = st.columns([1.1, 1])
+clientes_disponiveis = sorted(df["Cliente"].dropna().unique())
+if not clientes_disponiveis:
+    st.warning("Não há clientes na base.")
+    st.stop()
 
-with col_a:
-    st.markdown('<div class="block"><b>🎁 Caixinha do Período — por Funcionário</b>', unsafe_allow_html=True)
+cliente_default = st.session_state.get("cliente") if "cliente" in st.session_state else clientes_disponiveis[0]
+cliente = st.selectbox(
+    "👤 Selecione o cliente para detalhamento",
+    clientes_disponiveis,
+    index=clientes_disponiveis.index(cliente_default)
+)
+
+# =========================
+# Imagem do cliente
+# =========================
+def buscar_link_foto(nome):
+    try:
+        planilha = conectar_sheets()
+        aba_status = planilha.worksheet("clientes_status")
+        df_status = get_as_dataframe(aba_status).dropna(how="all")
+        df_status.columns = [str(col).strip() for col in df_status.columns]
+        foto = df_status[df_status["Cliente"] == nome]["Foto"].dropna().values
+        return foto[0] if len(foto) > 0 else None
+    except Exception:
+        return None
+
+link_foto = buscar_link_foto(cliente)
+if link_foto:
+    try:
+        response = requests.get(link_foto, timeout=8)
+        img = Image.open(BytesIO(response.content))
+        st.image(img, caption=cliente, width=200)
+    except Exception:
+        st.warning("Erro ao carregar imagem.")
+else:
+    st.info("Cliente sem imagem cadastrada.")
+
+# =========================
+# Dados do cliente (tabela e base para gráficos)
+# =========================
+if aplicar_no_historico:
+    df_cliente = base_val[base_val["Cliente"] == cliente].copy()
+else:
+    df_cliente = df[df["Cliente"] == cliente].copy()
+
+df_cliente_val = base_val[base_val["Cliente"] == cliente].copy()  # gráficos/somas sempre filtrados
+
+if "Duração (min)" in df_cliente.columns:
+    df_cliente["Tempo Formatado"] = df_cliente["Duração (min)"].apply(formatar_tempo)
+
+st.subheader(f"📅 Histórico de atendimentos - {cliente}")
+colunas_exibir = ["Data_str", "Serviço", "Tipo", "Valor", "Funcionário", "Tempo Formatado"]
+colunas_exibir = [col for col in colunas_exibir if col in df_cliente.columns]
+st.dataframe(
+    df_cliente.sort_values("Data", ascending=False)[colunas_exibir].rename(columns={"Data_str": "Data"}),
+    use_container_width=True
+)
+
+# =========================
+# 🎁 Caixinha do Cliente (NOVO)
+# =========================
+st.subheader("🎁 Caixinha do Cliente")
+if "CaixinhaDiaTotal" not in df_cliente_val.columns:
+    st.info("Não foram encontradas colunas de caixinha para este cliente.")
+else:
+    base_cx = df_cliente_val.copy()
+
+    cx_total = float(base_cx["CaixinhaDiaTotal"].sum())
+    cx_jp = float(base_cx.loc[base_cx["Funcionário"].str.casefold() == FUNC_JPAULO.casefold(), "CaixinhaDiaTotal"].sum())
+    cx_vini = float(base_cx.loc[base_cx["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold(), "CaixinhaDiaTotal"].sum())
+
+    cc1, cc2, cc3 = st.columns(3)
+    cc1.metric("Total de Caixinha (cliente)", brl(cx_total))
+    cc2.metric("Caixinha • JPaulo", brl(cx_jp))
+    cc3.metric("Caixinha • Vinicius", brl(cx_vini))
+
+    # Gráfico: Caixinha por Funcionário
     df_cx_func = (
-        df_valores.loc[~df_valores["EhUrna"]]
-        .groupby("Funcionário", dropna=False)["CaixinhaDiaTotal"]
-        .sum().reset_index().rename(columns={"CaixinhaDiaTotal":"Caixinha"})
+        base_cx.groupby("Funcionário", dropna=False)["CaixinhaDiaTotal"]
+        .sum().reset_index().rename(columns={"CaixinhaDiaTotal": "Caixinha"})
         .sort_values("Caixinha", ascending=False)
     )
     if not df_cx_func.empty and df_cx_func["Caixinha"].sum() > 0:
-        fig_cx = px.bar(df_cx_func, x="Funcionário", y="Caixinha", text_auto=True)
-        fig_cx.update_layout(height=340, yaxis_title="Valor (R$)", showlegend=False, margin=dict(l=10,r=10,t=30,b=10))
+        fig_cx = px.bar(df_cx_func, x="Funcionário", y="Caixinha", text_auto=True, labels={"Caixinha": "R$"})
+        fig_cx.update_layout(height=340, yaxis_title="Caixinha (R$)", showlegend=False, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig_cx, use_container_width=True)
+
+    # Tabela detalhada (últimas linhas com caixinha)
+    cols_exist = [c for c in ["CaixinhaDia", "Caixinha_Fundo", "CaixinhaFundo"] if c in base_cx.columns]
+    mostrar_cols = ["Data_str", "Funcionário"] + cols_exist + ["CaixinhaDiaTotal"]
+    df_cx_rows = base_cx[base_cx["CaixinhaDiaTotal"] > 0][mostrar_cols].copy()
+    if not df_cx_rows.empty:
+        df_cx_rows = df_cx_rows.rename(columns={"Data_str": "Data", "CaixinhaDiaTotal": "Total Caixinha"})
+        # Formata valores
+        for c in cols_exist + ["Total Caixinha"]:
+            df_cx_rows[c] = df_cx_rows[c].astype(float).map(brl)
+        st.dataframe(df_cx_rows.sort_values("Data", ascending=False), use_container_width=True, hide_index=True)
     else:
-        st.info("Nenhuma caixinha do dia encontrada no período com os filtros atuais.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col_b:
-    st.markdown('<div class="block"><b>📅 Caixinha do Dia — Total no Ano</b>', unsafe_allow_html=True)
-    df_ano = df_full[df_full["Ano"] == ano_escolhido]
-    df_ano = df_ano[mask_valores_full.loc[df_ano.index]] if len(mask_valores_full) == len(df_full) else df_ano
-    cx_dia_ano = float(df_ano.loc[~df_ano["EhUrna"], "CaixinhaDiaTotal"].sum())
-    st.metric("Total no Ano (Dia)", brl(cx_dia_ano))
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.info("Nenhuma linha de caixinha registrada para este cliente com os filtros atuais.")
 
 # =========================
-# 🎄 BLOCO: Caixinha NATAL (URNA) — divisão por ano
+# Receita mensal (base filtrada)
 # =========================
-st.markdown('<div class="block"><b>🎄 Caixinha NATAL (URNA) — Ano</b>', unsafe_allow_html=True)
-df_urna_ano = df_full[(df_full["Ano"] == ano_escolhido) & (df_full["EhUrna"])].copy()
-df_urna_ano = df_urna_ano[mask_valores_full.loc[df_urna_ano.index]] if len(mask_valores_full) == len(df_full) else df_urna_ano
-urna_total_ano = float(df_urna_ano["ValorNum"].sum())
-
-if ano_escolhido >= URNA_SPLIT_YEAR:
-    quota_vinicius = urna_total_ano * URNA_PCT_VINICIUS
-    quota_jpaulo   = urna_total_ano - quota_vinicius
+st.subheader("📊 Receita mensal")
+if df_cliente_val.empty:
+    st.info("Sem valores recebidos para exibir.")
 else:
-    quota_vinicius = 0.0
-    quota_jpaulo   = urna_total_ano
-
-colu1, colu2, colu3 = st.columns(3)
-colu1.metric("Total URNA no Ano", brl(urna_total_ano))
-colu2.metric("Quota JPaulo",       brl(quota_jpaulo))
-colu3.metric("Quota Vinicius",     brl(quota_vinicius))
-
-# (opcional) mostrar quem lançou as linhas de URNA
-if not df_urna_ano.empty:
-    df_urna_lanc = (df_urna_ano.groupby("Funcionário", dropna=False)["ValorNum"]
-                    .sum().reset_index().rename(columns={"ValorNum":"Valor Lançado"}))
-    df_urna_lanc["Valor Lançado"] = df_urna_lanc["Valor Lançado"].astype(float)
-    st.dataframe(df_urna_lanc, use_container_width=True, hide_index=True)
-else:
-    st.info("Nenhuma linha de URNA registrada para o ano selecionado.")
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# TENDÊNCIA MENSAL (RECEITA) — APENAS DO ANO SELECIONADO
-# =========================
-st.markdown('<div class="block"><b>📈 Tendência Mensal de Receita (Ano Selecionado)</b>', unsafe_allow_html=True)
-df_anual_val = df_full[(df_full["Ano"] == ano_escolhido)]
-df_anual_val = df_anual_val[mask_valores_full.loc[df_anual_val.index]] if len(mask_valores_full) == len(df_full) else df_anual_val
-# receita operacional (sem URNA) — mantida sem caixinha JP para não distorcer gráfico mensal
-df_mensal = (
-    df_anual_val.loc[~df_anual_val["EhUrna"]]
-    .groupby("Mês")["ValorNum"].sum().reset_index().sort_values("Mês")
-)
-if not df_mensal.empty:
-    df_mensal["MêsNome"] = df_mensal["Mês"].map(MESES_PT)
-    fig_mes = px.bar(df_mensal, x="MêsNome", y="ValorNum", text_auto=True)
-    fig_mes.update_layout(height=360, yaxis_title="Receita (R$)", xaxis_title=None, margin=dict(l=10,r=10,t=30,b=10))
-    st.plotly_chart(fig_mes, use_container_width=True)
-else:
-    st.info("Sem dados de receita para o ano selecionado com os filtros atuais.")
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# PRODUTOS (QTD e VALOR)
-# =========================
-col_p1, col_p2 = st.columns([1.2, 1])
-
-with col_p1:
-    st.markdown('<div class="block"><b>🛍️ Produtos Vendidos (quantidade)</b>', unsafe_allow_html=True)
-    df_prod = df_valores.loc[~df_valores["EhUrna"] & df_valores["EhProduto"]].copy()
-    if not df_prod.empty:
-        top_qty = (
-            df_prod.groupby("Serviço")["Serviço"].count()
-            .rename("Qtd").reset_index()
-            .sort_values("Qtd", ascending=False).head(12)
-        )
-        fig_prod_qtd = px.bar(top_qty, x="Serviço", y="Qtd", text_auto=True)
-        fig_prod_qtd.update_layout(height=360, yaxis_title="Quantidade", xaxis_title=None, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig_prod_qtd, use_container_width=True)
-    else:
-        st.info("Nenhum produto vendido no período filtrado.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col_p2:
-    st.markdown('<div class="block"><b>🏆 Top Produtos por Valor</b>', unsafe_allow_html=True)
-    if not df_prod.empty:
-        top_val = (
-            df_prod.groupby("Serviço")["ValorNum"].sum()
-            .reset_index().rename(columns={"ValorNum":"Valor"})
-            .sort_values("Valor", ascending=False).head(10)
-        )
-        top_val["Valor"] = top_val["Valor"].astype(float)
-        top_val["Valor"] = top_val["Valor"].apply(brl)
-        st.dataframe(top_val, use_container_width=True, hide_index=True)
-    else:
-        st.info("Sem valores de produtos no período filtrado.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# TOP SERVIÇOS (exclui produto e URNA)
-# =========================
-st.markdown('<div class="block"><b>✂️ Top Serviços por Valor</b>', unsafe_allow_html=True)
-df_serv = df_valores.loc[~df_valores["EhUrna"] & ~df_valores["EhProduto"]].copy()
-if not df_serv.empty:
-    top_serv = (
-        df_serv.groupby("Serviço")["ValorNum"].sum()
-        .reset_index().rename(columns={"ValorNum":"Valor"})
-        .sort_values("Valor", ascending=False).head(12)
+    df_cliente_val["Data_Ref_Mensal"] = df_cliente_val["Data"].dt.to_period("M").dt.to_timestamp()
+    receita_mensal = df_cliente_val.groupby("Data_Ref_Mensal")["ValorNum"].sum().reset_index()
+    receita_mensal["Mês_Ano"] = receita_mensal["Data_Ref_Mensal"].apply(
+        lambda d: format_date(d, format="MMMM 'de' y", locale="pt_BR").capitalize()
     )
-    fig_serv = px.bar(top_serv, x="Serviço", y="Valor", text_auto=True)
-    fig_serv.update_layout(height=360, yaxis_title="Receita (R$)", xaxis_title=None, margin=dict(l=10,r=10,t=30,b=10))
-    st.plotly_chart(fig_serv, use_container_width=True)
-else:
-    st.info("Sem serviços para exibir neste período.")
-st.markdown('</div>', unsafe_allow_html=True)
+    receita_mensal["Valor_str"] = receita_mensal["ValorNum"].apply(brl)
+    fig_receita = px.bar(
+        receita_mensal,
+        x="Mês_Ano",
+        y="ValorNum",
+        text="Valor_str",
+        labels={"ValorNum": "Receita (R$)", "Mês_Ano": "Mês"},
+        category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
+    )
+    fig_receita.update_traces(textposition="inside")
+    fig_receita.update_layout(height=400)
+    st.plotly_chart(fig_receita, use_container_width=True)
 
 # =========================
-# TOP 10 CLIENTES (frequência + valor)
+# Receita por Serviço e Produto (base filtrada)
 # =========================
-st.markdown('<div class="block"><b>🥇 Top 10 Clientes</b>', unsafe_allow_html=True)
-cnt = df_hist.groupby("Cliente")["Serviço"].count().rename("Qtd_Serviços")
-val = df_valores.loc[~df_valores["EhUrna"]].groupby("Cliente")["ValorNum"].sum().rename("Valor")
-df_top = pd.concat([cnt, val], axis=1).reset_index().fillna(0)
-df_top = df_top[~df_top["Cliente"].str.lower().isin(NOMES_EXCLUIR_RANKINGS)]
-df_top = df_top.sort_values(by="Valor", ascending=False).head(10)
-if not df_top.empty:
-    df_top["Valor Formatado"] = df_top["Valor"].apply(brl)
-    st.dataframe(df_top[["Cliente", "Qtd_Serviços", "Valor Formatado"]], use_container_width=True, hide_index=True)
+st.subheader("📊 Receita por Serviço e Produto")
+if df_cliente_val.empty:
+    st.info("Sem valores recebidos para exibir.")
 else:
-    st.info("Sem clientes para exibir com os filtros atuais.")
-st.markdown('</div>', unsafe_allow_html=True)
+    df_tipos = df_cliente_val[["Serviço", "Tipo", "ValorNum"]].copy()
+    receita_geral = (
+        df_tipos.groupby(["Serviço", "Tipo"])["ValorNum"]
+        .sum()
+        .reset_index()
+        .sort_values("ValorNum", ascending=False)
+    )
+    fig_receita_tipos = px.bar(
+        receita_geral,
+        x="Serviço",
+        y="ValorNum",
+        color="Tipo",
+        text=receita_geral["ValorNum"].apply(brl),
+        labels={"ValorNum": "Receita (R$)", "Serviço": "Item"},
+        barmode="group"
+    )
+    fig_receita_tipos.update_traces(textposition="outside")
+    st.plotly_chart(fig_receita_tipos, use_container_width=True)
 
-st.markdown("---")
-st.caption("Criado por JPaulo ✨ | Receita inclui apenas Caixinha do JP • Caixinha do Vini fora da receita • URNA com divisão 50/50 a partir de 2025")
+# =========================
+# Atendimentos por Funcionário (contagem de atendimentos)
+# =========================
+st.subheader("📊 Atendimentos por Funcionário")
+atendimentos_unicos = df_cliente.drop_duplicates(subset=["Cliente", "Data", "Funcionário"])
+atendimentos_por_funcionario = atendimentos_unicos["Funcionário"].value_counts().reset_index()
+atendimentos_por_funcionario.columns = ["Funcionário", "Qtd Atendimentos"]
+st.dataframe(atendimentos_por_funcionario, use_container_width=True)
+
+# =========================
+# Resumo de Atendimentos (combos/simples)
+# =========================
+st.subheader("📋 Resumo de Atendimentos")
+df_cliente_dt = df[df["Cliente"] == cliente].copy()
+resumo = df_cliente_dt.groupby("Data").agg(
+    Qtd_Serviços=("Serviço", "count"),
+    Qtd_Produtos=("Tipo", lambda x: (x == "Produto").sum())
+).reset_index()
+resumo["Qtd_Combo"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x > 1 else 0)
+resumo["Qtd_Simples"] = resumo["Qtd_Serviços"].apply(lambda x: 1 if x == 1 else 0)
+resumo_final = pd.DataFrame({
+    "Total Atendimentos": [resumo.shape[0]],
+    "Qtd Combos": [resumo["Qtd_Combo"].sum()],
+    "Qtd Simples": [resumo["Qtd_Simples"].sum()]
+})
+st.dataframe(resumo_final, use_container_width=True)
+
+# =========================
+# Frequência de atendimento
+# =========================
+st.subheader("📈 Frequência de Atendimento")
+data_corte = pd.to_datetime("2025-05-11")
+df_antes = df_cliente_dt[df_cliente_dt["Data"] < data_corte].copy()
+df_depois = df_cliente_dt[df_cliente_dt["Data"] >= data_corte].drop_duplicates(subset=["Data"]).copy()
+df_freq = pd.concat([df_antes, df_depois]).sort_values("Data")
+datas = df_freq["Data"].tolist()
+
+if len(datas) < 2:
+    st.info("Cliente possui apenas um atendimento.")
+else:
+    diffs = [(datas[i] - datas[i-1]).days for i in range(1, len(datas))]
+    media_freq = sum(diffs) / len(diffs)
+    ultimo_atendimento = datas[-1]
+    dias_desde_ultimo = (pd.Timestamp.today().normalize() - ultimo_atendimento).days
+    status = (
+        "🟢 Em dia" if dias_desde_ultimo <= media_freq
+        else ("🟠 Pouco atrasado" if dias_desde_ultimo <= media_freq * 1.5 else "🔴 Muito atrasado")
+    )
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("📅 Último Atendimento", ultimo_atendimento.strftime("%d/%m/%Y"))
+    col2.metric("📊 Frequência Média", f"{media_freq:.1f} dias")
+    col3.metric("⏱️ Desde Último", dias_desde_ultimo)
+    col4.metric("📌 Status", status)
+
+# =========================
+# Insights do cliente
+# =========================
+st.subheader("💡 Insights Adicionais")
+meses_ativos = df_cliente["Mês_Ano"].nunique()
+gasto_mensal_medio = (df_cliente_val["ValorNum"].sum() / meses_ativos) if meses_ativos > 0 else 0
+status_vip = "Sim ⭐" if gasto_mensal_medio >= 70 else "Não"
+mais_frequente = df_cliente["Funcionário"].mode()[0] if not df_cliente["Funcionário"].isna().all() else "Indefinido"
+tempo_total = df_cliente["Duração (min)"].sum() if "Duração (min)" in df_cliente.columns else None
+tempo_total_str = formatar_tempo(tempo_total)
+ticket_medio = df_cliente_val["ValorNum"].mean() if not df_cliente_val.empty else 0
+intervalo_medio = (
+    sum([(datas[i] - datas[i-1]).days for i in range(1, len(datas))]) / len(datas[1:])
+) if len(datas) >= 2 else None
+
+col5, col6, col7 = st.columns(3)
+col5.metric("🏅 Cliente VIP", status_vip)
+col6.metric("💇 Mais atendido por", mais_frequente)
+col7.metric("🕒 Tempo Total no Salão", tempo_total_str)
+col8, col9, col10 = st.columns(3)
+col8.metric("💸 Ticket Médio", brl(ticket_medio))
+col9.metric("📆 Intervalo Médio", f"{intervalo_medio:.1f} dias" if intervalo_medio else "Indisponível")
+
+# extra: mostrar caixinha total no rodapé de insights
+if "CaixinhaDiaTotal" in df_cliente_val.columns:
+    col10.metric("🎁 Caixinha (Cliente)", brl(float(df_cliente_val["CaixinhaDiaTotal"].sum())))
