@@ -741,8 +741,20 @@ else:
     # total de COMISSÃO (já com % da linha)
     tot_com_sis = float(pd.to_numeric(tmp_full["__comissao"], errors="coerce").fillna(0.0).sum())
 
-    # total de ATENDIMENTOS (conta de linhas dos grids)
-    tot_atend_sis = int(tmp_full.shape[0])  # << aqui corrige!
+    # total de ATENDIMENTOS ÚNICOS (Cliente+Data)
+if "Cliente" in tmp_full.columns and "Data" in tmp_full.columns:
+    cli = (tmp_full["Cliente"].astype(str).str.strip().str.lower()
+           .str.replace(r"\s+", " ", regex=True))
+    data_norm = (pd.to_datetime(
+        tmp_full["Data"].astype(str).str.strip().str.replace("-", "/"),
+        errors="coerce"
+    ).dt.date)
+    invalid = {"", "-", "—", "desconhecido"}
+    mask_valid = (~cli.isin(invalid)) & data_norm.notna()
+    pares = pd.Series(list(zip(cli[mask_valid], data_norm[mask_valid])))
+    tot_atend_sis = int(pares.nunique())
+else:
+    tot_atend_sis = int(tmp_full.shape[0])
 
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
