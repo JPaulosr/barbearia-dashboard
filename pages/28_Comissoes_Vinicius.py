@@ -157,6 +157,25 @@ def make_refid_atendimento(row:pd.Series)->str:
     key = "|".join([str(row.get(k,"")).strip() for k in ["Cliente","Data","Serviço","Valor","Funcionário","Combo"]])
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
+# --- Normalização de nomes de serviço para evitar duplicidades ---
+def normalizar_servico(s: str) -> str:
+    s0 = (s or "").strip().lower()
+    mapa = {
+        "sobrancelhas": "Sobrancelha",
+        "sobrancelha": "Sobrancelha",
+        "luz": "Luzes",
+        "luzes": "Luzes",
+        "pezinho": "Pezinho",
+        "barba": "Barba",
+        "corte": "Corte",
+        "alisamento": "Alisamento",
+        "tintura": "Tintura",
+        "gel": "Gel",
+        "pomada": "Pomada",
+        "caixinha": "Caixinha",
+    }
+    return mapa.get(s0, s.strip() if s else "")
+
 # =============================
 # TELEGRAM
 # =============================
@@ -175,22 +194,52 @@ def tg_send_html(text:str, chat_id:str)->bool:
     except: return False
 
 # =============================
-# RESUMO (Telegram)
+# RESUMO (Telegram) — usando GRIDS
 # =============================
 def build_text_resumo(period_ini, period_fim,
                       valor_nao_fiado, valor_fiado_liberado, valor_caixinha,
-                      total_futuros, df_semana, df_fiados, df_pend,
-                      qtd_fiado_pago_hoje=0):
-    clientes, servs = 0, {}
-    if any(d is not None and not d.empty for d in [df_semana, df_fiados]):
-        df_all = pd.concat([d for d in [df_semana, df_fiados] if d is not None and not d.empty], ignore_index=True)
-        clientes = df_all["Cliente"].astype(str).str.strip().str.lower().nunique() if "Cliente" in df_all.columns else 0
-        servs = df_all["Serviço"].astype(str).str.strip().value_counts().to_dict() if "Serviço" in df_all.columns else {}
-    serv_lin = ", ".join([f"{k}×{v}" for k,v in servs.items()]) if servs else "—"
+                      total_futuros,
+                      df_semana=None, df_fiados=None, df_pend=None,
+                      qtd_fiado_pago_hoje=0,
+                      df_semana_grid=None, df_fiados_grid=None):
+    """
+    Se df_semana_grid / df_fiados_grid forem passados, o resumo usa esses
+    (já filtrados por 'ja_pagos') para contar Clientes e Serviços.
+    """
+    # 1) Fonte de dados para o que será pago hoje
+    fontes_pagaveis = []
+    if df_semana_grid is not None and not df_semana_grid.empty:
+        fontes_pagaveis.append(df_semana_grid)
+    if df_fiados_grid is not None and not df_fiados_grid.empty:
+        fontes_pagaveis.append(df_fiados_grid)
 
+    if fontes_pagaveis:
+        df_all = pd.concat(fontes_pagaveis, ignore_index=True)
+    else:
+        # fallback – NÃO recomendado, mas mantém compatibilidade
+        cand = [d for d in [df_semana, df_fiados] if d is not None and not getattr(d, "empty", True)]
+        df_all = pd.concat(cand, ignore_index=True) if cand else pd.DataFrame()
+
+    # 2) Contagens
+    clientes = 0
+    servs = {}
+    if not df_all.empty:
+        col_cli = "Cliente" if "Cliente" in df_all.columns else df_all.columns[df_all.columns.str.lower().str.contains("cliente")][0]
+        col_srv = "Serviço" if "Serviço" in df_all.columns else df_all.columns[df_all.columns.str.lower().str.contains("serv")][0]
+
+        # normaliza clientes e serviços
+        clientes = df_all[col_cli].astype(str).str.strip().str.lower().nunique()
+        srv_norm = df_all[col_srv].astype(str).map(normalizar_servico)
+        servs = srv_norm.replace("", pd.NA).dropna().value_counts().to_dict()
+
+    serv_lin = ", ".join([f"{k}×{v}" for k, v in servs.items()]) if servs else "—"
+
+    # 3) Pendências
     qtd_pend = int(len(df_pend)) if df_pend is not None else 0
-    clientes_pend = df_pend["Cliente"].astype(str).str.strip().str.lower().nunique() if df_pend is not None and not df_pend.empty else 0
-    dt_min = to_br_date(pd.to_datetime(df_pend["_dt_serv"], errors="coerce").min()) if df_pend is not None and "_dt_serv" in df_pend.columns and not df_pend.empty else "—"
+    clientes_pend = (df_pend["Cliente"].astype(str).str.strip().str.lower().nunique()
+                     if df_pend is not None and not df_pend.empty else 0)
+    dt_min = to_br_date(pd.to_datetime(df_pend["_dt_serv"], errors="coerce").min()) \
+        if df_pend is not None and "_dt_serv" in df_pend.columns and not df_pend.empty else "—"
 
     total_geral = float(valor_nao_fiado) + float(valor_fiado_liberado) + float(valor_caixinha or 0.0)
 
@@ -543,7 +592,9 @@ if st.button("📲 Reenviar resumo (sem gravar)"):
         valor_caixinha=float(total_caixinha if pagar_caixinha else 0.0),
         total_futuros=float(total_fiados_pend),
         df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
-        qtd_fiado_pago_hoje=int(qtd_fiados_hoje)
+        qtd_fiado_pago_hoje=int(qtd_fiados_hoje),
+        df_semana_grid=semana_grid,                 # << usa GRID
+        df_fiados_grid=fiados_liberados_grid        # << usa GRID
     )
     enviados = []
     if dest_vini: enviados.append(("Vinícius", tg_send_html(texto, _get_chat_vini())))
@@ -594,7 +645,6 @@ if st.button("✅ Registrar comissão (1 linha por competência) e marcar itens 
         )
 
         # 4) (Caixinha não grava em Despesas)
-        # linhas_caixinha = 0
 
         # 5) Dedup por RefID e grava em Despesas
         if linhas:
@@ -617,11 +667,107 @@ if st.button("✅ Registrar comissão (1 linha por competência) e marcar itens 
                 valor_caixinha=float(total_caixinha if pagar_caixinha else 0.0),
                 total_futuros=float(total_fiados_pend),
                 df_semana=semana_df, df_fiados=fiados_liberados, df_pend=fiados_pendentes,
-                qtd_fiado_pago_hoje=int(qtd_fiados_hoje)
+                qtd_fiado_pago_hoje=int(qtd_fiados_hoje),
+                df_semana_grid=semana_grid,            # << usa GRID
+                df_fiados_grid=fiados_liberados_grid   # << usa GRID
             )
             if dest_vini: tg_send_html(texto, _get_chat_vini())
             if dest_jp:   tg_send_html(texto, _get_chat_jp())
         st.success("Processo concluído ✅")
+
+# ============================================
+# 🔎 CONFERÊNCIA RÁPIDA (só sistema, sem digitar nada)
+# ============================================
+st.markdown("## 🔎 Conferência rápida (serviços pagáveis hoje)")
+
+# 1) Junta os itens que serão pagos HOJE (usa os GRIDS já filtrados)
+def _df_pagaveis(sem_grid, fiad_grid):
+    partes = []
+    for d in [sem_grid, fiad_grid]:
+        if d is not None and not d.empty:
+            partes.append(d.copy())
+    if not partes:
+        return pd.DataFrame(columns=["Data","Cliente","Serviço","Valor_base_comissao","Competência","RefID"])
+    df = pd.concat(partes, ignore_index=True)
+    # normaliza nomes de serviço para evitar duplicidades
+    if "Serviço" in df.columns:
+        df["Serviço"] = df["Serviço"].astype(str).map(normalizar_servico)
+    return df
+
+df_pagaveis = _df_pagaveis(semana_grid, fiados_liberados_grid)
+
+# 2) Agrega por serviço (Qtde e Comissão a pagar)
+def _ensure_comissao(df: pd.DataFrame) -> pd.DataFrame:
+    tmp = df.copy()
+    # coluna com valor base
+    base_col = "Valor (para comissão)" if "Valor (para comissão)" in tmp.columns else "Valor_base_comissao"
+    base = pd.to_numeric(tmp[base_col], errors="coerce").fillna(0.0)
+
+    if "ComissaoValor" in tmp.columns:
+        com = pd.to_numeric(tmp["ComissaoValor"], errors="coerce").fillna(0.0)
+    else:
+        # se não existir ComissaoValor (caso raro), calcula usando a % da linha ou o padrão
+        if "% Comissão" in tmp.columns:
+            pct = pd.to_numeric(tmp["% Comissão"], errors="coerce").fillna(float(perc_padrao))
+        else:
+            pct = float(perc_padrao)
+        com = (base * pct / 100.0).astype(float)
+
+    tmp["__comissao"] = com
+    return tmp
+
+def _agg_por_servico_comissao(df):
+    if df.empty:
+        return pd.DataFrame(columns=["Serviço","Qtde","Comissão (R$)"])
+    tmp = _ensure_comissao(df)
+    out = (tmp.groupby("Serviço", dropna=False)
+               .agg(Qtde=("Serviço","count"), **{"Comissão (R$)":("__comissao","sum")})
+               .reset_index())
+    return out.sort_values("Comissão (R$)", ascending=False)
+
+agg_sis = _agg_por_servico_comissao(df_pagaveis)
+
+# 3) Métricas e grade
+if agg_sis.empty:
+    st.info("Nenhum item pagável hoje.")
+else:
+    # Garante coluna de comissão por linha (__comissao)
+    tmp_full = _ensure_comissao(df_pagaveis)
+
+    # total BRUTO (antes do %)
+    base_col = "Valor (para comissão)" if "Valor (para comissão)" in tmp_full.columns else "Valor_base_comissao"
+    tot_bruto_sis = float(pd.to_numeric(tmp_full[base_col], errors="coerce").fillna(0.0).sum())
+
+    # total de COMISSÃO (já com % da linha)
+    tot_com_sis = float(pd.to_numeric(tmp_full["__comissao"], errors="coerce").fillna(0.0).sum())
+
+    # total de ATENDIMENTOS (conta de linhas dos grids)
+    tot_atend_sis = int(tmp_full.shape[0])  # << aqui corrige!
+
+    col_m1, col_m2, col_m3 = st.columns(3)
+    with col_m1:
+        st.metric("💰 Valor bruto (sistema, sem caixinha)", format_brl(round(tot_bruto_sis, 2)))
+    with col_m2:
+        st.metric("💵 Comissão (sistema, sem caixinha)", format_brl(round(tot_com_sis, 2)))
+    with col_m3:
+        st.metric("🧾 Qtde total de atendimentos (sistema)", f"{tot_atend_sis}")
+
+    # tabela por serviço (com comissão arredondada)
+    agg_show = agg_sis.copy()
+    agg_show["Comissão (R$)"] = pd.to_numeric(agg_show["Comissão (R$)"], errors="coerce").round(2)
+    st.dataframe(agg_show.reset_index(drop=True), use_container_width=True)
+
+# 4) Ver as linhas que compõem um serviço
+st.markdown("### 🔍 Ver linhas por serviço")
+serv_list = sorted(agg_sis["Serviço"].astype(str).unique()) if not agg_sis.empty else []
+serv_sel = st.selectbox("Escolha um serviço para listar as linhas:", serv_list or ["—"])
+if serv_sel and serv_sel != "—":
+    mask = df_pagaveis["Serviço"].astype(str) == serv_sel
+    cols_show = ["Data","Cliente","Serviço"]
+    for extra in ["Valor (para comissão)","Valor_base_comissao","Competência","RefID"]:
+        if extra in df_pagaveis.columns: cols_show.append(extra)
+    st.dataframe(df_pagaveis.loc[mask, cols_show].reset_index(drop=True), use_container_width=True)
+    st.caption("Essas são as linhas consideradas pelo sistema para este serviço.")
 
 # =============================
 # 📤 Exportar para Mobills (SEM gravar) — atual ou histórico
