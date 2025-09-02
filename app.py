@@ -277,7 +277,6 @@ with c5:
     st.markdown(f'<div class="kpi"><p class="title">🎁 Caixinha (Período)</p><p class="value">{brl(caixinha_periodo_total)}</p></div>', unsafe_allow_html=True)
 with c6:
     st.markdown(f'<div class="kpi"><p class="title">💳 Taxa de Cartão (Período)</p><p class="value">{brl(taxa_cartao_total)}</p></div>', unsafe_allow_html=True)
-    st.caption(f"Método: {taxa_metodo}{' • Coluna: ' + taxa_col if taxa_col else ''}")
 
 # =========================
 # 🎁 Caixinha por funcionário
