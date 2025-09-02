@@ -231,11 +231,15 @@ st.dataframe(
 def _normalize_period_value(x: str) -> str:
     s = str(x).strip().lower()
     s = (s.replace("ã", "a").replace("á", "a").replace("â", "a").replace("é", "e"))
-    if s.startswith("man"): return "Manhã"
-    if s.startswith("tar"): return "Tarde"
-    if s.startswith("noi"): return "Noite"
+    if s.startswith("man"):   # manha, manhã
+        return "Manhã"
+    if s.startswith("tar"):   # tarde
+        return "Tarde"
+    if s.startswith("noi"):   # noite
+        return "Noite"
     return "Outro"
 
+# detecta a coluna de período (pega "Período" do seu print)
 periodo_col = None
 for c in df_cliente_val.columns:
     if _norm_name(c) in {"periodo","período","periodododia","periodo_dia","periodoatendimento","turno","faixahoraria"}:
@@ -245,18 +249,27 @@ for c in df_cliente_val.columns:
 if periodo_col:
     st.subheader("⏰ Atendimentos por Período")
     df_per = df_cliente_val[[periodo_col]].copy()
-    df_per["Período"] = df_per[periodo_col].map(_normalize_period_value)
+    df_per["__periodo__"] = df_per[periodo_col].map(_normalize_period_value)
+
     ordem = ["Manhã", "Tarde", "Noite", "Outro"]
-    dist_periodo = (
-        df_per["Período"].value_counts().reindex(ordem).fillna(0).astype(int).reset_index()
-        .rename(columns={"index":"Período", "Período":"Qtd"})
-    )
+    counts = df_per["__periodo__"].value_counts(dropna=False)
+
+    # monta DataFrame final com tipagem garantida
+    dist_periodo = pd.DataFrame({
+        "Período": ordem,
+        "Qtd": [int(counts.get(p, 0)) for p in ordem]
+    })
+    dist_periodo["Qtd"] = pd.to_numeric(dist_periodo["Qtd"], errors="coerce").fillna(0).astype(int)
+
     if dist_periodo["Qtd"].sum() == 0:
         st.info("Sem informação de período para este cliente nos filtros atuais.")
         periodo_preferido = "Indefinido"
     else:
-        fig_per = px.bar(dist_periodo, x="Período", y="Qtd", text_auto=True)
-        fig_per.update_layout(height=320, yaxis_title="Qtde", xaxis_title=None, margin=dict(l=10,r=10,t=30,b=10))
+        fig_per = px.bar(dist_periodo, x="Período", y="Qtd", text="Qtd")
+        fig_per.update_layout(
+            height=320, yaxis_title="Qtde", xaxis_title=None,
+            margin=dict(l=10, r=10, t=30, b=10), showlegend=False
+        )
         st.plotly_chart(fig_per, use_container_width=True)
         periodo_preferido = dist_periodo.sort_values("Qtd", ascending=False).iloc[0]["Período"]
 else:
@@ -287,7 +300,7 @@ else:
         .sort_values("Caixinha", ascending=False)
     )
     if not df_cx_func.empty and df_cx_func["Caixinha"].sum() > 0:
-        fig_cx = px.bar(df_cx_func, x="Funcionário", y="Caixinha", text_auto=True, labels={"Caixinha": "R$"})
+        fig_cx = px.bar(df_cx_func, x="Funcionário", y="Caixinha", text="Caixinha", labels={"Caixinha": "R$"})
         fig_cx.update_layout(height=340, yaxis_title="Caixinha (R$)", showlegend=False, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig_cx, use_container_width=True)
 
@@ -299,7 +312,7 @@ else:
         df_cx_rows = df_cx_rows.rename(columns={"Data_str": "Data", "CaixinhaDiaTotal": "Total Caixinha"})
         for c in cols_exist + ["Total Caixinha"]:
             df_cx_rows[c] = df_cx_rows[c].astype(float).map(brl)
-        st.dataframe(df_cx_rows.sort_values("Data", descending=True), use_container_width=True, hide_index=True)
+        st.dataframe(df_cx_rows.sort_values("Data", ascending=False), use_container_width=True, hide_index=True)
 
 # =========================
 # 📊 Receita mensal (com opção de somar caixinha)
@@ -342,7 +355,6 @@ else:
         y="ValorGrafico",
         text="Valor_str",
         labels={"ValorGrafico": f"Receita{subt} (R$)", "Mês_Ano": "Mês"},
-        category_orders={"Mês_Ano": receita_mensal["Mês_Ano"].tolist()}
     )
     fig_receita.update_traces(textposition="inside")
     fig_receita.update_layout(height=400)
