@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # 15_Atendimentos_Masculino_Por_Dia.py
-# KPIs do dia, por funcionário, conferência (gravar/excluir no Sheets)
+# KPIs do período, por funcionário, conferência (gravar/excluir no Sheets)
 # e EXPORTAR PARA MOBILLS (tudo ou só NÃO conferidos) + pós-exportação marcar conferidos.
 
 import streamlit as st
@@ -11,9 +11,10 @@ import plotly.express as px
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe
 from gspread.utils import rowcol_to_a1
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import pytz
 import numpy as np
+from calendar import monthrange
 
 # =========================
 # CONFIG
@@ -62,7 +63,6 @@ def _conectar_sheets():
 
 # ---------- helpers Sheets ----------
 def _headers_and_indices(ws):
-    """Retorna (headers, norm_headers, indices_conferido, idx_conferido_escolhido)"""
     headers = ws.row_values(1)
     norms = [_norm_col(h) for h in headers]
     idxs = [i for i, n in enumerate(norms) if n == "conferido"]  # 0-based
@@ -70,7 +70,6 @@ def _headers_and_indices(ws):
     return headers, norms, idxs, chosen
 
 def _ensure_conferido_column(ws):
-    """Garante coluna 'Conferido' e retorna índice 1-based da **ÚLTIMA** ocorrência."""
     headers, norms, idxs, chosen = _headers_and_indices(ws)
     if chosen is not None:
         return chosen + 1  # 1-based
@@ -79,7 +78,6 @@ def _ensure_conferido_column(ws):
     return col
 
 def _update_conferido(ws, updates):
-    """Atualiza 1 a 1 para garantir persistência na mesma coluna."""
     if not updates: return
     col_conf = _ensure_conferido_column(ws)
     for u in updates:
@@ -95,19 +93,11 @@ def _delete_rows(ws, rows):
             st.warning(f"Falha ao excluir linha {r}: {e}")
 
 def _fetch_conferido_map(ws):
-    """
-    Lê a ÚLTIMA coluna 'Conferido' diretamente do Sheets (mesma que atualizamos)
-    e devolve um dict {SheetRow:int -> bool}.
-    """
     col_conf = _ensure_conferido_column(ws)
-
-    # Captura as letras da coluna (suporta AA, AB, ...)
-    a1 = rowcol_to_a1(1, col_conf)  # e.g. 'W1' ou 'AA1'
+    a1 = rowcol_to_a1(1, col_conf)
     col_letters = "".join(ch for ch in a1 if ch.isalpha())
-
-    rng = f"{col_letters}2:{col_letters}"  # coluna inteira a partir da linha 2
+    rng = f"{col_letters}2:{col_letters}"
     vals = ws.get(rng, value_render_option="UNFORMATTED_VALUE")
-
     m = {}
     rownum = 2
     for row in vals:
@@ -181,7 +171,7 @@ def carregar_base():
     conferido_map = _fetch_conferido_map(ws)
     df["Conferido"] = df["SheetRow"].map(lambda r: bool(conferido_map.get(int(r), False))).astype(bool)
 
-    # para debug na sidebar
+    # debug na sidebar
     headers = ws.row_values(1)
     conf_sources = [h for h in headers if _norm_col(h) == "conferido"]
     df.attrs["__conferido_sources__"] = conf_sources or []
@@ -189,24 +179,34 @@ def carregar_base():
     return df
 
 # ---------- agregações ----------
-def filtrar_por_dia(df, dia):
-    if df.empty or dia is None: return df.iloc[0:0]
-    return df[df["Data_norm"] == dia].copy()
+def filtrar_por_dias(df, dias_set):
+    if df.empty or not dias_set: 
+        return df.iloc[0:0]
+    return df[df["Data_norm"].isin(dias_set)].copy()
 
-def contar_atendimentos_dia(df):
-    if df.empty: return 0
-    d0 = df["Data_norm"].dropna()
-    if d0.empty: return 0
-    dia = d0.iloc[0]
-    if dia < DATA_CORRETA:
-        return len(df)
-    return df.groupby(["Cliente", "Data_norm"]).ngroups
+def contar_clientes_periodo(df_periodo):
+    """
+    Soma clientes por dia aplicando a regra:
+    - dia < DATA_CORRETA: conta linhas
+    - dia >= DATA_CORRETA: conta grupos únicos (Cliente, Data_norm)
+    """
+    if df_periodo.empty: 
+        return 0
+    total = 0
+    for dia, ddf in df_periodo.groupby("Data_norm"):
+        if pd.isna(dia): 
+            continue
+        if dia < DATA_CORRETA:
+            total += len(ddf)
+        else:
+            total += ddf.groupby(["Cliente", "Data_norm"]).ngroups
+    return total
 
-def kpis(df):
-    if df.empty: return 0, 0, 0.0, 0.0
-    clientes = contar_atendimentos_dia(df)
-    servicos = len(df)
-    receita = float(df["Valor_num"].sum())
+def kpis(df_periodo):
+    if df_periodo.empty: return 0, 0, 0.0, 0.0
+    clientes = contar_clientes_periodo(df_periodo)
+    servicos = len(df_periodo)
+    receita = float(df_periodo["Valor_num"].sum())
     ticket = (receita / clientes) if clientes > 0 else 0.0
     return clientes, servicos, receita, ticket
 
@@ -228,7 +228,6 @@ def preparar_tabela_exibicao(df):
 
 # ---------- Excel helpers ----------
 def _choose_excel_engine():
-    """Retorna 'xlsxwriter' se existir, senão 'openpyxl', senão None."""
     import importlib.util
     for eng in ("xlsxwriter", "openpyxl"):
         if importlib.util.find_spec(eng) is not None:
@@ -236,10 +235,6 @@ def _choose_excel_engine():
     return None
 
 def _to_xlsx_bytes(dfs_by_sheet: dict):
-    """
-    Recebe {'NomeAba': df, ...} e devolve bytes do XLSX.
-    Usa a melhor engine disponível (xlsxwriter/openpyxl). Se nenhuma existir, retorna None.
-    """
     engine = _choose_excel_engine()
     if not engine:
         return None
@@ -256,12 +251,35 @@ def html(s: str):
 def card(label, val):
     return f'<div class="card"><div class="label">{label}</div><div class="value">{val}</div></div>'
 
+# ============= Seletor de período =============
+def _semana_completa(d: date):
+    # Segunda a Domingo da semana da data d
+    dow = d.weekday()  # 0=Seg
+    ini = d - timedelta(days=dow)
+    fim = ini + timedelta(days=6)
+    return ini, fim
+
+def _dias_do_mes(ano: int, mes: int):
+    last = monthrange(ano, mes)[1]
+    ini = date(ano, mes, 1)
+    fim = date(ano, mes, last)
+    return ini, fim
+
+def _label_periodo(dias):
+    dias = sorted(list(dias))
+    if not dias:
+        return "Sem dados", "NA"
+    if len(dias) == 1:
+        return dias[0].strftime("%d/%m/%Y"), dias[0].strftime("%d-%m-%Y")
+    return f"{dias[0].strftime('%d/%m/%Y')} a {dias[-1].strftime('%d/%m/%Y')}", \
+           f"{dias[0].strftime('%d-%m-%Y')}_a_{dias[-1].strftime('%d-%m-%Y')}"
+
 # =========================
 # UI
 # =========================
-st.set_page_config(page_title="Atendimentos por Dia (Masculino)", page_icon="📅", layout="wide")
-st.title("📅 Atendimentos por Dia — Masculino")
-st.caption("KPIs do dia, comparativo por funcionário, conferência e exportação para Mobills.")
+st.set_page_config(page_title="Atendimentos por Período (Masculino)", page_icon="📅", layout="wide")
+st.title("📅 Atendimentos — Masculino (Dia / Semana / Mês / Intervalo)")
+st.caption("KPIs do período, comparativo por funcionário, conferência e exportação para Mobills.")
 
 if st.sidebar.button("🔄 Recarregar dados agora"):
     st.cache_data.clear()
@@ -270,19 +288,75 @@ if st.sidebar.button("🔄 Recarregar dados agora"):
 with st.spinner("Carregando base..."):
     df_base = carregar_base()
 
-# Seletor de dia
+# ---------- Seletor de PERÍODO ----------
+st.markdown("### 🗓️ Seleção de Período")
+modo = st.selectbox(
+    "Modo de período",
+    ["Dia único", "Vários dias (multiseleção)", "Semana", "Mês", "Intervalo personalizado"],
+    index=0
+)
+
 hoje = _tz_now().date()
-dia_selecionado = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
-df_dia = filtrar_por_dia(df_base, dia_selecionado)
-if df_dia.empty:
-    st.info("Nenhum atendimento encontrado para o dia selecionado.")
+todos_dias_disponiveis = sorted([d for d in df_base["Data_norm"].dropna().unique()])
+
+dias_selecionados = set()
+
+if modo == "Dia único":
+    d = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
+    dias_selecionados = {d}
+
+elif modo == "Vários dias (multiseleção)":
+    if not todos_dias_disponiveis:
+        st.info("Base sem datas válidas.")
+        st.stop()
+    mult = st.multiselect(
+        "Escolha um ou mais dias",
+        options=todos_dias_disponiveis,
+        default=[todos_dias_disponiveis[-1]],
+        format_func=lambda x: x.strftime("%d/%m/%Y")
+    )
+    dias_selecionados = set(mult)
+
+elif modo == "Semana":
+    d_ref = st.date_input("Escolha uma data de referência", value=hoje, format="DD/MM/YYYY")
+    ini, fim = _semana_completa(d_ref)
+    st.caption(f"Semana: {ini.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')} (Seg→Dom)")
+    dias_selecionados = {ini + timedelta(days=i) for i in range((fim - ini).days + 1)}
+
+elif modo == "Mês":
+    col_a, col_m = st.columns(2)
+    with col_a:
+        ano = st.number_input("Ano", min_value=2023, max_value=2100, value=hoje.year, step=1)
+    with col_m:
+        mes = st.number_input("Mês", min_value=1, max_value=12, value=hoje.month, step=1)
+    ini, fim = _dias_do_mes(int(ano), int(mes))
+    st.caption(f"Mês: {ini.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}")
+    dias_selecionados = {ini + timedelta(days=i) for i in range((fim - ini).days + 1)}
+
+elif modo == "Intervalo personalizado":
+    rng = st.date_input("Intervalo", value=(hoje, hoje), format="DD/MM/YYYY")
+    if isinstance(rng, (list, tuple)) and len(rng) == 2:
+        ini, fim = rng
+    else:
+        ini, fim = hoje, hoje
+    if ini > fim:
+        ini, fim = fim, ini
+    st.caption(f"Intervalo: {ini.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}")
+    dias_selecionados = {ini + timedelta(days=i) for i in range((fim - ini).days + 1)}
+
+# Filtra base pelo período
+df_periodo = filtrar_por_dias(df_base, dias_selecionados)
+label_periodo, file_stamp = _label_periodo(dias_selecionados)
+
+if df_periodo.empty:
+    st.info("Nenhum atendimento encontrado para a seleção.")
     st.stop()
 
 # Debug rápido
 st.sidebar.caption("Colunas 'Conferido' no cabeçalho: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
-st.sidebar.caption(f"Conferidos no dia: {int(df_dia['Conferido'].fillna(False).sum())}")
+st.sidebar.caption(f"Conferidos no período: {int(df_periodo['Conferido'].fillna(False).sum())}")
 
-# ====== KPIs ======
+# ====== KPIs (período) ======
 html("""
 <style>
 .metrics-wrap{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0}
@@ -300,26 +374,27 @@ html("""
 </style>
 """)
 
-df_v_top = df_dia[df_dia["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
+df_v_top = df_periodo[df_periodo["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
 _, _, rec_v_top, _ = kpis(df_v_top)
-cli, srv, rec, tkt = kpis(df_dia)
+cli, srv, rec, tkt = kpis(df_periodo)
 receita_salao = rec - (rec_v_top * 0.5)
 
+st.markdown(f"#### Período selecionado: **{label_periodo}**")
 html(
     '<div class="metrics-wrap">'
-    + card("👥 Clientes atendidos", f"{cli}")
+    + card("👥 Clientes únicos (regra por dia)", f"{cli}")
     + card("✂️ Serviços realizados", f"{srv}")
     + card("🧾 Ticket médio", format_moeda(tkt))
-    + card("💰 Receita do dia", format_moeda(rec))
+    + card("💰 Receita do período", format_moeda(rec))
     + card("🏢 Receita do salão (–50% Vinicius)", format_moeda(receita_salao))
     + "</div>"
 )
 st.markdown("---")
 
 # ===== Por Funcionário =====
-st.subheader("📊 Por Funcionário (dia selecionado)")
-df_j = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
-df_v = df_dia[df_dia["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
+st.subheader("📊 Por Funcionário (período selecionado)")
+df_j = df_periodo[df_periodo["Funcionário"].str.casefold() == FUNC_JPAULO.casefold()]
+df_v = df_periodo[df_periodo["Funcionário"].str.casefold() == FUNC_VINICIUS.casefold()]
 cli_j, srv_j, rec_j, tkt_j = kpis(df_j)
 cli_v, srv_v, rec_v, tkt_v = kpis(df_v)
 
@@ -327,7 +402,7 @@ col_j, col_v = st.columns(2)
 with col_j:
     html(f'<div class="section-h">{FUNC_JPAULO}</div>')
     html('<div class="metrics-wrap">' +
-         card("Clientes", f"{cli_j}") +
+         card("Clientes (regra por dia)", f"{cli_j}") +
          card("Serviços", f"{srv_j}") +
          card("🧾 Ticket médio", format_moeda(tkt_j)) +
          card("Receita", format_moeda(rec_j)) +
@@ -335,7 +410,7 @@ with col_j:
 with col_v:
     html(f'<div class="section-h">{FUNC_VINICIUS}</div>')
     html('<div class="metrics-wrap">' +
-         card("Clientes", f"{cli_v}") +
+         card("Clientes (regra por dia)", f"{cli_v}") +
          card("Serviços", f"{srv_v}") +
          card("🧾 Ticket médio", format_moeda(tkt_v)) +
          card("Receita", format_moeda(rec_v)) +
@@ -350,7 +425,7 @@ df_comp = pd.DataFrame([
 fig = px.bar(
     df_comp.melt(id_vars="Funcionário", var_name="Métrica", value_name="Quantidade"),
     x="Funcionário", y="Quantidade", color="Métrica", barmode="group",
-    title=f"Comparativo de atendimentos — {dia_selecionado.strftime('%d/%m/%Y')}"
+    title=f"Comparativo de atendimentos — {label_periodo}"
 )
 st.plotly_chart(fig, use_container_width=True)
 
@@ -358,9 +433,9 @@ st.plotly_chart(fig, use_container_width=True)
 # 🔎 MODO DE CONFERÊNCIA
 # ========================================================
 st.markdown("---")
-st.subheader("🧾 Conferência do dia (marcar conferido e excluir)")
+st.subheader("🧾 Conferência do período (marcar conferido e excluir)")
 
-df_conf = df_dia.copy()
+df_conf = df_periodo.copy()
 df_conf["Conferido"] = df_conf["Conferido"].apply(_to_bool).astype(bool)
 
 df_conf_view = df_conf[[
@@ -422,22 +497,22 @@ st.subheader("📤 Exportar para Mobills")
 export_only_unchecked = st.checkbox(
     "Exportar **apenas os NÃO conferidos**",
     value=True,
-    help="Desmarque para exportar TODOS os registros do dia."
+    help="Desmarque para exportar TODOS os registros do período."
 )
 
-df_export_base = df_dia.copy()
+df_export_base = df_periodo.copy()
 df_export_base["Conferido"] = df_export_base["Conferido"].apply(_to_bool).astype(bool)
 if export_only_unchecked:
     df_export_base = df_export_base[~df_export_base["Conferido"].fillna(False)]
 
 st.caption(
-    f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_dia)}** registros."
+    f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_periodo)}** registros."
 )
 
 # ===== Resumo por Cliente =====
-st.markdown("### Resumo por Cliente (dia selecionado)")
+st.markdown("### Resumo por Cliente (período selecionado)")
 grp_dia = (
-    df_dia
+    df_periodo
     .groupby("Cliente", as_index=False)
     .agg(Qtd_Serviços=("Serviço", "count"),
          Valor_Total=("Valor_num", "sum"))
@@ -508,12 +583,12 @@ else:
     st.markdown("**Prévia (Mobills)**")
     st.dataframe(df_mobills, use_container_width=True, hide_index=True)
 
-    # CSV (separador ';' p/ Mobills)
+    # CSV (Mobills usa ';')
     csv_bytes = df_mobills.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
         "⬇️ Baixar CSV (Mobills)",
         data=csv_bytes,
-        file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.csv",
+        file_name=f"Mobills_{file_stamp}.csv",
         mime="text/csv",
         type="primary"
     )
@@ -524,7 +599,7 @@ else:
         st.download_button(
             "⬇️ Baixar XLSX (Mobills)",
             data=xlsx_bytes,
-            file_name=f"Mobills_{dia_selecionado.strftime('%d-%m-%Y')}.xlsx",
+            file_name=f"Mobills_{file_stamp}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
