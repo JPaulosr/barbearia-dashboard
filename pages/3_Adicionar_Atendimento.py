@@ -356,9 +356,18 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
             f"• <b>Caixinha</b>: {qtd_dias_caixinha}× • <b>{_fmt_brl(total_caixinha)}</b>"
         )
 
-    sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(
-        ano, "\n".join(linhas_serv) if linhas_serv else "—"
-    )
+   # totais
+total_servicos = float(grp["total"].sum()) if not grp.empty else 0.0
+total_geral = total_servicos + total_caixinha
+
+# monta bloco "por serviço" + total no rodapé
+bloco_servicos = "\n".join(linhas_serv) if linhas_serv else "—"
+sec_serv = (
+    f"🧾 <b>{ano}: por serviço</b>\n"
+    f"{bloco_servicos}"
+    + ("\n\n" if linhas_serv else "\n") +
+    f"<i>Total ({ano}):</i> <b>{_fmt_brl(total_geral)}</b>"
+)
     # ---------- FIM DA PARTE ALTERADA ----------
 
     # Frequência por funcionário (mantido)
