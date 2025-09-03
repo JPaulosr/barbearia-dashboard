@@ -25,10 +25,9 @@ TZ = "America/Sao_Paulo"
 DATA_FMT = "%d/%m/%Y"
 FUNC_JPAULO = "JPaulo"
 FUNC_VINICIUS = "Vinicius"
-# Regra de unicidade Cliente+Dia a partir desta data (não altera receita)
 DATA_CORRETA = datetime(2025, 5, 11).date()
 
-# ============== GUARDS para páginas de teste (evita NameError) ==============
+# Guards para páginas de teste
 df_periodo = pd.DataFrame()
 label_periodo = "Sem dados"
 file_stamp = datetime.now().strftime("%d-%m-%Y")
@@ -71,14 +70,14 @@ def _conectar_sheets():
 def _headers_and_indices(ws):
     headers = ws.row_values(1)
     norms = [_norm_col(h) for h in headers]
-    idxs = [i for i, n in enumerate(norms) if n == "conferido"]  # 0-based
-    chosen = idxs[-1] if idxs else None  # SEMPRE a última
+    idxs = [i for i, n in enumerate(norms) if n == "conferido"]
+    chosen = idxs[-1] if idxs else None
     return headers, norms, idxs, chosen
 
 def _ensure_conferido_column(ws):
     headers, norms, idxs, chosen = _headers_and_indices(ws)
     if chosen is not None:
-        return chosen + 1  # 1-based
+        return chosen + 1
     col = len(headers) + 1
     ws.update_cell(1, col, "Conferido")
     return col
@@ -136,17 +135,15 @@ def carregar_base():
 
     base_cols = ["Data", "Serviço", "Valor", "Conta", "Cliente", "Combo",
                  "Funcionário", "Fase", "Hora Chegada", "Hora Início",
-                 "Hora Saída", "Hora Saída do Salão", "Tipo"]
+                 "Hora Saída", "Hora Saída do Salão", "Tipo",
+                 "CaixinhaDiaTotal", "Caixinha", "Gorjeta", "CaixinhaDia", "CaixinhaFundo"]
     for c in base_cols:
         if c not in df.columns:
             df[c] = None
 
-    # strings padronizadas
     for col in ["Cliente", "Serviço", "Funcionário", "Conta", "Combo", "Tipo", "Fase"]:
-        if col not in df.columns: df[col] = ""
         df[col] = df[col].astype(str).fillna("").str.strip()
 
-    # datas
     def parse_data(x):
         if pd.isna(x): return None
         if isinstance(x, (datetime, pd.Timestamp)): return x.date()
@@ -159,7 +156,6 @@ def carregar_base():
         return None
     df["Data_norm"] = df["Data"].apply(parse_data)
 
-    # valores
     def parse_valor(v):
         if pd.isna(v): return 0.0
         s = str(v).strip().replace("R$", "").replace(" ", "")
@@ -173,7 +169,6 @@ def carregar_base():
             return 0.0
     df["Valor_num"] = df["Valor"].apply(parse_valor)
 
-    # Conferido (sempre a última coluna 'Conferido' presente)
     conferido_map = _fetch_conferido_map(ws)
     df["Conferido"] = df["SheetRow"].map(lambda r: bool(conferido_map.get(int(r), False))).astype(bool)
 
@@ -190,11 +185,6 @@ def filtrar_por_dias(df, dias_set):
     return df[df["Data_norm"].isin(dias_set)].copy()
 
 def contar_clientes_periodo(df_periodo):
-    """
-    Regra:
-    - dia < DATA_CORRETA: conta linhas
-    - dia >= DATA_CORRETA: grupos únicos (Cliente, Data_norm)
-    """
     if df_periodo.empty:
         return 0
     total = 0
@@ -258,10 +248,6 @@ def card(label, val):
 
 # ---------- Caixinha helper ----------
 def _first_caixinha_val(row):
-    """
-    Pega o 1º valor disponível nas colunas conhecidas de caixinha.
-    Ordem de preferência: CaixinhaDiaTotal, Caixinha, Gorjeta, CaixinhaDia, CaixinhaFundo
-    """
     prefer = ["CaixinhaDiaTotal", "Caixinha", "Gorjeta", "CaixinhaDia", "CaixinhaFundo"]
     for c in prefer:
         if c in row and pd.notna(row[c]) and str(row[c]).strip() != "":
@@ -278,7 +264,7 @@ def _first_caixinha_val(row):
 
 # ============= Seletor de período =============
 def _semana_completa(d: date):
-    dow = d.weekday()  # 0=Seg
+    dow = d.weekday()
     ini = d - timedelta(days=dow)
     fim = ini + timedelta(days=6)
     return ini, fim
@@ -322,13 +308,11 @@ modo = st.selectbox(
 
 hoje = _tz_now().date()
 todos_dias_disponiveis = sorted([d for d in df_base["Data_norm"].dropna().unique()])
-
 dias_selecionados = set()
 
 if modo == "Dia único":
     d = st.date_input("Dia", value=hoje, format="DD/MM/YYYY")
     dias_selecionados = {d}
-
 elif modo == "Vários dias (multiseleção)":
     if not todos_dias_disponiveis:
         st.info("Base sem datas válidas.")
@@ -340,13 +324,11 @@ elif modo == "Vários dias (multiseleção)":
         format_func=lambda x: x.strftime("%d/%m/%Y")
     )
     dias_selecionados = set(mult)
-
 elif modo == "Semana":
     d_ref = st.date_input("Escolha uma data de referência", value=hoje, format="DD/MM/YYYY")
     ini, fim = _semana_completa(d_ref)
     st.caption(f"Semana: {ini.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')} (Seg→Dom)")
     dias_selecionados = {ini + timedelta(days=i) for i in range((fim - ini).days + 1)}
-
 elif modo == "Mês":
     col_a, col_m = st.columns(2)
     with col_a:
@@ -356,7 +338,6 @@ elif modo == "Mês":
     ini, fim = _dias_do_mes(int(ano), int(mes))
     st.caption(f"Mês: {ini.strftime('%d/%m/%Y')} a {fim.strftime('%d/%m/%Y')}")
     dias_selecionados = {ini + timedelta(days=i) for i in range((fim - ini).days + 1)}
-
 elif modo == "Intervalo personalizado":
     rng = st.date_input("Intervalo", value=(hoje, hoje), format="DD/MM/YYYY")
     if isinstance(rng, (list, tuple)) and len(rng) == 2:
@@ -376,10 +357,6 @@ if df_periodo.empty:
     st.info("Nenhum atendimento encontrado para a seleção.")
     st.stop()
 
-# Debug rápido
-st.sidebar.caption("Colunas 'Conferido' no cabeçalho: " + ", ".join(df_base.attrs.get("__conferido_sources__", ["<nenhuma>"])))
-st.sidebar.caption(f"Conferidos no período: {int(df_periodo['Conferido'].fillna(False).sum())}")
-
 # ====== KPIs (período) ======
 html("""
 <style>
@@ -398,23 +375,27 @@ html("""
 </style>
 """)
 
+# Caixinha por linha e total do JPaulo para os KPIs
+df_periodo["__cx__"] = df_periodo.apply(_first_caixinha_val, axis=1)
+cx_total_jp = df_periodo.loc[
+    df_periodo["Funcionário"].astype(str).str.casefold() == FUNC_JPAULO.casefold(),
+    "__cx__"
+].sum()
+
 df_v_top = df_periodo[df_periodo["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
 _, _, rec_v_top, _ = kpis(df_v_top)
 
-cli, srv, rec, tkt = kpis(df_periodo)          # rec = soma de Valor_num
-rec_total_kpi = rec + cx_total_jp               # agora entra a caixinha do JP
-
-# Se quiser que o ticket NÃO some caixinha, troque 'tkt' no card e mantenha este cálculo só para o card de receita.
-# Aqui vou manter o ticket original (sem caixinha) e somar caixinha apenas no card "Receita do período".
-receita_salao = (rec - (rec_v_top * 0.5)) + cx_total_jp  # opcional: também soma caixinha do JP no salão
+cli, srv, rec, tkt = kpis(df_periodo)     # rec = soma de Valor_num
+rec_total_kpi = rec + cx_total_jp         # receita do período inclui caixinha do JPaulo
+receita_salao = (rec - (rec_v_top * 0.5)) + cx_total_jp  # opcionalmente soma caixinha do JP no salão
 
 st.markdown(f"#### Período selecionado: **{label_periodo}**")
 html(
     '<div class="metrics-wrap">'
     + card("👥 Clientes únicos (regra por dia)", f"{cli}")
     + card("✂️ Serviços realizados", f"{srv}")
-    + card("🧾 Ticket médio", format_moeda(tkt))
-    + card("💰 Receita do período", format_moeda(rec))
+    + card("🧾 Ticket médio", format_moeda(tkt))  # ticket sem caixinha (como combinado)
+    + card("💰 Receita do período", format_moeda(rec_total_kpi))
     + card("🏢 Receita do salão (–50% Vinicius)", format_moeda(receita_salao))
     + "</div>"
 )
@@ -464,35 +445,25 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 st.subheader("🧾 Conferência do período (marcar conferido e excluir)")
 
-# base do período
 df_conf = df_periodo.copy()
 df_conf["Conferido"] = df_conf["Conferido"].apply(_to_bool).astype(bool)
 
-# --- indicadores de caixinha ---
-# valor numérico (lê CaixinhaDiaTotal / Caixinha / Gorjeta / CaixinhaDia / CaixinhaFundo)
+# --- Caixinha (coluna única compacta) ---
 df_conf["Caixinha_num"] = df_conf.apply(_first_caixinha_val, axis=1)
-
-# se quiser considerar só JPaulo nas flags, troque a linha abaixo pela comentada
-tem_cx_mask = df_conf["Caixinha_num"] > 0
-# tem_cx_mask = (df_conf["Caixinha_num"] > 0) & (df_conf["Funcionário"].astype(str).str.casefold() == FUNC_JPAULO.casefold())
-
-df_conf["TemCaixinha"] = tem_cx_mask
-df_conf["Caixinha (R$)"] = df_conf["Caixinha_num"].apply(
-    lambda v: "" if v <= 0 else f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+df_conf["Caixinha"] = df_conf["Caixinha_num"].apply(
+    lambda v: "" if v <= 0 else "💝 " + f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 )
-df_conf["💝"] = df_conf["TemCaixinha"].map(lambda b: "💝" if b else "")
 
-# --- view para edição ---
 df_conf_view = df_conf[[
     "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta",
-    "💝", "Caixinha (R$)", "Conferido"
+    "Caixinha", "Conferido"
 ]].copy()
 df_conf_view["Excluir"] = False
 
-# --- filtro opcional: mostrar só quem tem caixinha ---
+# filtro opcional
 mostrar_so_com_caixinha = st.checkbox("Mostrar **apenas** linhas com caixinha", value=False)
 if mostrar_so_com_caixinha:
-    df_conf_view = df_conf_view[df_conf_view["💝"] == "💝"].copy()
+    df_conf_view = df_conf_view[df_conf_view["Caixinha"] != ""].copy()
 
 st.caption("Edite **Conferido** e/ou marque **Excluir**. Depois clique em **Aplicar mudanças**.")
 edited = st.data_editor(
@@ -506,8 +477,7 @@ edited = st.data_editor(
         "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True, width="small"),
         "Valor": st.column_config.TextColumn("Valor", disabled=True, width="small"),
         "Conta": st.column_config.TextColumn("Conta", disabled=True, width="small"),
-        "💝": st.column_config.TextColumn("💝", disabled=True, help="Indicador visual de caixinha"),
-        "Caixinha (R$)": st.column_config.TextColumn("Caixinha (R$)", disabled=True, help="Valor detectado de caixinha/gorjeta"),
+        "Caixinha": st.column_config.TextColumn("Caixinha", disabled=True, help="💝 + valor quando houver"),
         "Conferido": st.column_config.CheckboxColumn("Conferido"),
         "Excluir": st.column_config.CheckboxColumn("Excluir"),
     },
@@ -562,7 +532,7 @@ st.caption(
     f"Selecionados para exportação: **{len(df_export_base)}** de **{len(df_periodo)}** registros."
 )
 
-# ===== Resumo por Cliente (do período, informativo) =====
+# ===== Resumo por Cliente (informativo) =====
 st.markdown("### Resumo por Cliente (período selecionado)")
 grp_dia = (
     df_periodo
@@ -578,7 +548,7 @@ st.dataframe(
     hide_index=True
 )
 
-# --- Checkbox para incluir caixinha do JPaulo
+# --- Checkbox para incluir caixinha do JPaulo na exportação
 incluir_caixinha_jp = st.checkbox(
     "➕ Incluir **Caixinha (JPaulo)** na exportação",
     value=True,
