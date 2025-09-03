@@ -308,6 +308,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00",
                 f"🧾 <b>{ano}: por serviço</b>\n—")
 
+    # Números base
     d["Valor"] = pd.to_numeric(d.get("Valor", 0), errors="coerce").fillna(0.0)
     if "CaixinhaDia" not in d.columns:
         d["CaixinhaDia"] = 0.0
@@ -317,6 +318,14 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     total_caixinha = float(d["CaixinhaDia"].sum())
     total_com_caixinha = total_servicos + total_caixinha
 
+    # Contagem de dias com caixinha
+    cx_por_dia = (
+        d.assign(dia=d["_dt"].dt.date)
+         .groupby("dia", as_index=False)["CaixinhaDia"].sum()
+    )
+    qtd_dias_caixinha = int((cx_por_dia["CaixinhaDia"] > 0).sum())
+
+    # 📚 Cabeçalho anual
     sec_hist = (
         "📚 <b>Histórico por ano</b>\n"
         f"{ano}: <b>{_fmt_brl(total_com_caixinha)}</b>\n"
@@ -324,14 +333,12 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         f"• Caixinha: {_fmt_brl(total_caixinha)}"
     )
 
-    # ---------- AQUI É A PARTE ALTERADA ----------
-        # --- POR SERVIÇO (uma linha por serviço) ---
+    # 🧾 Por serviço (uma linha por serviço)
     grp = (
         d.dropna(subset=["Serviço"])
          .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
          .groupby("Serviço", as_index=False)
-         .agg(qtd=("Serviço", "count"),
-              total=("Valor", "sum"))
+         .agg(qtd=("Serviço", "count"), total=("Valor", "sum"))
          .sort_values(["total", "qtd"], ascending=[False, False])
     )
 
@@ -341,33 +348,36 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
             f"• <b>{r['Serviço']}</b>: {int(r['qtd'])}× • <b>{_fmt_brl(float(r['total']))}</b>"
         )
 
-    # --- C A I X I N H A  como item próprio no detalhamento ---
-    # total de caixinha no ano e quantos dias tiveram caixinha > 0
-    cx_por_dia = (
-        d.assign(dia=d["_dt"].dt.date)
-         .groupby("dia", as_index=False)["CaixinhaDia"].sum()
-    )
-    qtd_dias_caixinha = int((cx_por_dia["CaixinhaDia"] > 0).sum())
-    total_caixinha = float(d["CaixinhaDia"].sum())
-
-    # adiciona como "serviço" no fim da lista
+    # Caixinha como item próprio no mesmo padrão
     if qtd_dias_caixinha > 0 or total_caixinha > 0:
         linhas_serv.append(
             f"• <b>Caixinha</b>: {qtd_dias_caixinha}× • <b>{_fmt_brl(total_caixinha)}</b>"
         )
 
-   # totais
-total_servicos = float(grp["total"].sum()) if not grp.empty else 0.0
-total_geral = total_servicos + total_caixinha
+    # Rodapé com Total (ano) = serviços + caixinha
+    total_geral = float(grp["total"].sum() if not grp.empty else 0.0) + total_caixinha
+    bloco_servicos = "\n".join(linhas_serv) if linhas_serv else "—"
+    sec_serv = (
+        f"🧾 <b>{ano}: por serviço</b>\n"
+        f"{bloco_servicos}"
+        + ("\n\n" if linhas_serv else "\n")
+        + f"<i>Total ({ano}):</i> <b>{_fmt_brl(total_geral)}</b>"
+    )
 
-# monta bloco "por serviço" + total no rodapé
-bloco_servicos = "\n".join(linhas_serv) if linhas_serv else "—"
-sec_serv = (
-    f"🧾 <b>{ano}: por serviço</b>\n"
-    f"{bloco_servicos}"
-    + ("\n\n" if linhas_serv else "\n") +
-    f"<i>Total ({ano}):</i> <b>{_fmt_brl(total_geral)}</b>"
-)
+    # 👥 Frequência por funcionário
+    freq_dias = Counter()
+    for dia, bloco in d.groupby(d["_dt"].dt.date):
+        func_most = (bloco["Funcionário"].astype(str).str.strip()
+                     .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
+        if func_most in ["JPaulo", "Vinicius"]:
+            freq_dias[func_most] += 1
+    if freq_dias:
+        ordem = ["JPaulo", "Vinicius"]
+        linhas_func = [f"{f}: <b>{freq_dias.get(f,0)}</b> visita(s)" for f in ordem]
+        sec_serv += "\n\n👥 <b>Frequência por funcionário</b>\n" + "\n".join(linhas_func)
+
+    return sec_hist, sec_serv
+
     # ---------- FIM DA PARTE ALTERADA ----------
 
     # Frequência por funcionário (mantido)
