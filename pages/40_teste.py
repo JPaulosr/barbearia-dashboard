@@ -308,7 +308,6 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00",
                 f"🧾 <b>{ano}: por serviço</b>\n—")
 
-    # Números
     d["Valor"] = pd.to_numeric(d.get("Valor", 0), errors="coerce").fillna(0.0)
     if "CaixinhaDia" not in d.columns:
         d["CaixinhaDia"] = 0.0
@@ -318,7 +317,6 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     total_caixinha = float(d["CaixinhaDia"].sum())
     total_com_caixinha = total_servicos + total_caixinha
 
-    # 📚 Histórico por ano — TOTAL JÁ SOMANDO CAIXINHA
     sec_hist = (
         "📚 <b>Histórico por ano</b>\n"
         f"{ano}: <b>{_fmt_brl(total_com_caixinha)}</b>\n"
@@ -326,7 +324,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         f"• Caixinha: {_fmt_brl(total_caixinha)}"
     )
 
-    # 🧾 Por serviço — cada info em UMA LINHA
+    # ---------- AQUI É A PARTE ALTERADA ----------
     grp = (
         d.dropna(subset=["Serviço"])
          .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
@@ -339,16 +337,16 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
 
     linhas_serv = []
     for _, r in grp.iterrows():
-        linhas_serv.append(f"• <b>{r['Serviço']}</b>")
-        linhas_serv.append(f"   Quantidade: <b>{int(r['qtd'])}×</b>")
-        linhas_serv.append(f"   Total: <b>{_fmt_brl(float(r['total']))}</b>")
+        linha = f"• <b>{r['Serviço']}</b>: {int(r['qtd'])}× • <b>{_fmt_brl(float(r['total']))}</b>"
         if float(r["cx"]) > 0:
-            linhas_serv.append(f"   Caixinha: <b>{_fmt_brl(float(r['cx']))}</b>")
-        linhas_serv.append("")  # separador
+            linha += f" • Caixinha: <b>{_fmt_brl(float(r['cx']))}</b>"
+        linhas_serv.append(linha)
 
-    sec_serv = f"🧾 <b>{ano}: por serviço</b>\n" + ("\n".join(linhas_serv).rstrip() if linhas_serv else "—")
+    sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
+    # ---------- FIM DA PARTE ALTERADA ----------
 
-    # 👥 Frequência por funcionário
+    # Frequência por funcionário (mantido)
+    from collections import Counter
     freq_dias = Counter()
     for dia, bloco in d.groupby(d["_dt"].dt.date):
         func_most = (bloco["Funcionário"].astype(str).str.strip()
