@@ -325,24 +325,40 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     )
 
     # ---------- AQUI É A PARTE ALTERADA ----------
+        # --- POR SERVIÇO (uma linha por serviço) ---
     grp = (
         d.dropna(subset=["Serviço"])
          .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
          .groupby("Serviço", as_index=False)
          .agg(qtd=("Serviço", "count"),
-              total=("Valor", "sum"),
-              cx=("CaixinhaDia", "sum"))
+              total=("Valor", "sum"))
          .sort_values(["total", "qtd"], ascending=[False, False])
     )
 
     linhas_serv = []
     for _, r in grp.iterrows():
-        linha = f"• <b>{r['Serviço']}</b>: {int(r['qtd'])}× • <b>{_fmt_brl(float(r['total']))}</b>"
-        if float(r["cx"]) > 0:
-            linha += f" • Caixinha: <b>{_fmt_brl(float(r['cx']))}</b>"
-        linhas_serv.append(linha)
+        linhas_serv.append(
+            f"• <b>{r['Serviço']}</b>: {int(r['qtd'])}× • <b>{_fmt_brl(float(r['total']))}</b>"
+        )
 
-    sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
+    # --- C A I X I N H A  como item próprio no detalhamento ---
+    # total de caixinha no ano e quantos dias tiveram caixinha > 0
+    cx_por_dia = (
+        d.assign(dia=d["_dt"].dt.date)
+         .groupby("dia", as_index=False)["CaixinhaDia"].sum()
+    )
+    qtd_dias_caixinha = int((cx_por_dia["CaixinhaDia"] > 0).sum())
+    total_caixinha = float(d["CaixinhaDia"].sum())
+
+    # adiciona como "serviço" no fim da lista
+    if qtd_dias_caixinha > 0 or total_caixinha > 0:
+        linhas_serv.append(
+            f"• <b>Caixinha</b>: {qtd_dias_caixinha}× • <b>{_fmt_brl(total_caixinha)}</b>"
+        )
+
+    sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(
+        ano, "\n".join(linhas_serv) if linhas_serv else "—"
+    )
     # ---------- FIM DA PARTE ALTERADA ----------
 
     # Frequência por funcionário (mantido)
