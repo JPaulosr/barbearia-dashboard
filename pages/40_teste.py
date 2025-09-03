@@ -459,13 +459,35 @@ st.plotly_chart(fig, use_container_width=True)
 st.markdown("---")
 st.subheader("🧾 Conferência do período (marcar conferido e excluir)")
 
+# base do período
 df_conf = df_periodo.copy()
 df_conf["Conferido"] = df_conf["Conferido"].apply(_to_bool).astype(bool)
 
+# --- indicadores de caixinha ---
+# valor numérico (lê CaixinhaDiaTotal / Caixinha / Gorjeta / CaixinhaDia / CaixinhaFundo)
+df_conf["Caixinha_num"] = df_conf.apply(_first_caixinha_val, axis=1)
+
+# se quiser considerar só JPaulo nas flags, troque a linha abaixo pela comentada
+tem_cx_mask = df_conf["Caixinha_num"] > 0
+# tem_cx_mask = (df_conf["Caixinha_num"] > 0) & (df_conf["Funcionário"].astype(str).str.casefold() == FUNC_JPAULO.casefold())
+
+df_conf["TemCaixinha"] = tem_cx_mask
+df_conf["Caixinha (R$)"] = df_conf["Caixinha_num"].apply(
+    lambda v: "" if v <= 0 else f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+)
+df_conf["💝"] = df_conf["TemCaixinha"].map(lambda b: "💝" if b else "")
+
+# --- view para edição ---
 df_conf_view = df_conf[[
-    "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta", "Conferido"
+    "SheetRow", "Cliente", "Serviço", "Funcionário", "Valor", "Conta",
+    "💝", "Caixinha (R$)", "Conferido"
 ]].copy()
 df_conf_view["Excluir"] = False
+
+# --- filtro opcional: mostrar só quem tem caixinha ---
+mostrar_so_com_caixinha = st.checkbox("Mostrar **apenas** linhas com caixinha", value=False)
+if mostrar_so_com_caixinha:
+    df_conf_view = df_conf_view[df_conf_view["💝"] == "💝"].copy()
 
 st.caption("Edite **Conferido** e/ou marque **Excluir**. Depois clique em **Aplicar mudanças**.")
 edited = st.data_editor(
@@ -473,12 +495,14 @@ edited = st.data_editor(
     use_container_width=True,
     hide_index=True,
     column_config={
-        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Nº real no Sheets", disabled=True),
+        "SheetRow": st.column_config.NumberColumn("SheetRow", help="Nº real no Sheets", disabled=True, width="small"),
         "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
         "Serviço": st.column_config.TextColumn("Serviço", disabled=True),
-        "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True),
-        "Valor": st.column_config.TextColumn("Valor", disabled=True),
-        "Conta": st.column_config.TextColumn("Conta", disabled=True),
+        "Funcionário": st.column_config.TextColumn("Funcionário", disabled=True, width="small"),
+        "Valor": st.column_config.TextColumn("Valor", disabled=True, width="small"),
+        "Conta": st.column_config.TextColumn("Conta", disabled=True, width="small"),
+        "💝": st.column_config.TextColumn("💝", disabled=True, help="Indicador visual de caixinha"),
+        "Caixinha (R$)": st.column_config.TextColumn("Caixinha (R$)", disabled=True, help="Valor detectado de caixinha/gorjeta"),
         "Conferido": st.column_config.CheckboxColumn("Conferido"),
         "Excluir": st.column_config.CheckboxColumn("Excluir"),
     },
