@@ -308,7 +308,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00",
                 f"🧾 <b>{ano}: por serviço</b>\n—")
 
-    # Números base
+    # Conversões numéricas
     d["Valor"] = pd.to_numeric(d.get("Valor", 0), errors="coerce").fillna(0.0)
     if "CaixinhaDia" not in d.columns:
         d["CaixinhaDia"] = 0.0
@@ -318,7 +318,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     total_caixinha = float(d["CaixinhaDia"].sum())
     total_com_caixinha = total_servicos + total_caixinha
 
-    # Contagem de dias com caixinha
+    # Dias com caixinha
     cx_por_dia = (
         d.assign(dia=d["_dt"].dt.date)
          .groupby("dia", as_index=False)["CaixinhaDia"].sum()
@@ -364,16 +364,17 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         + f"<i>Total ({ano}):</i> <b>{_fmt_brl(total_geral)}</b>"
     )
 
-    # 👥 Frequência por funcionário
-    freq_dias = Counter()
-    for dia, bloco in d.groupby(d["_dt"].dt.date):
-        func_most = (bloco["Funcionário"].astype(str).str.strip()
-                     .value_counts(dropna=False).idxmax() if not bloco.empty else "-")
-        if func_most in ["JPaulo", "Vinicius"]:
-            freq_dias[func_most] += 1
-    if freq_dias:
+    # 👥 Frequência por funcionário (sem Counter)
+    visitas_por_dia = (
+        d.assign(dia=d["_dt"].dt.date,
+                 func=d["Funcionário"].astype(str).str.strip())
+         .groupby("dia")["func"]
+         .agg(lambda s: s.value_counts(dropna=False).idxmax())
+    )
+    if not visitas_por_dia.empty:
+        contagem = visitas_por_dia.value_counts()
         ordem = ["JPaulo", "Vinicius"]
-        linhas_func = [f"{f}: <b>{freq_dias.get(f,0)}</b> visita(s)" for f in ordem]
+        linhas_func = [f"{f}: <b>{int(contagem.get(f, 0))}</b> visita(s)" for f in ordem]
         sec_serv += "\n\n👥 <b>Frequência por funcionário</b>\n" + "\n".join(linhas_func)
 
     return sec_hist, sec_serv
