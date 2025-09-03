@@ -400,8 +400,13 @@ html("""
 
 df_v_top = df_periodo[df_periodo["Funcionário"].astype(str).str.casefold() == FUNC_VINICIUS.casefold()]
 _, _, rec_v_top, _ = kpis(df_v_top)
-cli, srv, rec, tkt = kpis(df_periodo)
-receita_salao = rec - (rec_v_top * 0.5)
+
+cli, srv, rec, tkt = kpis(df_periodo)          # rec = soma de Valor_num
+rec_total_kpi = rec + cx_total_jp               # agora entra a caixinha do JP
+
+# Se quiser que o ticket NÃO some caixinha, troque 'tkt' no card e mantenha este cálculo só para o card de receita.
+# Aqui vou manter o ticket original (sem caixinha) e somar caixinha apenas no card "Receita do período".
+receita_salao = (rec - (rec_v_top * 0.5)) + cx_total_jp  # opcional: também soma caixinha do JP no salão
 
 st.markdown(f"#### Período selecionado: **{label_periodo}**")
 html(
