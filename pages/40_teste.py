@@ -307,26 +307,45 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
     d = d[d["ano"] == ano].copy()
 
     if d.empty:
-        return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00", f"🧾 <b>{ano}: por serviço</b>\n—")
+        return (f"📚 <b>Histórico por ano</b>\n{ano}: R$ 0,00",
+                f"🧾 <b>{ano}: por serviço</b>\n—")
 
-    d["Valor"] = pd.to_numeric(d["Valor"], errors="coerce").fillna(0.0)
+    # Números
+    d["Valor"] = pd.to_numeric(d.get("Valor", 0), errors="coerce").fillna(0.0)
+    if "CaixinhaDia" not in d.columns:
+        d["CaixinhaDia"] = 0.0
+    d["CaixinhaDia"] = pd.to_numeric(d["CaixinhaDia"], errors="coerce").fillna(0.0)
 
     total_ano = float(d["Valor"].sum())
-    sec_hist = "📚 <b>Histórico por ano</b>\n" + f"{ano}: <b>{_fmt_brl(total_ano)}</b>"
+    total_cx_ano = float(d["CaixinhaDia"].sum())
 
+    # Bloco "Histórico por ano" — agora com Caixinha
+    sec_hist = "📚 <b>Histórico por ano</b>\n"
+    sec_hist += f"{ano}: <b>{_fmt_brl(total_ano)}</b>"
+    if total_cx_ano > 0:
+        sec_hist += f" · Caixinha: <b>{_fmt_brl(total_cx_ano)}</b>"
+
+    # Por serviço — inclui caixinha por serviço (soma na(s) linha(s) daquele serviço)
     grp = (
         d.dropna(subset=["Serviço"])
          .assign(Serviço=lambda x: x["Serviço"].astype(str).str.strip())
          .groupby("Serviço", as_index=False)
-         .agg(qtd=("Serviço", "count"), total=("Valor", "sum"))
+         .agg(qtd=("Serviço", "count"),
+              total=("Valor", "sum"),
+              cx=("CaixinhaDia", "sum"))
          .sort_values(["total", "qtd"], ascending=[False, False])
     )
-    linhas_serv = [
-        f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>{_fmt_brl(float(r['total']))}</b>"
-        for _, r in grp.iterrows()
-    ]
-    sec_serv = "🧾 <b>{}: por serviço</b>\n{}".format(ano, "\n".join(linhas_serv) if linhas_serv else "—")
 
+    linhas_serv = []
+    for _, r in grp.iterrows():
+        linha = f"{r['Serviço']}: <b>{int(r['qtd'])}×</b> • <b>{_fmt_brl(float(r['total']))}</b>"
+        if float(r["cx"]) > 0:
+            linha += f" · Caixinha: <b>{_fmt_brl(float(r['cx']))}</b>"
+        linhas_serv.append(linha)
+
+    sec_serv = f"🧾 <b>{ano}: por serviço</b>\n" + ("\n".join(linhas_serv) if linhas_serv else "—")
+
+    # Frequência por funcionário (mantido)
     freq_dias = Counter()
     for dia, bloco in d.groupby(d["_dt"].dt.date):
         func_most = (bloco["Funcionário"].astype(str).str.strip()
