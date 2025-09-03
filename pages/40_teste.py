@@ -346,7 +346,7 @@ def _year_sections_for_jpaulo(df_all: pd.DataFrame, cliente: str, ano: int) -> t
         linhas_serv.append(f"   Total: <b>{_fmt_brl(float(r['total']))}</b>")
         if float(r["cx"]) > 0:
             linhas_serv.append(f"   Caixinha: <b>{_fmt_brl(float(r['cx']))}</b>")
-        linhas_serv.append("")  # linha em branco entre serviços
+        linhas_serv.append("")  # separador
 
     sec_serv = f"🧾 <b>{ano}: por serviço</b>\n" + ("\n".join(linhas_serv).rstrip() if linhas_serv else "—")
 
@@ -695,6 +695,12 @@ if not modo_lote:
     periodo_opcao = st.selectbox("Período do Atendimento", ["Manhã", "Tarde", "Noite"],
                                  index=["Manhã", "Tarde", "Noite"].index(sug_periodo))
 
+    # --------- garantias de estado para os botões ---------
+    if "combo_salvo" not in st.session_state:
+        st.session_state.combo_salvo = False
+    if "simples_salvo" not in st.session_state:
+        st.session_state.simples_salvo = False
+
     ultimo = df_existente[df_existente["Cliente"] == cliente]
     ultimo = ultimo.sort_values("Data", ascending=False).iloc[0] if not ultimo.empty else None
     combo = ""
@@ -746,16 +752,14 @@ if not modo_lote:
                 taxa_pct = (taxa_val / total_bruto_combo * 100.0) if total_bruto_combo > 0 else 0.0
                 st.caption(f"Taxa estimada: {_fmt_brl(taxa_val)} ({taxa_pct:.2f}%)")
 
-        if "combo_salvo" not in st.session_state:
-            st.session_state.combo_salvo = False
-        if "simples_salvo" not in st.session_state:
-            st.session_state.simples_salvo = False
-        if st.button("🧹 Limpar formulário"):
+        if st.button("🧹 Limpar formulário", key="btn_limpar"):
             st.session_state.combo_salvo = False
             st.session_state.simples_salvo = False
             st.rerun()
 
-        if not st.session_state.combo_salvo and st.button("✅ Confirmar e Salvar Combo"):
+        # >>>>>> CORREÇÃO DO BOTÃO
+        btn_combo = st.button("✅ Confirmar e Salvar Combo", key="btn_salvar_combo")
+        if btn_combo and not st.session_state.combo_salvo:
             duplicado = any(ja_existe_atendimento(cliente, data, _cap_first(s), combo) for s in combo.split("+"))
             if duplicado:
                 st.warning("⚠️ Combo já registrado para este cliente e data.")
@@ -887,7 +891,9 @@ if not modo_lote:
         if "simples_salvo" not in st.session_state:
             st.session_state.simples_salvo = False
 
-        if not st.session_state.simples_salvo and st.button("📁 Salvar Atendimento"):
+        # >>>>>> CORREÇÃO DO BOTÃO
+        btn_simples = st.button("📁 Salvar Atendimento", key="btn_salvar_simples")
+        if btn_simples and not st.session_state.simples_salvo:
             servico_norm = _cap_first(servico)
             if ja_existe_atendimento(cliente, data, servico_norm):
                 st.warning("⚠️ Atendimento já registrado para este cliente, data e serviço.")
@@ -952,7 +958,7 @@ else:
                 st.image(foto_url, caption=cli, width=200)
 
             st.subheader(f"⚙️ Atendimento para {cli}")
-            sug_conta, sug_periodo, sug_func = sugestões = sugestoes_do_cliente(
+            sug_conta, sug_periodo, sug_func = sugestoes_do_cliente(
                 df_existente, cli, conta_global, periodo_global, funcionario_global
             )
 
