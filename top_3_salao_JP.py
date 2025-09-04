@@ -1,4 +1,4 @@
-# top_3_salao_JP.py — ranking por VALOR (exibe só atendimentos) + feedback de movimentação
+# top_10_salao_JP.py — Top 10 (inclui caixinha JP+Vinicius) + Top 3 Famílias + feedback de movimentação
 import os, json, html, unicodedata, requests
 import pandas as pd
 import gspread
@@ -12,13 +12,13 @@ TZ = "America/Sao_Paulo"
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_BASE = "Base de Dados"
 ABA_STATUS = "clientes_status"
-ABA_CACHE = "premiacao_cache"   # onde salvamos o snapshot do Top 3
+ABA_CACHE = "premiacao_cache"   # snapshot do Top10/Famílias
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")            # defina nos secrets/vars
-TELEGRAM_CHAT_ID = "-1002953102982"                     # canal fixo
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = "-1002953102982"
 LOGO_PADRAO = "https://res.cloudinary.com/db8ipmete/image/upload/v1752463905/Logo_sal%C3%A3o_kz9y9c.png"
 
-GCP_SERVICE_ACCOUNT = json.loads(os.getenv("GCP_SERVICE_ACCOUNT"))  # JSON completo
+GCP_SERVICE_ACCOUNT = json.loads(os.getenv("GCP_SERVICE_ACCOUNT"))
 
 # ===== Helpers =====
 def now_br_dt():
@@ -75,7 +75,7 @@ ws_base = abas[ABA_BASE]
 df = get_as_dataframe(ws_base).dropna(how="all")
 df.columns = [c.strip() for c in df.columns]
 
-# saneamento
+# saneamento mínimo
 for col in ("Cliente","Data","Funcionário","Valor"):
     if col not in df.columns:
         raise SystemExit(f"Coluna obrigatória ausente: {col}")
@@ -85,12 +85,32 @@ df = df[(df["Cliente"]!="") &
         (~df["Cliente"].str.lower().isin(["nan","none"])) &
         (~df["Cliente"].str.lower().str.contains(GENERIC_RE, regex=True))]
 
-df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
-df["Data"]  = pd.to_datetime(df["Data"], errors="coerce")
-df = df.dropna(subset=["Data"])
+def _to_num(series):
+    return (pd.to_numeric(
+        series.astype(str)
+              .str.replace(r"[^\d,.\-]", "", regex=True)  # remove R$, espaços etc.
+              .str.replace(".", "", regex=False)          # milhar
+              .str.replace(",", ".", regex=False),        # vírgula -> ponto
+        errors="coerce"
+    ).fillna(0.0))
 
-# normaliza para data (1 atendimento por dia)
+# numéricos
+df["Valor"] = _to_num(df["Valor"])
+
+# caixinha/gorjeta — contar SEMPRE (JP + Vinicius)
+CAIXINHA_COLS = ["CaixinhaDiaTotal","CaixinhaDia","Caixinha","Gorjeta","Caixinha_Fundo","CaixinhaFundo"]
+for c in CAIXINHA_COLS:
+    if c in df.columns:
+        df[c] = _to_num(df[c])
+    else:
+        df[c] = 0.0
+
+df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+df = df.dropna(subset=["Data"])
 df["_data_dia"] = df["Data"].dt.date
+
+# valor considerado (Valor + TODAS as caixinhas)
+df["_ValorConsiderado"] = df["Valor"] + df[CAIXINHA_COLS].sum(axis=1)
 
 # ===== Fotos (clientes) =====
 foto_map = {}
@@ -110,36 +130,23 @@ if ABA_STATUS in abas:
 def foto_de(nome: str) -> str:
     return foto_map.get(_norm(nome), LOGO_PADRAO)
 
-# ===== Ranking base: por VALOR (cliente+dia -> sum Valor; depois somar por cliente) =====
+# ===== Ranking base: por _ValorConsiderado (cliente+dia -> soma; depois por cliente) =====
 def build_ranking(df_base: pd.DataFrame) -> pd.DataFrame:
     if df_base.empty:
         return pd.DataFrame(columns=["Cliente","total_gasto","atendimentos"])
-    por_dia = (df_base.groupby(["Cliente","_data_dia"], as_index=False)["Valor"].sum())
-    tot = por_dia.groupby("Cliente", as_index=False)["Valor"].sum().rename(columns={"Valor":"total_gasto"})
+    por_dia = (df_base.groupby(["Cliente","_data_dia"], as_index=False)["_ValorConsiderado"].sum())
+    tot = por_dia.groupby("Cliente", as_index=False)["_ValorConsiderado"].sum().rename(columns={"_ValorConsiderado":"total_gasto"})
     atend = por_dia.groupby("Cliente", as_index=False)["_data_dia"].nunique().rename(columns={"_data_dia":"atendimentos"})
-    out = tot.merge(atend, on="Cliente", how="left")
-    out = out.sort_values("total_gasto", ascending=False)
+    out = tot.merge(atend, on="Cliente", how="left").sort_values("total_gasto", ascending=False)
     return out
 
-# Top 3 Geral
+# Top 10 Geral
 rank_geral = build_ranking(df)
-top3_geral = rank_geral.head(3)
-excluir = set(top3_geral["Cliente"].tolist())
+top10 = rank_geral.head(10)
 
-# Top 3 JPaulo (exclui quem já está no Geral)
-df_jp = df[df["Funcionário"].astype(str).str.strip()=="JPaulo"].copy()
-rank_jp = build_ranking(df_jp[~df_jp["Cliente"].isin(excluir)])
-top3_jp = rank_jp.head(3)
-
-# Top 3 Vinicius (exclui quem já está no Geral)
-df_vi = df[df["Funcionário"].astype(str).str.strip()=="Vinicius"].copy()
-rank_vi = build_ranking(df_vi[~df_vi["Cliente"].isin(excluir)])
-top3_vi = rank_vi.head(3)
-
-# ===== Top 3 Famílias (rank por VALOR) + representante/foto =====
+# ===== Top 3 Famílias (por _ValorConsiderado) + representante/foto =====
 top3_fam = []
-fam_rep_map = {}   # Familia -> Cliente representante (p/ foto)
-fam_foto_map = {}  # Familia -> Foto direta (se existir coluna foto da família)
+fam_rep_map, fam_foto_map = {}, {}
 
 if ABA_STATUS in abas:
     stt = get_as_dataframe(abas[ABA_STATUS]).dropna(how="all")
@@ -148,7 +155,6 @@ if ABA_STATUS in abas:
         cols_low = {c.lower(): c for c in stt.columns}
         fam_col = next((cols_low[k] for k in ("família","familia","familia_grupo") if k in cols_low), None)
         foto_fam_col = next((cols_low[k] for k in ("foto_familia","foto família","foto da família","foto da familia") if k in cols_low), None)
-
         if fam_col:
             if foto_fam_col:
                 tmpff = stt[[fam_col, foto_fam_col]].copy()
@@ -163,9 +169,9 @@ if ABA_STATUS in abas:
             df_fam = df.merge(fam_map, on="Cliente", how="left")
             df_fam = df_fam[df_fam["Familia"].notna() & (df_fam["Familia"].astype(str).str.strip()!="")]
 
-            por_dia_fam = (df_fam.groupby(["Familia","Cliente","_data_dia"], as_index=False)["Valor"].sum())
+            por_dia_fam = (df_fam.groupby(["Familia","Cliente","_data_dia"], as_index=False)["_ValorConsiderado"].sum())
 
-            fam_val = por_dia_fam.groupby("Familia", as_index=False)["Valor"].sum().rename(columns={"Valor":"total_gasto"})
+            fam_val = por_dia_fam.groupby("Familia", as_index=False)["_ValorConsiderado"].sum().rename(columns={"_ValorConsiderado":"total_gasto"})
             fam_atd = por_dia_fam.groupby("Familia", as_index=False).size().rename(columns={"size":"atendimentos"})
             fam_membros = por_dia_fam.groupby("Familia", as_index=False)["Cliente"].nunique().rename(columns={"Cliente":"membros"})
 
@@ -173,25 +179,22 @@ if ABA_STATUS in abas:
             fam_rank = fam_rank.sort_values("total_gasto", ascending=False).head(3)
             top3_fam = fam_rank.to_dict("records")
 
-            # Escolher representante por família (para foto)
+            # representante p/ foto
             cli_stats = (por_dia_fam.groupby(["Familia","Cliente"], as_index=False)
-                         .agg(gasto=("Valor","sum"),
+                         .agg(gasto=("_ValorConsiderado","sum"),
                               atend=("_data_dia","nunique")))
-
             cli_stats["prio_nome_igual"] = (
                 cli_stats["Familia"].astype(str).str.strip().str.casefold() ==
                 cli_stats["Cliente"].astype(str).str.strip().str.casefold()
             )
-
             pref = cli_stats.sort_values(
                 by=["Familia","prio_nome_igual","gasto","atend","Cliente"],
                 ascending=[True, False, False, False, True]
             )
-
             pref_rep = pref.drop_duplicates(subset=["Familia"], keep="first")
             fam_rep_map = dict(zip(pref_rep["Familia"].astype(str), pref_rep["Cliente"].astype(str)))
 
-# ===== Comparação e Cache =====
+# ===== Cache & Movimentos =====
 def list_from_df(df_items: pd.DataFrame, key_col: str) -> list[str]:
     if df_items is None or df_items.empty:
         return []
@@ -200,22 +203,25 @@ def list_from_df(df_items: pd.DataFrame, key_col: str) -> list[str]:
 def familias_list() -> list[str]:
     return [str(r["Familia"]) for r in top3_fam]
 
-def load_prev_top3():
-    """Carrega o último snapshot por categoria do cache."""
+def load_prev_lists():
     ws = get_or_create_cache_ws()
     dfc = get_as_dataframe(ws).dropna(how="all")
     if dfc.empty or "categoria" not in dfc.columns:
         return {}
-    # pega último ts por categoria
     dfc["ts"] = pd.to_datetime(dfc["ts"], errors="coerce")
-    last = dfc.sort_values("ts").groupby("categoria").tail(3)
+    dfc = dfc.sort_values("ts")
     prev = {}
-    for cat, g in last.groupby("categoria"):
-        g = g.sort_values("pos")
-        prev[cat] = g["chave"].astype(str).tolist()
+    for cat, g in dfc.groupby("categoria"):
+        # pega as últimas posições registradas daquela categoria
+        if cat == "Famílias":
+            g2 = g.tail(3)
+        else:
+            g2 = g.tail(10)
+        g2 = g2.sort_values("pos")
+        prev[cat] = g2["chave"].astype(str).tolist()
     return prev
 
-def save_current_top3(run_ts: datetime, atuais: dict):
+def save_current_lists(run_ts: datetime, atuais: dict):
     rows = []
     ts_str = run_ts.isoformat()
     for cat, lista in atuais.items():
@@ -227,7 +233,6 @@ def save_current_top3(run_ts: datetime, atuais: dict):
     set_with_dataframe(ws, df_new, include_index=False, resize=True)
 
 def movements(prev: list[str], curr: list[str]):
-    """Retorna listas com (name, from_pos, to_pos) para up/down, e listas de new/out."""
     pos_prev = {n: i+1 for i, n in enumerate(prev)}
     pos_curr = {n: i+1 for i, n in enumerate(curr)}
     ups, downs, new, out = [], [], [], []
@@ -254,23 +259,25 @@ def send_movements(cat: str, prev_list: list[str], curr_list: list[str]):
     for n, a, b in downs:
         lines.append(f"⬇️ <b>{html.escape(n)}</b> caiu de #{a} para #{b}")
     for n, p in new:
-        lines.append(f"🆕 <b>{html.escape(n)}</b> entrou no Top 3 — agora #{p}")
+        lines.append(f"🆕 <b>{html.escape(n)}</b> entrou — agora #{p}")
     for n, p in out:
-        lines.append(f"❌ <b>{html.escape(n)}</b> saiu do Top 3 (era #{p})")
+        lines.append(f"❌ <b>{html.escape(n)}</b> saiu (era #{p})")
     tg_send("\n".join(lines))
 
 # ===== Envio =====
-def enviar_categoria(titulo: str, df_items: pd.DataFrame):
+def enviar_top10(df_items: pd.DataFrame):
+    titulo = "🏆 Top 10 (por gasto — inclui caixinha JP+Vinicius)"
     tg_send(f"<b>{html.escape(titulo)}</b>")
-    medal = ["🥇","🥈","🥉"]
-    for i, r in enumerate(df_items.itertuples(index=False)):
+    medal = {1:"🥇", 2:"🥈", 3:"🥉"}
+    for i, r in enumerate(df_items.itertuples(index=False), start=1):
         nome = getattr(r, "Cliente")
         atend = int(getattr(r, "atendimentos"))
-        cap = f"{medal[i]} <b>{html.escape(str(nome))}</b> — {atend} atendimentos"
+        prefix = medal.get(i, f"#{i}")
+        cap = f"{prefix} <b>{html.escape(str(nome))}</b> — {atend} atendimentos"
         tg_send_photo(foto_de(str(nome)), cap)
 
 def enviar_familias():
-    tg_send("<b>Famílias</b>")
+    tg_send("<b>👨‍👩‍👧‍👦 Top 3 Famílias (inclui caixinha)</b>")
     medal = ["🥇","🥈","🥉"]
     for i, r in enumerate(top3_fam):
         fam = str(r["Familia"]).strip()
@@ -289,25 +296,22 @@ def enviar_familias():
         tg_send_photo(foto, cap)
 
 # ===== Execução =====
-tg_send("🎗️ Salão JP — Premiação\n🏆 <b>Top 3 (por gasto)</b>\nData/hora: " + html.escape(now_br()))
+tg_send("🎗️ Salão JP — Premiação\n🏆 <b>Top 10 (inclui caixinha JP+Vinicius)</b>\nData/hora: " + html.escape(now_br()))
 
-enviar_categoria("Geral", top3_geral)
-enviar_categoria("JPaulo", top3_jp)
-enviar_categoria("Vinicius", top3_vi)
+# Envia Top10 + Famílias
+enviar_top10(top10)
 enviar_familias()
 
-# Feedback de movimentação
+# Feedback de movimentação (Top10 + Famílias)
 atuais = {
-    "Geral": list_from_df(top3_geral, "Cliente"),
-    "JPaulo": list_from_df(top3_jp, "Cliente"),
-    "Vinicius": list_from_df(top3_vi, "Cliente"),
+    "Top10": list_from_df(top10, "Cliente"),
     "Famílias": familias_list(),
 }
-prev = load_prev_top3()
+prev = load_prev_lists()
 for cat, curr_list in atuais.items():
     send_movements(cat, prev.get(cat, []), curr_list)
 
 # Salva snapshot atual
-save_current_top3(now_br_dt(), atuais)
+save_current_lists(now_br_dt(), atuais)
 
-print("✅ Top 3 enviado e feedback de movimentação registrado.")
+print("✅ Top 10 (incluindo caixinha) enviado e feedback de movimentação registrado.")
