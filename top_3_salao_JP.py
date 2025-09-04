@@ -1,4 +1,4 @@
-# top_10_salao_JP.py — Top 10 (Valor + CaixinhaDia + CaixinhaFundo) + Top 3 Famílias + feedback
+# top_10_salao_JP.py — Top 10 (Valor + CaixinhaDia) + Top 3 Famílias + feedback
 import os, json, html, unicodedata, requests
 import pandas as pd
 import gspread
@@ -35,9 +35,9 @@ def _norm(s: str) -> str:
 def _to_num(series):
     return (pd.to_numeric(
         series.astype(str)
-              .str.replace(r"[^\d,.\-]", "", regex=True)  # remove R$, espaço etc.
-              .str.replace(".", "", regex=False)          # milhar
-              .str.replace(",", ".", regex=False),        # vírgula -> ponto
+              .str.replace(r"[^\d,.\-]", "", regex=True)
+              .str.replace(".", "", regex=False)
+              .str.replace(",", ".", regex=False),
         errors="coerce"
     ).fillna(0.0))
 
@@ -76,42 +76,58 @@ def get_or_create_cache_ws():
     set_with_dataframe(ws, pd.DataFrame(columns=["ts","categoria","pos","chave","extra"]), include_index=False)
     return ws
 
-# ===== Dados =====
+# ===== Carregar base =====
 GENERIC_RE = r"(?:^|\b)(boliviano|brasileiro|menino|sem preferencia|funcion[aá]rio)(?:\b|$)"
 
 df = get_as_dataframe(abas[ABA_BASE]).dropna(how="all")
 df.columns = [c.strip() for c in df.columns]
 
-# checagens básicas
+# checagens
 for col in ("Cliente","Data","Valor"):
     if col not in df.columns:
         raise SystemExit(f"Coluna obrigatória ausente: {col}")
 
-# limpeza básica
+# limpeza
 df["Cliente"] = df["Cliente"].astype(str).str.strip()
 df = df[(df["Cliente"]!="") &
         (~df["Cliente"].str.lower().isin(["nan","none"])) &
         (~df["Cliente"].str.lower().str.contains(GENERIC_RE, regex=True))]
 
-# numéricos relevantes
-for c in ["Valor","CaixinhaDia","CaixinhaFundo"]:
-    if c in df.columns:
-        df[c] = _to_num(df[c])
-    else:
-        df[c] = 0.0
+# numéricos
+df["Valor"] = _to_num(df["Valor"])
+if "CaixinhaDia" in df.columns:
+    df["CaixinhaDia"] = _to_num(df["CaixinhaDia"])
+else:
+    df["CaixinhaDia"] = 0.0
 
 # datas
 df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
 df = df.dropna(subset=["Data"])
 df["_data_dia"] = df["Data"].dt.date
 
-# filtrar RECEITA se existir coluna Tipo
+# filtrar RECEITA se existir
 if "Tipo" in df.columns:
     t = df["Tipo"].astype(str).str.strip().str.casefold()
     df = df[(t == "receita") | (df["Valor"] > 0)]
 
-# valor considerado: Valor + CaixinhaDia + CaixinhaFundo
-df["_ValorConsiderado"] = df["Valor"] + df["CaixinhaDia"] + df["CaixinhaFundo"]
+# === LÓGICA IDÊNTICA À DO SEU STREAMLIT, acrescida de CaixinhaDia ===
+# ValorConsiderado = Valor + CaixinhaDia (NÃO soma CaixinhaFundo)
+df["_ValorConsiderado"] = df["Valor"] + df["CaixinhaDia"]
+
+# agrega por Cliente + Data (um atendimento por dia)
+por_dia = (
+    df.groupby(["Cliente","_data_dia"], as_index=False)["_ValorConsiderado"].sum()
+      .rename(columns={"_ValorConsiderado":"total_dia"})
+)
+
+# ranking clientes
+rank_geral = (
+    por_dia.groupby("Cliente", as_index=False)
+           .agg(total_gasto=("total_dia","sum"),
+                atendimentos=("_data_dia","nunique"))
+           .sort_values(["total_gasto","atendimentos","Cliente"], ascending=[False, False, True])
+)
+top10 = rank_geral.head(10)
 
 # ===== Fotos =====
 foto_map = {}
@@ -130,26 +146,8 @@ if ABA_STATUS in abas:
 def foto_de(nome: str) -> str:
     return foto_map.get(_norm(nome), LOGO_PADRAO)
 
-# ===== Agregações corretas =====
-# 1) soma por Cliente+Dia (evita inflar combos)
-por_dia = (
-    df.groupby(["Cliente","_data_dia"], as_index=False)["_ValorConsiderado"].sum()
-      .rename(columns={"_ValorConsiderado":"total_dia"})
-)
-
-# 2) Top 10 clientes (por gasto total)
-rank_geral = (
-    por_dia.groupby("Cliente", as_index=False)
-           .agg(total_gasto=("total_dia","sum"),
-                atendimentos=("_data_dia","nunique"))
-           .sort_values(["total_gasto","atendimentos","Cliente"], ascending=[False, False, True])
-)
-top10 = rank_geral.head(10)
-
-# ===== Famílias =====
-top3_fam = []
-fam_rep_map, fam_foto_map = {}, {}
-
+# ===== Famílias (usando os mesmos totais por dia) =====
+top3_fam, fam_rep_map, fam_foto_map = [], {}, {}
 if ABA_STATUS in abas:
     stt2 = get_as_dataframe(abas[ABA_STATUS]).dropna(how="all")
     stt2.columns = [c.strip() for c in stt2.columns]
@@ -157,7 +155,6 @@ if ABA_STATUS in abas:
         cols_low = {c.lower(): c for c in stt2.columns}
         fam_col = next((cols_low[k] for k in ("família","familia","familia_grupo") if k in cols_low), None)
         foto_fam_col = next((cols_low[k] for k in ("foto_familia","foto família","foto da família","foto da familia") if k in cols_low), None)
-
         if fam_col:
             if foto_fam_col:
                 tmpff = stt2[[fam_col, foto_fam_col]].copy()
@@ -167,7 +164,6 @@ if ABA_STATUS in abas:
                     for _, r in tmpff.dropna(subset=["Familia","FotoFamilia"]).iterrows()
                     if str(r["FotoFamilia"]).strip()
                 }
-
             fam_map = stt2[["Cliente", fam_col]].rename(columns={fam_col:"Familia"})
             cd = por_dia.merge(fam_map, on="Cliente", how="left")
             cd = cd[cd["Familia"].notna() & (cd["Familia"].astype(str).str.strip()!="")]
@@ -181,7 +177,7 @@ if ABA_STATUS in abas:
             )
             top3_fam = fam_rank.head(3).to_dict("records")
 
-            # representante = cliente com maior gasto na família
+            # representante para foto
             cli_stats = (
                 cd.groupby(["Familia","Cliente"], as_index=False)
                   .agg(gasto=("total_dia","sum"),
@@ -191,7 +187,7 @@ if ABA_STATUS in abas:
             pref_rep = cli_stats.drop_duplicates(subset=["Familia"], keep="first")
             fam_rep_map = dict(zip(pref_rep["Familia"].astype(str), pref_rep["Cliente"].astype(str)))
 
-# ===== Movimentos (cache) =====
+# ===== Cache & Movimentos =====
 def list_from_df(df_items, key_col):
     if df_items is None or df_items.empty:
         return []
@@ -259,7 +255,7 @@ def send_movements(cat: str, prev_list, curr_list):
 
 # ===== Envio =====
 def enviar_top10(df_items: pd.DataFrame):
-    titulo = "🏆 Top 10 por gasto (Valor + CaixinhaDia + CaixinhaFundo)"
+    titulo = "🏆 Top 10 por gasto (Valor + CaixinhaDia)"
     tg_send(f"<b>{html.escape(titulo)}</b>")
     medal = {1:"🥇", 2:"🥈", 3:"🥉"}
     for i, r in enumerate(df_items.itertuples(index=False), start=1):
@@ -270,20 +266,18 @@ def enviar_top10(df_items: pd.DataFrame):
         tg_send_photo(foto_de(str(nome)), cap)
 
 def enviar_familias():
-    tg_send("<b>👨‍👩‍👧‍👦 Top 3 Famílias (Valor + CaixinhaDia + CaixinhaFundo)</b>")
+    tg_send("<b>👨‍👩‍👧‍👦 Top 3 Famílias (Valor + CaixinhaDia)</b>")
     medal = ["🥇","🥈","🥉"]
     for i, r in enumerate(top3_fam):
         fam = str(r["Familia"]).strip()
         atend = int(r["atendimentos"])
         membros = int(r["membros"])
-        foto = fam_foto_map.get(fam, "") or foto_de(fam_rep_map.get(fam, ""))
-        if not foto:
-            foto = LOGO_PADRAO
+        foto = (fam_foto_map.get(fam, "") or foto_de(fam_rep_map.get(fam, ""))) or LOGO_PADRAO
         cap = f"{medal[i]} <b>{html.escape(fam)}</b> — {atend} atendimentos | {membros} membros"
         tg_send_photo(foto, cap)
 
 # ===== Execução =====
-tg_send("🎗️ Salão JP — Premiação\n🏆 <b>Top 10 (inclui caixinhas)</b>\nData/hora: " + html.escape(now_br()))
+tg_send("🎗️ Salão JP — Premiação\n🏆 <b>Top 10 (Valor + CaixinhaDia)</b>\nData/hora: " + html.escape(now_br()))
 enviar_top10(top10)
 enviar_familias()
 
@@ -293,4 +287,4 @@ for cat, curr_list in atuais.items():
     send_movements(cat, prev.get(cat, []), curr_list)
 save_current_lists(now_br_dt(), atuais)
 
-print("✅ Top 10 & Famílias enviados (Valor + CaixinhaDia + CaixinhaFundo) e movimentos registrados.")
+print("✅ Top 10 & Famílias enviados (Valor + CaixinhaDia) e movimentos registrados.")
