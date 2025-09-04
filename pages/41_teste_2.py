@@ -18,11 +18,26 @@ def _norm_txt(s: str) -> str:
     s = unicodedata.normalize("NFKD", str(s)).encode("ASCII", "ignore").decode("ASCII")
     return s.strip().lower()
 
+def _norm_periodo(x):
+    """Normaliza qualquer variação (com/sem acento, maiúsculas, espaços) para Manhã/Tarde/Noite."""
+    if pd.isna(x):
+        return pd.NA
+    s = unicodedata.normalize("NFKD", str(x)).encode("ASCII", "ignore").decode("ASCII")
+    s = s.strip().lower()
+    # aceita 'manha', 'manhã', 'man', 'manha ', etc.
+    if s.startswith("man"):
+        return "Manhã"
+    if s.startswith("tar"):
+        return "Tarde"
+    if s.startswith("noi"):
+        return "Noite"
+    return pd.NA
+
 def _periodo_moda(serie):
     """Seleciona o Período da moda; em empate usa prioridade Manhã > Tarde > Noite."""
     s = serie.dropna().astype("string")
     if s.empty:
-        return "Indefinido"
+        return pd.NA
     modos = s.mode()
     if len(modos) == 1:
         return modos.iloc[0]
@@ -49,16 +64,8 @@ def carregar_dados_google_sheets():
         if c not in df.columns:
             df[c] = pd.NA
 
-    # Normaliza Período textual para apenas Manhã/Tarde/Noite
-    norm = {
-        "manha": "Manhã", "manhã": "Manhã", "Manha": "Manhã",
-        "tarde": "Tarde", "TARDE": "Tarde",
-        "noite": "Noite", "NOITE": "Noite"
-    }
-    df["Período"] = (
-        df["Período"].astype(str).str.strip().map(norm)
-        .where(lambda s: s.isin(["Manhã", "Tarde", "Noite"]), other=pd.NA)
-    )
+    # Normaliza Período (agora robusto)
+    df["Período"] = df["Período"].apply(_norm_periodo)
 
     # Auxiliares
     df["Data_dt"] = pd.to_datetime(df["Data"], errors="coerce")
@@ -99,7 +106,7 @@ with col_c2:
 count_visita = st.toggle("Contar **Visitas únicas (Cliente+Data)** (desmarque para contar Linhas/Serviços)", value=True)
 
 # Diagnóstico rápido
-st.caption(f"Linhas SEM Período: {(df_raw['Período'].isna()).sum()}")
+st.caption(f"Linhas SEM Período reconhecido (após normalização): {(df_raw['Período'].isna()).sum()}")
 
 # =========================
 # 3) Aplicar filtros
@@ -109,12 +116,13 @@ df_f = df_raw.copy()
 # Datas
 df_f = df_f[(df_f["Data_dt"].dt.date >= de) & (df_f["Data_dt"].dt.date <= ate)]
 
-# Funcionário e Período
+# Funcionário
 if sel_funcs:
     df_f = df_f[df_f["Funcionário"].isin(sel_funcs)]
+
+# Período (filtro ESTRITO: só os selecionados)
 if sel_periodos:
-    # Mantém linhas sem período para o total de VISITAS (mas não contam nos turnos)
-    df_f = df_f[df_f["Período"].isin(sel_periodos) | df_f["Período"].isna()]
+    df_f = df_f[df_f["Período"].isin(sel_periodos)]
 
 # Clientes (lista ou busca)
 if sel_clientes and "(Todos)" not in sel_clientes:
@@ -141,8 +149,10 @@ if count_visita:
 else:
     # LINHAS: usa cada linha/serviço (Período da própria linha)
     base = df_f.copy()
-    base["Período"] = base["Período"].fillna("Indefinido")
     base["Data_dt"] = base["Data_dt"]
+
+# Tira registros que ainda ficaram sem período (não deveriam, mas por segurança)
+base["Período"] = base["Período"].where(base["Período"].isin(["Manhã", "Tarde", "Noite"]), pd.NA)
 
 # Dia da semana
 WEEKMAP = {0: "Segunda", 1: "Terça", 2: "Quarta", 3: "Quinta", 4: "Sexta", 5: "Sábado", 6: "Domingo"}
@@ -152,7 +162,6 @@ base["DiaSemana"] = pd.Categorical(
     categories=["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"],
     ordered=True
 )
-base["Período"] = base["Período"].where(base["Período"].isin(["Manhã", "Tarde", "Noite"]), "Indefinido")
 
 # =========================
 # 5) Geral por DIA (tabela + linha)
@@ -160,14 +169,11 @@ base["Período"] = base["Período"].where(base["Período"].isin(["Manhã", "Tard
 st.subheader("📅 Atendimentos por DIA (abre sempre o geral)")
 
 # Total por dia
-if count_visita:
-    tot_por_dia = base.groupby("Data_dt", as_index=False).size().rename(columns={"size": "Total"})
-else:
-    tot_por_dia = base.groupby("Data_dt", as_index=False).size().rename(columns={"size": "Total"})
+tot_por_dia = base.groupby("Data_dt", as_index=False).size().rename(columns={"size": "Total"})
 
-# Quebra por período (ignora 'Indefinido' nas colunas)
+# Quebra por período
 periodo_por_dia = (
-    base[base["Período"].isin(["Manhã", "Tarde", "Noite"])]
+    base.dropna(subset=["Período"])
         .groupby(["Data_dt", "Período"], as_index=False).size()
         .pivot(index="Data_dt", columns="Período", values="size")
         .reindex(columns=["Manhã", "Tarde", "Noite"], fill_value=0)
@@ -201,7 +207,7 @@ dias_geral = base["DiaSemana"].value_counts().reindex(
 ).fillna(0).reset_index()
 dias_geral.columns = ["Dia da Semana", "Quantidade"]
 
-cont_periodo = base["Período"].value_counts().reindex(["Manhã", "Tarde", "Noite", "Indefinido"]).fillna(0).reset_index()
+cont_periodo = base.dropna(subset=["Período"])["Período"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).fillna(0).reset_index()
 cont_periodo.columns = ["Período", "Quantidade"]
 
 c3, c4 = st.columns(2)
@@ -241,7 +247,7 @@ if tem_sel or tem_busca:
         st.warning("Nenhum atendimento encontrado para o(s) cliente(s) selecionado(s)/busca.")
     else:
         por_dia_cli = (
-            base_cli[base_cli["Período"].isin(["Manhã", "Tarde", "Noite"])]
+            base_cli.dropna(subset=["Período"])
                 .groupby(["Data_dt", "Período"], as_index=False).size()
                 .pivot(index="Data_dt", columns="Período", values="size")
                 .reindex(columns=["Manhã", "Tarde", "Noite"], fill_value=0)
@@ -263,7 +269,7 @@ if tem_sel or tem_busca:
             st.plotly_chart(fig_cli, use_container_width=True)
 
         # Distribuições
-        por_periodo_cli = base_cli["Período"].value_counts().reindex(["Manhã", "Tarde", "Noite", "Indefinido"]).fillna(0).reset_index()
+        por_periodo_cli = base_cli.dropna(subset=["Período"])["Período"].value_counts().reindex(["Manhã", "Tarde", "Noite"]).fillna(0).reset_index()
         por_periodo_cli.columns = ["Período", "Quantidade"]
         por_sem_cli = base_cli["DiaSemana"].value_counts().reindex(
             ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
