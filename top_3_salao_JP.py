@@ -1,4 +1,4 @@
-# top_10_salao_JP.py — Top 10 (por VALOR, exibe só atendimentos) + Top 3 Famílias + feedback de movimentação
+# top_10_salao_JP.py — Top 10 (por VALOR + CaixinhaDia, exibe só atendimentos) + Top 3 Famílias + feedback de movimentação
 import os, json, html, unicodedata, requests
 import pandas as pd
 import gspread
@@ -12,7 +12,7 @@ TZ = "America/Sao_Paulo"
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_BASE = "Base de Dados"
 ABA_STATUS = "clientes_status"
-ABA_CACHE = "premiacao_cache"   # onde salvamos o snapshot
+ABA_CACHE = "premiacao_cache"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")            # defina nos secrets/vars
 TELEGRAM_CHAT_ID = "-1002953102982"                     # canal fixo
@@ -86,6 +86,11 @@ df = df[(df["Cliente"]!="") &
         (~df["Cliente"].str.lower().str.contains(GENERIC_RE, regex=True))]
 
 df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce").fillna(0.0)
+# garante CaixinhaDia mesmo que a coluna não exista
+if "CaixinhaDia" not in df.columns:
+    df["CaixinhaDia"] = 0.0
+df["CaixinhaDia"] = pd.to_numeric(df["CaixinhaDia"], errors="coerce").fillna(0.0)
+
 df["Data"]  = pd.to_datetime(df["Data"], errors="coerce")
 df = df.dropna(subset=["Data"])
 
@@ -110,25 +115,32 @@ if ABA_STATUS in abas:
 def foto_de(nome: str) -> str:
     return foto_map.get(_norm(nome), LOGO_PADRAO)
 
-# ===== Ranking base: por VALOR (cliente+dia -> sum Valor; depois somar por cliente) =====
+# ===== Ranking base: usa Valor + CaixinhaDia =====
 def build_ranking(df_base: pd.DataFrame) -> pd.DataFrame:
     if df_base.empty:
         return pd.DataFrame(columns=["Cliente","total_gasto","atendimentos"])
-    por_dia = (df_base.groupby(["Cliente","_data_dia"], as_index=False)["Valor"].sum())
-    tot = por_dia.groupby("Cliente", as_index=False)["Valor"].sum().rename(columns={"Valor":"total_gasto"})
+    # soma o gasto da linha com a caixinha daquela linha
+    df_base = df_base.copy()
+    df_base["ValorTotal"] = df_base["Valor"] + df_base["CaixinhaDia"]
+
+    # 1 atendimento por dia (Cliente + _data_dia)
+    por_dia = df_base.groupby(["Cliente","_data_dia"], as_index=False)["ValorTotal"].sum()
+
+    # total gasto no período e contagem de atendimentos
+    tot = por_dia.groupby("Cliente", as_index=False)["ValorTotal"].sum().rename(columns={"ValorTotal":"total_gasto"})
     atend = por_dia.groupby("Cliente", as_index=False)["_data_dia"].nunique().rename(columns={"_data_dia":"atendimentos"})
-    out = tot.merge(atend, on="Cliente", how="left")
-    out = out.sort_values("total_gasto", ascending=False)
+
+    out = tot.merge(atend, on="Cliente", how="left").sort_values("total_gasto", ascending=False)
     return out
 
 # Top 10 Geral
 rank_geral = build_ranking(df)
 top10_geral = rank_geral.head(10)
 
-# ===== Top 3 Famílias (rank por VALOR) + representante/foto =====
+# ===== Top 3 Famílias (mantido) =====
 top3_fam = []
-fam_rep_map = {}   # Familia -> Cliente representante (p/ foto)
-fam_foto_map = {}  # Familia -> Foto direta (se existir coluna foto da família)
+fam_rep_map = {}
+fam_foto_map = {}
 
 if ABA_STATUS in abas:
     stt = get_as_dataframe(abas[ABA_STATUS]).dropna(how="all")
@@ -152,7 +164,7 @@ if ABA_STATUS in abas:
             df_fam = df.merge(fam_map, on="Cliente", how="left")
             df_fam = df_fam[df_fam["Familia"].notna() & (df_fam["Familia"].astype(str).str.strip()!="")]
 
-            por_dia_fam = (df_fam.groupby(["Familia","Cliente","_data_dia"], as_index=False)["Valor"].sum())
+            por_dia_fam = df_fam.groupby(["Familia","Cliente","_data_dia"], as_index=False)["Valor"].sum()
 
             fam_val = por_dia_fam.groupby("Familia", as_index=False)["Valor"].sum().rename(columns={"Valor":"total_gasto"})
             fam_atd = por_dia_fam.groupby("Familia", as_index=False).size().rename(columns={"size":"atendimentos"})
@@ -162,21 +174,17 @@ if ABA_STATUS in abas:
             fam_rank = fam_rank.sort_values("total_gasto", ascending=False).head(3)
             top3_fam = fam_rank.to_dict("records")
 
-            # Escolher representante por família (para foto)
             cli_stats = (por_dia_fam.groupby(["Familia","Cliente"], as_index=False)
                          .agg(gasto=("Valor","sum"),
                               atend=("_data_dia","nunique")))
-
             cli_stats["prio_nome_igual"] = (
                 cli_stats["Familia"].astype(str).str.strip().str.casefold() ==
                 cli_stats["Cliente"].astype(str).str.strip().str.casefold()
             )
-
             pref = cli_stats.sort_values(
                 by=["Familia","prio_nome_igual","gasto","atend","Cliente"],
                 ascending=[True, False, False, False, True]
             )
-
             pref_rep = pref.drop_duplicates(subset=["Familia"], keep="first")
             fam_rep_map = dict(zip(pref_rep["Familia"].astype(str), pref_rep["Cliente"].astype(str)))
 
@@ -196,7 +204,6 @@ def get_or_create_cache_ws_and_df():
     return ws, dfc
 
 def load_prev_topn(n=10):
-    """Carrega o último snapshot por categoria do cache (até n itens)."""
     ws, dfc = get_or_create_cache_ws_and_df()
     if dfc.empty or "categoria" not in dfc.columns:
         return {}
@@ -219,7 +226,6 @@ def save_current_top(run_ts: datetime, atuais: dict):
     set_with_dataframe(ws, df_new, include_index=False, resize=True)
 
 def movements(prev: list[str], curr: list[str]):
-    """Retorna listas com (name, from_pos, to_pos) para up/down, e listas de new/out."""
     pos_prev = {n: i+1 for i, n in enumerate(prev)}
     pos_curr = {n: i+1 for i, n in enumerate(curr)}
     ups, downs, new, out = [], [], [], []
@@ -282,9 +288,9 @@ def enviar_familias():
         tg_send_photo(foto, cap)
 
 # ===== Execução =====
-tg_send("🎗️ Salão JP — Premiação\n🏆 <b>Top 10 (por gasto)</b>\nData/hora: " + html.escape(now_br()))
+tg_send("🎗️ Salão JP — Premiação\n🏆 <b>Top 10 (por gasto + caixinha)</b>\nData/hora: " + html.escape(now_br()))
 
-enviar_top10("Top 10 — Geral (por gasto)", top10_geral)
+enviar_top10("Top 10 — Geral (por gasto + caixinha)", top10_geral)
 enviar_familias()
 
 # Feedback de movimentação
