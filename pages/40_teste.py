@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-# 9_Resultado_Financeiro_Pro.py — Receita correta (regras configuráveis) + Despesas
+# 9_Resultado_Financeiro_Pro.py — Alinhado ao "Dashboard Salão JP"
+# Receita = (apenas pagos) + (caixinha só do JP por padrão), com opções p/ mudar a regra
 
 import streamlit as st
 import pandas as pd
@@ -18,13 +19,12 @@ st.title("💈📊 Resultado Financeiro — Visão PRO (Receita x Despesas)")
 # CONFIG
 # =========================
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-CACHE_VERSION = 3  # mude p/ invalidar cache
+CACHE_VERSION = 4  # mude p/ invalidar cache
 MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
 
-# Palavras que indicam NÃO receita na Base de Dados (linhas que vamos excluir)
 PADROES_NAO_RECEITA = [
-    "despesa", "estorno", "ajuste", "transfer", "saida", "pagar? fiado", "fiado pagamento",
-    "pagamento fiado", "baixa fiado", "cofre saida"
+    "despesa","estorno","ajuste","transfer","saida","pagar? fiado",
+    "fiado pagamento","pagamento fiado","baixa fiado","cofre saida"
 ]
 
 CATEG_MAP = {
@@ -53,20 +53,17 @@ def to_brl(x) -> float:
     s = (s.replace('R$', '').replace(' ', '')
            .replace('\u00A0','').replace('−','-'))
     s = re.sub(r'[^0-9,.\-]', '', s)
-
-    if s.count(',') == 1 and s.count('.') >= 1:      # 1.234,56
+    if s.count(',') == 1 and s.count('.') >= 1:
         s = s.replace('.', '').replace(',', '.')
-    elif s.count(',') == 1:                          # 1234,56
+    elif s.count(',') == 1:
         s = s.replace(',', '.')
-    elif s.count('.') == 1 and s.count(',') == 0:    # 73.27  ou 45.724
+    elif s.count('.') == 1 and s.count(',') == 0:
         frac = s.split('.')[-1]
-        if len(frac) == 3: s = s.replace('.', '')    # milhar
+        if len(frac) == 3: s = s.replace('.', '')
     else:
         s = s.replace('.', '')
-    try:
-        return float(s)
-    except:
-        return 0.0
+    try: return float(s)
+    except: return 0.0
 
 def classif_categoria(desc: str) -> str:
     text = str(desc).lower()
@@ -86,13 +83,13 @@ def _connect():
     return gspread.authorize(creds).open_by_key(SHEET_ID)
 
 @st.cache_data(show_spinner=True)
-def load_data(_v: int):
+def load_data(_v:int):
     sh = _connect()
     df_base = get_as_dataframe(sh.worksheet("Base de Dados")).dropna(how="all")
     df_desp = get_as_dataframe(sh.worksheet("Despesas")).dropna(how="all")
     return df_base, df_desp
 
-# botão para limpar cache
+# botão limpar cache
 left, _ = st.columns([1,6])
 if left.button("♻️ Forçar recarga (limpar cache)"):
     st.cache_data.clear(); st.cache_resource.clear(); st.experimental_rerun()
@@ -110,14 +107,9 @@ df_rec = df_rec.dropna(subset=["Data"])
 df_rec["Ano"] = df_rec["Data"].dt.year
 df_rec["Mês"] = df_rec["Data"].dt.month
 df_rec["ValorNum"] = df_rec.get("Valor", 0).apply(to_brl)
-if "ValorBruto" in df_rec.columns:
-    df_rec["ValorBrutoNum"] = df_rec["ValorBruto"].apply(to_brl)
-else:
-    df_rec["ValorBrutoNum"] = np.nan
-if "TaxaCartaoValor" in df_rec.columns:
-    df_rec["TaxaCartaoValorNum"] = df_rec["TaxaCartaoValor"].apply(to_brl)
-else:
-    df_rec["TaxaCartaoValorNum"] = 0.0
+df_rec["ValorBrutoNum"] = df_rec.get("ValorBruto", np.nan).apply(to_brl)
+df_rec["TaxaCartaoValorNum"] = df_rec.get("TaxaCartaoValor", 0.0).apply(to_brl)
+df_rec["Funcionário"] = df_rec.get("Funcionário", "")
 
 # Despesas
 df_desp = df_desp_raw.copy()
@@ -134,7 +126,7 @@ df_desp["Tipo"] = np.where(df_desp["Prestador"].astype(str).str.contains("vinici
 df_desp["Categoria"] = df_desp["Descrição"].apply(classif_categoria)
 
 # =========================
-# FILTROS (topo)
+# FILTROS
 # =========================
 anos = sorted(df_desp["Ano"].dropna().unique(), reverse=True)
 cA,cB,cC,cD,cE = st.columns([1,1,1,1,1])
@@ -144,55 +136,73 @@ prest_sel = cC.multiselect("👤 Prestador", sorted(df_desp["Prestador"].dropna(
 cat_sel = cD.multiselect("🏷️ Categoria", sorted(df_desp["Categoria"].dropna().unique()))
 forma_sel = cE.multiselect("💳 Forma de Pagamento", sorted(df_desp["Me Pag"].dropna().astype(str).unique()))
 
-# Subconjuntos de despesas conforme filtros
 f = df_desp.copy()
 if ano_sel:  f = f[f["Ano"].isin(ano_sel)]
 if mes_sel:  f = f[f["Mês"].isin(mes_sel)]
 if prest_sel: f = f[f["Prestador"].isin(prest_sel)]
 if cat_sel:   f = f[f["Categoria"].isin(cat_sel)]
 if forma_sel: f = f[f["Me Pag"].astype(str).isin(forma_sel)]
-f = f[f["ValorNum"] > 0]  # evita sinais trocados
+f = f[f["ValorNum"] > 0]
 
 # =========================
-# RECEITA — regras configuráveis
+# RECEITA — igual ao teu Dashboard
 # =========================
 st.markdown("#### ⚙️ Regra da Receita")
-colR1, colR2 = st.columns([1,1])
-regra = colR1.radio(
-    "Como somar receita?",
-    ["Líquido (Valor)", "Bruto - Taxa (se existir)"],
+
+colR0, colR1, colR2 = st.columns([1,1,2])
+pagto = colR0.radio(
+    "Filtro de pagamento",
+    ["Apenas pagos","Incluir tudo","Apenas fiado (em aberto)"],
     horizontal=True,
-    help="Escolha se a receita base é o Valor líquido registrado na Base de Dados ou o Valor Bruto menos a Taxa do cartão."
+    help="No teu Dashboard a Receita Total considera APENAS PAGOS."
 )
-somar_cx = colR2.toggle("➕ Somar caixinha/gorjeta", value=True)
+
+regra = colR1.radio(
+    "Base",
+    ["Líquido (Valor)","Bruto - Taxa (se existir)"],
+    horizontal=True
+)
+
+somar_cx = colR2.toggle("➕ Somar caixinha", value=True)
+cx_so_jp = colR2.checkbox("Somar só a caixinha do JPaulo", value=True, help="No Dashboard principal é essa a regra.")
 
 fr = df_rec.copy()
 if ano_sel: fr = fr[fr["Ano"].isin(ano_sel)]
 if mes_sel: fr = fr[fr["Mês"].isin(mes_sel)]
 
-# Remove linhas que NÃO são receita (pela coluna Tipo, se existir)
+# remove linhas que não são receita (pela coluna Tipo, se existir)
 if "Tipo" in fr.columns:
-    mask_bad = fr["Tipo"].astype(str).str.lower().apply(
-        lambda t: any(k in t for k in PADROES_NAO_RECEITA)
-    )
-    fr = fr[~mask_bad]
+    bad = fr["Tipo"].astype(str).str.lower().apply(lambda t: any(k in t for k in PADROES_NAO_RECEITA))
+    fr = fr[~bad]
 
-# Garante valores válidos
-fr = fr[fr["ValorNum"].astype(float) >= 0]
+# === Pagamento
+conta = fr.get("Conta", "").astype(str).str.lower()
+status = fr.get("StatusFiado", "").astype(str).str.lower()
 
-# Base da receita
+fiado_mask = (conta == "fiado")
+fiado_aberto = fiado_mask & status.isin(["em aberto","","aberto","pendente","em aberto "])
+
+if pagto == "Apenas pagos":
+    fr = fr[~fiado_aberto]
+elif pagto == "Apenas fiado (em aberto)":
+    fr = fr[fiado_aberto]
+# "Incluir tudo" → não filtra
+
+# base da receita
 if regra.startswith("Bruto"):
     base_receita = fr["ValorBrutoNum"].fillna(fr["ValorNum"]) - fr["TaxaCartaoValorNum"].fillna(0.0)
 else:
     base_receita = fr["ValorNum"]
 
-# Extras (caixinha/gorjeta)
+# extras: caixinha/gorjeta
 extras_cols = [c for c in ["Caixinha","CaixinhaDia","CaixinhaDiaTotal","Gorjeta","Caixinha_Fundo","CaixinhaFundo"] if c in fr.columns]
 extras_total = 0.0
 if somar_cx and extras_cols:
-    for c in extras_cols:
-        fr[c] = fr[c].apply(to_brl)
-    extras_total = fr[extras_cols].sum(axis=1).sum()
+    for c in extras_cols: fr[c] = fr[c].apply(to_brl)
+    if cx_so_jp:
+        extras_total = fr.loc[fr["Funcionário"].astype(str).str.lower().eq("jpaulo"), extras_cols].sum(axis=1).sum()
+    else:
+        extras_total = fr[extras_cols].sum(axis=1).sum()
 
 receita_total = float(base_receita.sum() + extras_total)
 
@@ -215,18 +225,20 @@ k4.metric("Despesas Totais", brl(desp_total))
 k5.metric("Lucro", brl(lucro), f"Margem {margem:.1f}%")
 
 with st.expander("🔎 Conferência da receita"):
-    base_nome = "Valor (líquido)" if regra.startswith("Líquido") else "ValorBruto - Taxa"
-    st.write(f"Base usada: **{base_nome}**")
+    st.write("Regra de pagamento:", pagto)
+    st.write("Base usada:", "Valor (líquido)" if regra.startswith("Líquido") else "ValorBruto - Taxa")
     st.write("Soma base:", brl(float(base_receita.sum())))
-    st.write("Extras (caixinha/gorjeta):", brl(float(extras_total)))
-    if "Tipo" in df_rec.columns:
-        removidas = df_rec.loc[df_rec["Tipo"].astype(str).str.lower().apply(lambda t: any(k in t for k in PADROES_NAO_RECEITA))]
-        st.caption(f"Linhas removidas por não serem receita: {len(removidas)}")
+    st.write("Extras (caixinha):", brl(float(extras_total)),
+             " — ", "apenas JPaulo" if (somar_cx and cx_so_jp) else ("todos" if somar_cx else "não somada"))
+    # estatísticas do fiado
+    tot_fiado_aberto = df_rec.loc[fiado_aberto, "ValorNum"].sum()
+    q_fiado_aberto = int(fiado_aberto.sum())
+    st.caption(f"Fiado em aberto no recorte: {q_fiado_aberto} linhas • total {brl(float(tot_fiado_aberto))}")
 
 st.divider()
 
 # =========================
-# TABELAS — Top prestadores / categorias
+# TABELAS E GRÁFICOS (iguais à versão anterior)
 # =========================
 st.subheader("🏆 Top prestadores e categorias")
 cA, cB = st.columns(2)
@@ -242,10 +254,6 @@ top_categ["Gasto (R$)"] = top_categ["ValorNum"].map(brl)
 cB.dataframe(top_categ[["Categoria","Gasto (R$)"]], use_container_width=True, height=380)
 
 st.divider()
-
-# =========================
-# GRÁFICOS
-# =========================
 st.subheader("📈 Visualizações")
 serie = (f.groupby(["Ano","Mês","Tipo"], as_index=False)["ValorNum"].sum())
 if not serie.empty:
@@ -293,10 +301,6 @@ wf.update_layout(title="De Receita a Lucro", showlegend=False,
 st.plotly_chart(wf, use_container_width=True)
 
 st.divider()
-
-# =========================
-# DETALHAMENTO
-# =========================
 st.subheader("📋 Detalhamento das despesas (linhas)")
 det = f[["Data","Prestador","Descrição","Categoria","Tipo","Me Pag","ValorNum","RefID"]].sort_values("Data", ascending=False)
 det["Valor (R$)"] = det["ValorNum"].map(brl)
@@ -315,7 +319,7 @@ export_kpis = pd.DataFrame({
     "Despesa do Salão":[desp_salao],
     "Despesas Totais":[desp_total],
     "Lucro":[lucro],
-    "Margem (%)":[margem],
+    "Margem (%)":[(lucro/receita_total*100) if receita_total>0 else 0],
     "Comissão/Receita (%)":[(comissao/receita_total*100) if receita_total>0 else 0]
 })
 
