@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
-# 9_Resultado_Financeiro_Pro.py — Alinhado ao "Dashboard Salão JP"
-# Receita = (apenas pagos) + (caixinha só do JP por padrão), com opções p/ mudar a regra
+# Resultado Financeiro — Visão PRO (Receita x Despesas)
+# - Receita alinhada ao "Dashboard Salão JP" (apenas pagos + caixinha do JP por padrão)
+# - Bloqueio de linhas do Feminino (só JPaulo e Vinicius)
+# - Conversão BRL robusta
+# - Controles de regra, diagnósticos e exportação
 
 import streamlit as st
 import pandas as pd
@@ -19,14 +22,16 @@ st.title("💈📊 Resultado Financeiro — Visão PRO (Receita x Despesas)")
 # CONFIG
 # =========================
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-CACHE_VERSION = 4  # mude p/ invalidar cache
+CACHE_VERSION = 5  # mude quando quiser invalidar o cache
 MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
 
+# Palavras que definem linhas que NÃO são receita (na aba Base de Dados)
 PADROES_NAO_RECEITA = [
     "despesa","estorno","ajuste","transfer","saida","pagar? fiado",
     "fiado pagamento","pagamento fiado","baixa fiado","cofre saida"
 ]
 
+# Mapeamento de categorias para a aba Despesas (ajuste livre)
 CATEG_MAP = {
     "comissão": "Comissão",
     "taxa|maquin|stone|sumup|clip|cartão|cartao": "Taxa de Cartão",
@@ -43,27 +48,34 @@ CATEG_MAP = {
     "equipamento|cadeira|espelho|móvel|movel|microfone|câmera|camera|pc|notebook": "Equipamentos",
 }
 
+# =========================
+# HELPERS
+# =========================
 def brl(v: float) -> str:
     return f"R$ {v:,.2f}".replace(",", "v").replace(".", ",").replace("v", ".")
 
 def to_brl(x) -> float:
+    """Converte valores em string/num para float aceitando 1.234,56 | 73.27 | 1,234.56 | 'R$ ...' """
     if pd.isna(x): return 0.0
     s = str(x).strip()
     if not s: return 0.0
     s = (s.replace('R$', '').replace(' ', '')
            .replace('\u00A0','').replace('−','-'))
     s = re.sub(r'[^0-9,.\-]', '', s)
-    if s.count(',') == 1 and s.count('.') >= 1:
+    if s.count(',') == 1 and s.count('.') >= 1:     # 1.234,56
         s = s.replace('.', '').replace(',', '.')
-    elif s.count(',') == 1:
+    elif s.count(',') == 1:                         # 1234,56
         s = s.replace(',', '.')
-    elif s.count('.') == 1 and s.count(',') == 0:
+    elif s.count('.') == 1 and s.count(',') == 0:   # 73.27 ou 45.724
         frac = s.split('.')[-1]
-        if len(frac) == 3: s = s.replace('.', '')
+        if len(frac) == 3:                          # 45.724 -> 45724
+            s = s.replace('.', '')
     else:
         s = s.replace('.', '')
-    try: return float(s)
-    except: return 0.0
+    try:
+        return float(s)
+    except:
+        return 0.0
 
 def classif_categoria(desc: str) -> str:
     text = str(desc).lower()
@@ -71,6 +83,18 @@ def classif_categoria(desc: str) -> str:
         if pd.Series([text]).str.contains(patt, regex=True).iloc[0]:
             return nome
     return "Outros"
+
+def ensure_text_col(df, name, default=""):
+    if name not in df.columns:
+        df[name] = default
+    return df[name]
+
+def ensure_num_parsed_col(df, src, dst, default=0.0):
+    """Cria df[dst] a partir de df[src] usando to_brl; se src não existir, preenche com default."""
+    if src in df.columns:
+        df[dst] = df[src].apply(to_brl)
+    else:
+        df[dst] = default
 
 # =========================
 # CONEXÃO
@@ -97,21 +121,41 @@ if left.button("♻️ Forçar recarga (limpar cache)"):
 df_rec_raw, df_desp_raw = load_data(CACHE_VERSION)
 
 # =========================
-# LIMPEZA
+# LIMPEZA — RECEITAS
 # =========================
-# Receitas
 df_rec = df_rec_raw.copy()
 df_rec.columns = df_rec.columns.str.strip()
 df_rec["Data"] = pd.to_datetime(df_rec["Data"], errors="coerce", dayfirst=True)
 df_rec = df_rec.dropna(subset=["Data"])
 df_rec["Ano"] = df_rec["Data"].dt.year
 df_rec["Mês"] = df_rec["Data"].dt.month
-df_rec["ValorNum"] = df_rec.get("Valor", 0).apply(to_brl)
-df_rec["ValorBrutoNum"] = df_rec.get("ValorBruto", np.nan).apply(to_brl)
-df_rec["TaxaCartaoValorNum"] = df_rec.get("TaxaCartaoValor", 0.0).apply(to_brl)
-df_rec["Funcionário"] = df_rec.get("Funcionário", "")
 
-# Despesas
+# garante colunas de texto usadas
+for col in ["Funcionário","Conta","StatusFiado","Tipo","Serviço","Cliente"]:
+    ensure_text_col(df_rec, col, "")
+
+# cria colunas numéricas convertidas
+ensure_num_parsed_col(df_rec, "Valor", "ValorNum", 0.0)
+ensure_num_parsed_col(df_rec, "ValorBruto", "ValorBrutoNum", np.nan)
+ensure_num_parsed_col(df_rec, "TaxaCartaoValor", "TaxaCartaoValorNum", 0.0)
+
+# restrição de unidade: SOMENTE JP (JPaulo e Vinicius)
+FUNC_VALIDOS = {"jpaulo", "vinicius"}
+df_rec["func_lower"] = df_rec["Funcionário"].astype(str).str.strip().str.lower()
+fora_da_unidade = df_rec[~df_rec["func_lower"].isin(FUNC_VALIDOS)]
+if not fora_da_unidade.empty:
+    with st.expander("⚠️ Linhas fora do Salão JP removidas"):
+        st.write(f"Total removido: {len(fora_da_unidade)}")
+        st.dataframe(
+            fora_da_unidade[["Data","Serviço","Valor","Conta","Cliente","Funcionário","Tipo"]]
+            .sort_values("Data"),
+            use_container_width=True
+        )
+df_rec = df_rec[df_rec["func_lower"].isin(FUNC_VALIDOS)]
+
+# =========================
+# LIMPEZA — DESPESAS
+# =========================
 df_desp = df_desp_raw.copy()
 df_desp.columns = df_desp.columns.str.strip()
 for col in ["Data","Prestador","Descrição","Valor","Me Pag","RefID"]:
@@ -136,16 +180,17 @@ prest_sel = cC.multiselect("👤 Prestador", sorted(df_desp["Prestador"].dropna(
 cat_sel = cD.multiselect("🏷️ Categoria", sorted(df_desp["Categoria"].dropna().unique()))
 forma_sel = cE.multiselect("💳 Forma de Pagamento", sorted(df_desp["Me Pag"].dropna().astype(str).unique()))
 
+# aplica nos dados de despesas
 f = df_desp.copy()
 if ano_sel:  f = f[f["Ano"].isin(ano_sel)]
 if mes_sel:  f = f[f["Mês"].isin(mes_sel)]
 if prest_sel: f = f[f["Prestador"].isin(prest_sel)]
 if cat_sel:   f = f[f["Categoria"].isin(cat_sel)]
 if forma_sel: f = f[f["Me Pag"].astype(str).isin(forma_sel)]
-f = f[f["ValorNum"] > 0]
+f = f[f["ValorNum"] > 0]  # evita sinais invertidos
 
 # =========================
-# RECEITA — igual ao teu Dashboard
+# RECEITA — CONTROLES (alinhado ao dashboard)
 # =========================
 st.markdown("#### ⚙️ Regra da Receita")
 
@@ -154,7 +199,7 @@ pagto = colR0.radio(
     "Filtro de pagamento",
     ["Apenas pagos","Incluir tudo","Apenas fiado (em aberto)"],
     horizontal=True,
-    help="No teu Dashboard a Receita Total considera APENAS PAGOS."
+    help="No Dashboard principal a Receita soma APENAS PAGOS."
 )
 
 regra = colR1.radio(
@@ -164,8 +209,9 @@ regra = colR1.radio(
 )
 
 somar_cx = colR2.toggle("➕ Somar caixinha", value=True)
-cx_so_jp = colR2.checkbox("Somar só a caixinha do JPaulo", value=True, help="No Dashboard principal é essa a regra.")
+cx_so_jp = colR2.checkbox("Somar só a caixinha do JPaulo", value=True)
 
+# aplica mesmos filtros de tempo em receitas
 fr = df_rec.copy()
 if ano_sel: fr = fr[fr["Ano"].isin(ano_sel)]
 if mes_sel: fr = fr[fr["Mês"].isin(mes_sel)]
@@ -175,18 +221,18 @@ if "Tipo" in fr.columns:
     bad = fr["Tipo"].astype(str).str.lower().apply(lambda t: any(k in t for k in PADROES_NAO_RECEITA))
     fr = fr[~bad]
 
-# === Pagamento
-conta = fr.get("Conta", "").astype(str).str.lower()
-status = fr.get("StatusFiado", "").astype(str).str.lower()
-
+# status fiado (antes de aplicar pagto p/ diagnóstico)
+conta = fr["Conta"].astype(str).str.lower()
+status = fr["StatusFiado"].astype(str).str.lower()
 fiado_mask = (conta == "fiado")
-fiado_aberto = fiado_mask & status.isin(["em aberto","","aberto","pendente","em aberto "])
+fiado_aberto_mask = fiado_mask & status.isin(["em aberto","","aberto","pendente","em aberto "])
 
+# aplica regra de pagamento
 if pagto == "Apenas pagos":
-    fr = fr[~fiado_aberto]
+    fr = fr[~fiado_aberto_mask]
 elif pagto == "Apenas fiado (em aberto)":
-    fr = fr[fiado_aberto]
-# "Incluir tudo" → não filtra
+    fr = fr[fiado_aberto_mask]
+# "Incluir tudo" não filtra
 
 # base da receita
 if regra.startswith("Bruto"):
@@ -194,11 +240,12 @@ if regra.startswith("Bruto"):
 else:
     base_receita = fr["ValorNum"]
 
-# extras: caixinha/gorjeta
+# extras (caixinha/gorjeta)
 extras_cols = [c for c in ["Caixinha","CaixinhaDia","CaixinhaDiaTotal","Gorjeta","Caixinha_Fundo","CaixinhaFundo"] if c in fr.columns]
 extras_total = 0.0
 if somar_cx and extras_cols:
-    for c in extras_cols: fr[c] = fr[c].apply(to_brl)
+    for c in extras_cols:
+        fr[c] = fr[c].apply(to_brl)
     if cx_so_jp:
         extras_total = fr.loc[fr["Funcionário"].astype(str).str.lower().eq("jpaulo"), extras_cols].sum(axis=1).sum()
     else:
@@ -230,15 +277,23 @@ with st.expander("🔎 Conferência da receita"):
     st.write("Soma base:", brl(float(base_receita.sum())))
     st.write("Extras (caixinha):", brl(float(extras_total)),
              " — ", "apenas JPaulo" if (somar_cx and cx_so_jp) else ("todos" if somar_cx else "não somada"))
-    # estatísticas do fiado
-    tot_fiado_aberto = df_rec.loc[fiado_aberto, "ValorNum"].sum()
-    q_fiado_aberto = int(fiado_aberto.sum())
-    st.caption(f"Fiado em aberto no recorte: {q_fiado_aberto} linhas • total {brl(float(tot_fiado_aberto))}")
+    tot_fiado_aberto = float(fr.loc[fiado_aberto_mask, "ValorNum"].sum())
+    q_fiado_aberto = int(fiado_aberto_mask.sum())
+    st.caption(f"Fiado em aberto no recorte (antes do filtro de pagamento): {q_fiado_aberto} linhas • total {brl(tot_fiado_aberto)}")
+
+with st.expander("👤 Conferência por funcionário (base da receita)"):
+    resumo_func = (
+        pd.DataFrame({"Funcionário": fr["Funcionário"], "_Base": base_receita})
+          .groupby("Funcionário", as_index=False)["_Base"].sum()
+          .sort_values("_Base", ascending=False)
+    )
+    resumo_func["_Base"] = resumo_func["_Base"].map(brl)
+    st.dataframe(resumo_func, use_container_width=True)
 
 st.divider()
 
 # =========================
-# TABELAS E GRÁFICOS (iguais à versão anterior)
+# TABELAS — Top prestadores / categorias
 # =========================
 st.subheader("🏆 Top prestadores e categorias")
 cA, cB = st.columns(2)
@@ -254,6 +309,10 @@ top_categ["Gasto (R$)"] = top_categ["ValorNum"].map(brl)
 cB.dataframe(top_categ[["Categoria","Gasto (R$)"]], use_container_width=True, height=380)
 
 st.divider()
+
+# =========================
+# GRÁFICOS
+# =========================
 st.subheader("📈 Visualizações")
 serie = (f.groupby(["Ano","Mês","Tipo"], as_index=False)["ValorNum"].sum())
 if not serie.empty:
@@ -301,6 +360,10 @@ wf.update_layout(title="De Receita a Lucro", showlegend=False,
 st.plotly_chart(wf, use_container_width=True)
 
 st.divider()
+
+# =========================
+# DETALHAMENTO
+# =========================
 st.subheader("📋 Detalhamento das despesas (linhas)")
 det = f[["Data","Prestador","Descrição","Categoria","Tipo","Me Pag","ValorNum","RefID"]].sort_values("Data", ascending=False)
 det["Valor (R$)"] = det["ValorNum"].map(brl)
