@@ -316,19 +316,7 @@ def _is_servico(s):
     return t in {"servico", "serviço", ""}
 
 def _make_daily_summary_caption(df_all: pd.DataFrame, data_str: str, funcionario: str) -> str:
-    """
-    Resumo do dia por funcionário (para Telegram) — versão com:
-    - Serviços do dia (nome × qtd)
-    - Bruto (cartão usa ValorBrutoRecebido), Líquido (soma Valor) e Taxas de cartão
-    - Caixinha total + lista de clientes que deram caixinha
-    - Clientes únicos, Novos (lista de nomes), Voltaram em ≤30d (lista), >30d (lista)
-    - Mix: Combos (contados por combo único) vs Simples (linhas simples)
-    - Períodos: mostra quantidades e clientes por período
-    - Ticket médio (bruto_serviços / clientes)
-    - Top 3 por gasto
-    - Comissão Vinicius
-    """
-    # Helpers
+    """Resumo do dia por funcionário — versão detalhada"""
     def _fmt_names(ns, maxn=8):
         ns = [n for n in ns if str(n).strip()]
         if not ns: return ""
@@ -350,158 +338,99 @@ def _make_daily_summary_caption(df_all: pd.DataFrame, data_str: str, funcionario
     d = d[d["__func_norm"] == func_norm].copy()
     if d.empty: return ""
 
-    # considerar "Tipo" vazio como serviço
     d["__tipo_norm"] = d["Tipo"].astype(str).map(_norm_key)
     d_srv = d[d["__tipo_norm"].apply(_is_servico)].copy()
 
-    # ======= Serviços do dia (quantidades) =======
+    # Serviços do dia
     srv_counts = (
         d_srv["Serviço"].astype(str).str.strip().replace("", pd.NA).dropna()
         .value_counts().rename_axis("Serviço").reset_index(name="Qtd")
     )
     srv_str = "—" if srv_counts.empty else ", ".join(f"{r['Serviço']} ×{int(r['Qtd'])}" for _, r in srv_counts.iterrows())
 
-    # ======= Bruto / Líquido / Taxas =======
+    # Bruto / Líquido / Taxas
     bruto_total = float(d_srv.apply(_valor_bruto_row, axis=1).sum())
     liquido_total = float(pd.to_numeric(d_srv.get("Valor", 0), errors="coerce").fillna(0).sum())
     taxa_cartao_total = float(pd.to_numeric(d_srv.get("TaxaCartaoValor", 0), errors="coerce").fillna(0).sum())
-
     d_cartao = d_srv.copy()
     d_cartao["__bruto"] = pd.to_numeric(d_cartao.get("ValorBrutoRecebido", 0), errors="coerce").fillna(0.0)
-    d_cartao["__taxa"] = pd.to_numeric(d_cartao.get("TaxaCartaoValor", 0), errors="coerce").fillna(0.0)
+    d_cartao["__taxa"]  = pd.to_numeric(d_cartao.get("TaxaCartaoValor", 0), errors="coerce").fillna(0.0)
     bruto_cartao = float(d_cartao["__bruto"].sum())
     taxa_pct_media = (taxa_cartao_total / bruto_cartao * 100.0) if bruto_cartao > 0 else 0.0
 
-    # ======= Caixinha =======
+    # Caixinha
     v_cx = float(pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum())
-    d_cx = d.copy()
-    d_cx["__cx"] = pd.to_numeric(d_cx.get("CaixinhaDia", 0), errors="coerce").fillna(0)
-    doadores = d_cx.loc[d_cx["__cx"] > 0, "Cliente"].astype(str).str.strip().unique().tolist()
+    doadores = d.loc[pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0) > 0, "Cliente"].unique().tolist()
     cx_list = _fmt_names(doadores, 8)
     cx_line = f"{_fmt_brl(v_cx)}" + (f" • {cx_list}" if cx_list else "")
 
-    # ======= Clientes (únicos) =======
-    clientes_unicos = (
-        d_srv["Cliente"].astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
-    )
-    qtd_clientes = int(len(clientes_unicos))
+    # Clientes
+    clientes_unicos = d_srv["Cliente"].astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
+    qtd_clientes = len(clientes_unicos)
 
-    # ======= Novos / ≤30d / >30d =======
     df_hist = df_all.copy()
     df_hist["_dt"] = pd.to_datetime(df_hist["Data"], format=DATA_FMT, errors="coerce")
     df_hist = df_hist.dropna(subset=["_dt"])
-    primeiras = (
-        df_hist.assign(cli=df_hist["Cliente"].astype(str).str.strip())
-               .groupby("cli")["_dt"].min()
-    )
+    primeiras = df_hist.assign(cli=df_hist["Cliente"].astype(str).str.strip()).groupby("cli")["_dt"].min()
 
-    novos_nomes, voltou30_nomes, mais30_nomes = [], [], []
+    novos, voltou30, mais30 = [], [], []
     for cli in clientes_unicos:
-        # novo
         if cli in primeiras.index and primeiras.loc[cli].date() == dia_ref:
-            novos_nomes.append(cli)
-        # última visita ANTES de hoje
-        hist_cli = df_hist[df_hist["Cliente"].astype(str).str.strip() == cli]
-        prev = hist_cli[hist_cli["_dt"].dt.date < dia_ref]
+            novos.append(cli)
+        prev = df_hist[(df_hist["Cliente"].astype(str).str.strip() == cli) & (df_hist["_dt"].dt.date < dia_ref)]
         if not prev.empty:
-            ultimo = prev["_dt"].max().date()
-            delta = (dia_ref - ultimo).days
+            delta = (dia_ref - prev["_dt"].max().date()).days
             if delta <= 30:
-                voltou30_nomes.append(cli)
+                voltou30.append(cli)
             else:
-                mais30_nomes.append(cli)
+                mais30.append(cli)
 
-    # ======= Mix: combos (por combo) vs simples =======
+    # Combos vs simples
     d_srv["__combo_str"] = d_srv["Combo"].astype(str).str.strip()
-    d_srv["__pid"] = d_srv["PagamentoID"].astype(str).str.strip()  # ajuda a distinguir combos iguais no mesmo dia
-    combos_count = (
-        d_srv.loc[d_srv["__combo_str"] != "", ["Cliente", "__combo_str", "__pid"]]
-             .drop_duplicates()
-             .shape[0]
-    )
+    d_srv["__pid"] = d_srv["PagamentoID"].astype(str).str.strip()
+    combos_count = d_srv.loc[d_srv["__combo_str"] != "", ["Cliente","__combo_str","__pid"]].drop_duplicates().shape[0]
     simples_count = int((d_srv["__combo_str"] == "").sum())
 
-    # ======= Períodos (contagem + nomes) =======
+    # Períodos
     d_srv["__periodo"] = d_srv["Período"].astype(str).str.strip()
-    periodos = {}
-    for p in ["Manhã", "Tarde", "Noite"]:
+    per_parts = []
+    for p in ["Manhã","Tarde","Noite"]:
         dp = d_srv[d_srv["__periodo"] == p]
         if not dp.empty:
-            nomes = dp["Cliente"].astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
-            periodos[p] = (len(dp), _fmt_names(nomes, 10))
-    per_parts = []
-    for p in ["Manhã", "Tarde", "Noite"]:
-        if p in periodos:
-            q, ns = periodos[p]
-            per_parts.append(f"{p}: {q}" + (f" [{ns}]" if ns else ""))
+            nomes = dp["Cliente"].unique().tolist()
+            per_parts.append(f"{p}: {len(dp)} [{_fmt_names(nomes,8)}]")
     per_str = " • ".join(per_parts) if per_parts else "—"
 
-    # ======= Ticket médio =======
-    ticket_medio = (bruto_total / qtd_clientes) if qtd_clientes > 0 else 0.0
+    # Ticket médio
+    ticket_medio = bruto_total / qtd_clientes if qtd_clientes else 0
 
-    # ======= Top 3 por gasto (bruto) =======
+    # Top 3 clientes
     d_srv["__bruto_i"] = d_srv.apply(_valor_bruto_row, axis=1)
-    top3 = (d_srv.groupby(d_srv["Cliente"].astype(str).str.strip(), dropna=False)["__bruto_i"]
-                 .sum().sort_values(ascending=False).head(3))
-    top3_str = ", ".join(f"{cli}: {_fmt_brl(v)}" for cli, v in top3.items()) or "—"
+    top3 = d_srv.groupby("Cliente")["__bruto_i"].sum().sort_values(ascending=False).head(3)
+    top3_str = ", ".join(f"{cli}: {_fmt_brl(v)}" for cli,v in top3.items()) or "—"
 
-    # ======= Montagem =======
+    # Montagem
     linhas = []
     linhas.append("📊 <b>Resumo do dia</b>")
     linhas.append(f"🗓️ Data: <b>{data_str}</b>")
     linhas.append(f"👨‍🔧 Funcionário: <b>{funcionario}</b>")
-
-    linhas.append(f"🧾 <b>Serviços</b>: {srv_str}")
-    linhas.append(f"💵 Bruto: <b>{_fmt_brl(bruto_total)}</b> • 🪙 Líquido: <b>{_fmt_brl(liquido_total)}</b>")
-    linhas.append(f"💳 Taxa cartão: <b>{_fmt_brl(taxa_cartao_total)}</b> ({taxa_pct_media:.2f}%)")
-    if v_cx > 0 or doadores:
-        linhas.append(f"💖 Caixinha: <b>{cx_line}</b>")
-
+    linhas.append(f"🧾 Serviços: {srv_str}")
+    linhas.append(f"💵 Bruto: {_fmt_brl(bruto_total)} • 🪙 Líquido: {_fmt_brl(liquido_total)}")
+    linhas.append(f"💳 Taxa cartão: {_fmt_brl(taxa_cartao_total)} ({taxa_pct_media:.2f}%)")
+    if v_cx > 0: linhas.append(f"💖 Caixinha: {cx_line}")
     linhas.append("—")
-    # clientes + listas
-    novos_str = _fmt_names(novos_nomes, 8)
-    v30_str   = _fmt_names(voltou30_nomes, 8)
-    m30_str   = _fmt_names(mais30_nomes, 8)
-    linhas.append(f"👥 Únicos: <b>{qtd_clientes}</b>")
-    if novos_nomes:
-        linhas.append(f"🆕 Novos: <b>{len(novos_nomes)}</b> [{novos_str}]")
-    else:
-        linhas.append("🆕 Novos: <b>0</b>")
-    if voltou30_nomes:
-        linhas.append(f"🔁 Voltaram ≤30d: <b>{len(voltou30_nomes)}</b> [{v30_str}]")
-    else:
-        linhas.append("🔁 Voltaram ≤30d: <b>0</b>")
-    if mais30_nomes:
-        linhas.append(f"⏰ >30d sem vir: <b>{len(mais30_nomes)}</b> [{m30_str}]")
-    else:
-        linhas.append("⏰ >30d sem vir: <b>0</b>")
-
-    # mix + períodos
-    linhas.append(f"🧩 Combos (únicos) vs Simples: <b>{combos_count}</b> / <b>{simples_count}</b>")
+    linhas.append(f"👥 Únicos: {qtd_clientes}")
+    linhas.append(f"🆕 Novos: {len(novos)} [{_fmt_names(novos)}]")
+    linhas.append(f"🔁 Voltaram ≤30d: {len(voltou30)} [{_fmt_names(voltou30)}]")
+    linhas.append(f"⏰ >30d sem vir: {len(mais30)} [{_fmt_names(mais30)}]")
+    linhas.append(f"🧩 Combos (únicos) vs Simples: {combos_count} / {simples_count}")
     linhas.append(f"🕒 Períodos: {per_str}")
-    linhas.append(f"🏷️ Ticket médio: <b>{_fmt_brl(ticket_medio)}</b>")
-
-    # top
-    linhas.append(f"⭐ Top clientes (bruto): {top3_str}")
-
-    # comissão Vinicius
+    linhas.append(f"🏷️ Ticket médio: {_fmt_brl(ticket_medio)}")
+    linhas.append(f"⭐ Top clientes: {top3_str}")
     if funcionario == "Vinicius":
         pct = _parse_pct_vini()
-        valor_receber = bruto_total * pct
-        pct_str = f"{pct*100:.0f}%".replace(".0", "")
-        linhas.append("—")
-        linhas.append(f"🤝 Comissão Vinicius: <b>{pct_str}</b> • 💰 Recebe: <b>{_fmt_brl(valor_receber)}</b>")
-
-    # rodapé de anotação
-    total_servicos = int(len(d_srv))
-    anot = f"📝 Anotação: Clientes <b>{qtd_clientes}</b> • Serviços <b>{total_servicos}</b>"
-    if func_norm == _norm_key("Vinicius"):
-        anot = f"📝 Anotação (Vini): Clientes <b>{qtd_clientes}</b> • Serviços <b>{total_servicos}</b>"
-    linhas.append("—")
-    linhas.append(anot)
-
+        linhas.append(f"🤝 Comissão: {pct*100:.0f}% • 💰 {_fmt_brl(bruto_total*pct)}")
     return "\n".join(linhas)
-
 
 def enviar_resumo_diario(df_all: pd.DataFrame, data_str: str, funcionario: str) -> bool:
     """
