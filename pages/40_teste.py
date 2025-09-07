@@ -432,6 +432,117 @@ def _make_daily_summary_caption(df_all: pd.DataFrame, data_str: str, funcionario
         linhas.append(f"🤝 Comissão: {pct*100:.0f}% • 💰 {_fmt_brl(bruto_total*pct)}")
     return "\n".join(linhas)
 
+# ===== NOVA FUNÇÃO: RESUMO GERAL (alinhado ao cálculo de BRUTO) =====
+def _make_daily_summary_caption_geral(df_all: pd.DataFrame, data_str: str) -> str:
+    """Resumo GERAL do dia — versão detalhada (alinhado ao cálculo de BRUTO do resumo por funcionário)"""
+    def _fmt_names(ns, maxn=12):
+        ns = [n for n in ns if str(n).strip()]
+        if not ns: return ""
+        cut = ns[:maxn]
+        s = ", ".join(cut)
+        return s + ("…" if len(ns) > maxn else "")
+
+    dia_ref = pd.to_datetime(data_str, format=DATA_FMT, errors="coerce")
+    if pd.isna(dia_ref): return ""
+    dia_ref = dia_ref.date()
+
+    d = df_all.copy()
+    d["_dt"] = pd.to_datetime(d["Data"], format=DATA_FMT, errors="coerce")
+    d = d[~d["_dt"].isna()]
+    d = d[d["_dt"].dt.date == dia_ref].copy()
+    if d.empty: return ""
+
+    d["__tipo_norm"] = d["Tipo"].astype(str).map(_norm_key)
+    d_srv = d[d["__tipo_norm"].apply(_is_servico)].copy()
+
+    # Serviços do dia (robusto a NaNs e strings vazias)
+    srv_counts = (
+        d_srv["Serviço"].astype(str).str.strip().replace("", pd.NA).dropna()
+        .value_counts()
+    )
+    srv_str = "—" if srv_counts.empty else ", ".join(f"{serv} ×{int(qtd)}" for serv, qtd in srv_counts.items())
+
+    # Bruto / Líquido / Taxas
+    bruto_total = float(d_srv.apply(_valor_bruto_row, axis=1).sum())
+    liquido_total = float(pd.to_numeric(d_srv.get("Valor", 0), errors="coerce").fillna(0).sum())
+    taxa_cartao_total = float(pd.to_numeric(d_srv.get("TaxaCartaoValor", 0), errors="coerce").fillna(0).sum())
+    d_cartao = d_srv.copy()
+    d_cartao["__bruto"] = pd.to_numeric(d_cartao.get("ValorBrutoRecebido", 0), errors="coerce").fillna(0.0)
+    bruto_cartao = float(d_cartao["__bruto"].sum())
+    taxa_pct_media = (taxa_cartao_total / bruto_cartao * 100.0) if bruto_cartao > 0 else 0.0
+
+    # Caixinha
+    v_cx = float(pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0).sum())
+    doadores = d.loc[pd.to_numeric(d.get("CaixinhaDia",0), errors="coerce").fillna(0)>0, "Cliente"].astype(str).str.strip().unique().tolist()
+    cx_line = f"{_fmt_brl(v_cx)}" + (f" • {_fmt_names(doadores)}" if (v_cx>0 and doadores) else "")
+
+    # Clientes
+    clientes_dia = d_srv["Cliente"].astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
+    qtd_clientes = len(clientes_dia)
+
+    # Novos / voltou ≤30d / >30d
+    df_hist = df_all.copy()
+    df_hist["_dt"] = pd.to_datetime(df_hist["Data"], format=DATA_FMT, errors="coerce")
+    df_hist = df_hist.dropna(subset=["_dt"])
+    primeiras = df_hist.assign(cli=df_hist["Cliente"].astype(str).str.strip()).groupby("cli")["_dt"].min()
+
+    novos, voltou30, mais30 = [], [], []
+    for cli in clientes_dia:
+        if cli in primeiras.index and primeiras.loc[cli].date()==dia_ref:
+            novos.append(cli)
+        prev = df_hist[(df_hist["Cliente"].astype(str).str.strip()==cli) & (df_hist["_dt"].dt.date<dia_ref)]
+        if not prev.empty:
+            delta = (dia_ref - prev["_dt"].max().date()).days
+            (voltou30 if delta<=30 else mais30).append(cli)
+
+    # Combos vs simples (combos únicos por (Cliente, Combo, PagamentoID))
+    d_srv["__combo"] = d_srv["Combo"].astype(str).str.strip()
+    d_srv["__pid"] = d_srv["PagamentoID"].astype(str).str.strip()
+    combos_count  = d_srv.loc[d_srv["__combo"]!="", ["Cliente","__combo","__pid"]].drop_duplicates().shape[0]
+    simples_count = int((d_srv["__combo"]=="").sum())
+
+    # Períodos
+    d_srv["__periodo"] = d_srv["Período"].astype(str).str.strip()
+    per_parts = []
+    for p in ["Manhã","Tarde","Noite"]:
+        dp = d_srv[d_srv["__periodo"]==p]
+        if not dp.empty:
+            per_parts.append(f"{p}: {len(dp)} [{_fmt_names(dp['Cliente'].astype(str).str.strip().unique().tolist())}]")
+    per_str = " • ".join(per_parts) if per_parts else "—"
+
+    # Funcionários
+    por_func = (
+        d_srv["Funcionário"].astype(str).str.strip().replace("", pd.NA).dropna()
+        .value_counts()
+        .to_dict()
+    )
+    funcs_str = " • ".join(f"{f}: {q}x" for f,q in por_func.items()) or "—"
+
+    # Ticket e Top 3 (por BRUTO)
+    ticket_medio = bruto_total/qtd_clientes if qtd_clientes else 0
+    d_srv["__bruto_i"] = d_srv.apply(_valor_bruto_row, axis=1)
+    top3 = d_srv.groupby("Cliente")["__bruto_i"].sum().sort_values(ascending=False).head(3)
+    top3_str = ", ".join(f"{cli}: {_fmt_brl(v)}" for cli, v in top3.items()) or "—"
+
+    linhas = []
+    linhas.append("📊 <b>Resumo GERAL</b>")
+    linhas.append(f"🗓️ {data_str}")
+    linhas.append(f"🧾 Serviços: {srv_str}")
+    linhas.append(f"💵 Bruto: {_fmt_brl(bruto_total)} • 🪙 Líquido: {_fmt_brl(liquido_total)}")
+    linhas.append(f"💳 Taxa cartão: {_fmt_brl(taxa_cartao_total)} ({taxa_pct_media:.2f}%)")
+    if v_cx > 0: linhas.append(f"💖 Caixinha: {cx_line}")
+    linhas.append("—")
+    linhas.append(f"👥 Únicos: {qtd_clientes}")
+    linhas.append(f"🆕 Novos: {len(novos)} [{_fmt_names(novos)}]")
+    linhas.append(f"🔁 Voltaram ≤30d: {len(voltou30)} [{_fmt_names(voltou30)}]")
+    linhas.append(f"⏰ >30d: {len(mais30)} [{_fmt_names(mais30)}]")
+    linhas.append(f"🧩 Combos (únicos) vs Simples: {combos_count} / {simples_count}")
+    linhas.append(f"🕒 Períodos: {per_str}")
+    linhas.append(f"👨‍🔧 Funcionários: {funcs_str}")
+    linhas.append(f"🏷️ Ticket médio: {_fmt_brl(ticket_medio)}")
+    linhas.append(f"⭐ Top 3: {top3_str}")
+    return "\n".join(linhas)
+
 def enviar_resumo_diario(df_all: pd.DataFrame, data_str: str, funcionario: str) -> bool:
     """
     Envia o resumo por FUNCIONÁRIO.
@@ -452,11 +563,10 @@ def enviar_resumo_diario(df_all: pd.DataFrame, data_str: str, funcionario: str) 
 
 def enviar_resumo_geral(df_all: pd.DataFrame, data_str: str) -> bool:
     """
-    Envia o resumo GERAL (todos os funcionários).
-    Ajuste o chat_id se quiser mandar para um grupo específico.
+    Envia o resumo GERAL (todos os funcionários) — usa _make_daily_summary_caption_geral.
     """
     try:
-        caption = _make_daily_summary_caption(df_all, data_str, funcionario=None)
+        caption = _make_daily_summary_caption_geral(df_all, data_str)
         if not caption:
             return False
         return tg_send(caption, chat_id=_get_chat_id_jp())
@@ -819,12 +929,10 @@ modo_lote = st.toggle("📦 Cadastro em Lote (vários clientes de uma vez)", val
 
 # Data
 hoje_br = datetime.now(pytz.timezone("America/Sao_Paulo")).date()
-
 data = st.date_input("Data", value=hoje_br).strftime("%d/%m/%Y")
 
 # =========================
 # BOTÕES – Reenviar Resumos do Dia
-# (cole logo após a linha que define `data = st.date_input(...).strftime("%d/%m/%Y")`)
 # =========================
 st.divider()
 st.subheader("📣 Reenviar resumos do dia")
@@ -879,7 +987,6 @@ with st.expander("⚙️ Avançado: detectar funcionários do dia e reenviar"):
                 st.success("Resumos reenviados." if (ok_any or ok_geral) else "Não consegui reenviar os resumos.")
         except Exception as e:
             st.error(f"Erro no processo automático: {e}")
-
 
 # Campos padrão apenas no modo Lote
 if modo_lote:
