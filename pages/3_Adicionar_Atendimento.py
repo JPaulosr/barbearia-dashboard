@@ -373,15 +373,34 @@ def _make_daily_summary_caption(df_all: pd.DataFrame, data_str: str, funcionario
     clientes_unicos = d_srv["Cliente"].astype(str).str.strip().replace("", pd.NA).dropna().unique().tolist()
     qtd_clientes = len(clientes_unicos)
 
-    d_srv["__periodo"] = d_srv["Período"].astype(str).str.strip()
+        # --- CONTAGENS por PERÍODO (clientes únicos no dia) ---
+    base_per = (
+        d_srv.assign(
+            _cliente=d_srv["Cliente"].astype(str).str.strip(),
+            _periodo=d_srv["Período"].astype(str).str.strip()
+        )
+        .dropna(subset=["_cliente"])
+        .drop_duplicates(subset=["_cliente", "_periodo"])
+    )
     per_parts = []
     for p in ["Manhã", "Tarde", "Noite"]:
-        dp = d_srv[d_srv["__periodo"] == p]
-        if not dp.empty:
-            per_parts.append(f"{p}: {len(dp)}")
+        qtdp = int((base_per["_periodo"] == p).sum())
+        if qtdp > 0:
+            per_parts.append(f"{p}: {qtdp}")
     per_str = " • ".join(per_parts) if per_parts else "—"
 
-    funcs_str = f"{funcionario}: {len(d_srv)}x"
+    # --- CONTAGENS por FUNCIONÁRIO (clientes únicos no dia) ---
+    base_fun = (
+        d_srv.assign(
+            _cliente=d_srv["Cliente"].astype(str).str.strip(),
+            _func=d_srv["Funcionário"].astype(str).str.strip()
+        )
+        .dropna(subset=["_cliente"])
+        .drop_duplicates(subset=["_cliente", "_func"])
+    )
+    por_func = base_fun.groupby("_func")["_cliente"].count().to_dict()
+    funcs_str = " • ".join(f"{f}: {q}x" for f, q in por_func.items()) or "—"
+
 
     d_srv["__bruto_i"] = d_srv.apply(_valor_bruto_row, axis=1)
     top3 = d_srv.groupby("Cliente")["__bruto_i"].sum().sort_values(ascending=False).head(3)
@@ -480,16 +499,34 @@ def _make_daily_summary_caption_geral(df_all: pd.DataFrame, data_str: str) -> st
     doadores = d.loc[pd.to_numeric(d.get("CaixinhaDia", 0), errors="coerce").fillna(0) > 0, "Cliente"].unique().tolist()
     cx_line = f"{_fmt_brl(v_cx)} • {_fmt_names(doadores)}" if v_cx > 0 else "—"
 
-    d_srv["__periodo"] = d_srv["Período"].astype(str).str.strip()
+        # --- CONTAGENS por PERÍODO (clientes únicos no dia) ---
+    base_per = (
+        d_srv.assign(
+            _cliente=d_srv["Cliente"].astype(str).str.strip(),
+            _periodo=d_srv["Período"].astype(str).str.strip()
+        )
+        .dropna(subset=["_cliente"])
+        .drop_duplicates(subset=["_cliente", "_periodo"])
+    )
     per_parts = []
     for p in ["Manhã", "Tarde", "Noite"]:
-        dp = d_srv[d_srv["__periodo"] == p]
-        if not dp.empty:
-            per_parts.append(f"{p}: {len(dp)}")
+        qtdp = int((base_per["_periodo"] == p).sum())
+        if qtdp > 0:
+            per_parts.append(f"{p}: {qtdp}")
     per_str = " • ".join(per_parts) if per_parts else "—"
 
-    por_func = d_srv.groupby("Funcionário")["Valor"].count().to_dict()
+    # --- CONTAGENS por FUNCIONÁRIO (clientes únicos no dia) ---
+    base_fun = (
+        d_srv.assign(
+            _cliente=d_srv["Cliente"].astype(str).str.strip(),
+            _func=d_srv["Funcionário"].astype(str).str.strip()
+        )
+        .dropna(subset=["_cliente"])
+        .drop_duplicates(subset=["_cliente", "_func"])
+    )
+    por_func = base_fun.groupby("_func")["_cliente"].count().to_dict()
     funcs_str = " • ".join(f"{f}: {q}x" for f, q in por_func.items()) or "—"
+
 
     linhas += [
         f"🧾 Serviços: {srv_str}",
