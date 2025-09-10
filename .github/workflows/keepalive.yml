@@ -1,0 +1,23 @@
+name: keepalive
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # roda a cada 30 min (troque para */15 para 15 min)
+  workflow_dispatch:         # permite rodar manualmente
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      URL1: "https://ebenezer-variedades-eupku5qpyugdwxdtl5cyc5.streamlit.app/"
+      URL2: "https://barbearia-dashboard-ieyuld6qeej74inyzs5cmf.streamlit.app/"
+      URL3: "https://salaojp-feminino-djkchtdhag938vuprxksw9.streamlit.app/"
+      URL4: "https://barbearia-vinicius-oruvkdm8glzhzql7o24qiq.streamlit.app/"
+    steps:
+      - name: Ping apps (4 URLs)
+        run: |
+          set -e
+          for u in "$URL1" "$URL2" "$URL3" "$URL4"; do
+            echo "Pinging $u"
+            curl -sS --max-time 20 "$u" || true
+          done
