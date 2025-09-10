@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 12_Fiado.py — Fiado + Telegram (foto + card), por funcionário + cópia p/ JP
+# 40_teste.py — Fiado + Telegram (foto + card), por funcionário + cópia p/ JP
 # - Lançar fiado (único e em lote)
 # - Quitar por COMPETÊNCIA (por ID do combo ou por LINHA)
 # - Notificações com FOTO e card HTML; Vinicius → canal / JPaulo → privado
@@ -7,7 +7,7 @@
 # - 💳 Maquininha: grava LÍQUIDO no campo Valor da BASE e preenche extras somente se usar_cartao=True
 # - Fiado_Pagamentos salva TotalLiquido + TotalBruto + Taxa
 # - 📗 Histórico de pagos (filtros + exportação)
-# - Datas de REGISTRO extraídas do ID (L-YYYYMMDDHHMMSSmmm) — SEM hora
+# - Datas de REGISTRO extraídas do ID (L-YYYYMMDDHHMMSSmmm) — SEM hora (apenas legenda; não altera a data de pagamento)
 # - Em lote: campo "Valor" para serviço único; combos seguem valores padrão
 # - 💝 CaixinhaDia: padrão único (MESMA LINHA DO ATENDIMENTO). Na quitação:
 #     • Por ID: grava CaixinhaDia apenas na PRIMEIRA linha de cada ID selecionado
@@ -216,7 +216,7 @@ def col_map(ws):
 def ensure_headers(ws, desired_headers):
     """Garante headers sem duplicação, comparando por nome normalizado."""
     import unicodedata
-    def _norm(s: str) -> str:
+    def _norm_local(s: str) -> str:
         s = unicodedata.normalize("NFKC", str(s or "")).strip()
         return s.casefold()
 
@@ -229,7 +229,7 @@ def ensure_headers(ws, desired_headers):
     seen = set()
     fixed = []
     for h in headers:
-        k = _norm(h)
+        k = _norm_local(h)
         if k in seen:
             continue
         seen.add(k)
@@ -240,8 +240,8 @@ def ensure_headers(ws, desired_headers):
         ws.update('A1', [fixed])
 
     # adiciona apenas os que realmente faltam (por normalização)
-    existing_norm = {_norm(h) for h in fixed}
-    missing = [h for h in desired_headers if _norm(h) not in existing_norm]
+    existing_norm = {_norm_local(h) for h in fixed}
+    missing = [h for h in desired_headers if _norm_local(h) not in existing_norm]
     if missing:
         ws.update('A1', [fixed + missing])
 
@@ -770,7 +770,12 @@ elif acao == "💰 Registrar pagamento":
         help=("Desabilitado para PIX/Dinheiro/Transferência." if force_off else "Use quando passar no POS/NFC.")
     )
 
-    modo_sel = st.radio("Modo de seleção de quitação", ["Por ID (combo inteiro)", "Por linha (serviço)"], index=0, horizontal=True)
+    # ---- Radio COM key (persistência) ----
+    modo_sel = st.radio(
+        "Modo de seleção de quitação",
+        ["Por ID (combo inteiro)", "Por linha (serviço)"],
+        index=0, horizontal=True, key="fiado_modo_sel"
+    )
 
     ids_opcoes, id_selecionados = [], []
     linhas_label_map, linhas_indices_sel = {}, []
@@ -842,26 +847,29 @@ elif acao == "💰 Registrar pagamento":
                 format_func=lambda i: linhas_label_map.get(i, str(i)),
             )
 
-    # Data padrão do pagamento
-    data_pag_default = today_local()
-registro_caption = None
-if modo_sel.startswith("Por ID"):
-    if len(id_selecionados) == 1:
-        d = data_reg_do_id(id_selecionados[0])
-        if d:
-            registro_caption = f"Registro do ID: {d.strftime(DATA_FMT)}"
-    elif cliente_sel and not grupo_cli.empty:
-        ids_cli = sorted(set(grupo_cli["IDLancFiado"].astype(str)))
-        if len(ids_cli) == 1:
-            d = data_reg_do_id(ids_cli[0])
+    # ---------- Data do pagamento (padrão HOJE) ----------
+    # Safety shim (garante que modo_sel exista mesmo que o radio não tenha sido montado por algum motivo)
+    modo_sel = st.session_state.get("fiado_modo_sel", "Por ID (combo inteiro)")
+
+    data_pag_default = today_local()  # ✅ fica hoje
+    registro_caption = None
+    if cliente_sel and modo_sel.startswith("Por ID"):
+        if len(id_selecionados) == 1:
+            d = data_reg_do_id(id_selecionados[0])
             if d:
                 registro_caption = f"Registro do ID: {d.strftime(DATA_FMT)}"
+        elif not grupo_cli.empty:
+            ids_cli = sorted(set(grupo_cli["IDLancFiado"].astype(str)))
+            if len(ids_cli) == 1:
+                d = data_reg_do_id(ids_cli[0])
+                if d:
+                    registro_caption = f"Registro do ID: {d.strftime(DATA_FMT)}"
 
     cold1, cold2 = st.columns(2)
     with cold1:
         data_pag = st.date_input("Data do pagamento", value=data_pag_default)
         if registro_caption:
-            st.caption(f"Registro do ID: {registro_caption}")
+            st.caption(registro_caption)
     with cold2:
         obs = st.text_input("Observação (opcional)", "", key="obs")
 
@@ -926,7 +934,7 @@ if modo_sel.startswith("Por ID"):
         st.caption("Resumo por serviço selecionado:")
         st.dataframe(resumo_srv, use_container_width=True, hide_index=True)
 
-    tem_selecao = bool(id_selecionados) if modo_sel.startswith("Por ID") else bool(linhas_indices_sel)
+    tem_selecao = (bool(id_selecionados) if modo_sel.startswith("Por ID") else bool(linhas_indices_sel))
     disabled_btn = not (cliente_sel and tem_selecao and forma_pag)
 
     if st.button("Registrar pagamento", use_container_width=True, disabled=disabled_btn):
@@ -1062,7 +1070,15 @@ if modo_sel.startswith("Por ID"):
                 f"Total líquido: {_fmt_brl(total_liquido)} (bruto {_fmt_brl(total_bruto)})."
                 + (f" 💝 Caixinha gravada: {_fmt_brl(float(caixinha_dia_val))}" if caixinha_dia_val and float(caixinha_dia_val)>0 else "")
             )
+            # Atualiza a UI imediatamente
             st.cache_data.clear()
+            try:
+                st.rerun()
+            except Exception:
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
             # ---- Mensagens (quitado + cópia enriquecida)
             try:
