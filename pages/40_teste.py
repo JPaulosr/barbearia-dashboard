@@ -844,20 +844,18 @@ elif acao == "💰 Registrar pagamento":
 
     # Data padrão do pagamento
     data_pag_default = today_local()
-    registro_caption = None
-    if modo_sel.startswith("Por ID"):
-        if len(id_selecionados) == 1:
-            d = data_reg_do_id(id_selecionados[0])
+registro_caption = None
+if modo_sel.startswith("Por ID"):
+    if len(id_selecionados) == 1:
+        d = data_reg_do_id(id_selecionados[0])
+        if d:
+            registro_caption = f"Registro do ID: {d.strftime(DATA_FMT)}"
+    elif cliente_sel and not grupo_cli.empty:
+        ids_cli = sorted(set(grupo_cli["IDLancFiado"].astype(str)))
+        if len(ids_cli) == 1:
+            d = data_reg_do_id(ids_cli[0])
             if d:
-                data_pag_default = d
-                registro_caption = d.strftime(DATA_FMT)
-        elif cliente_sel and not grupo_cli.empty:
-            ids_cli = sorted(set(grupo_cli["IDLancFiado"].astype(str)))
-            if len(ids_cli) == 1:
-                d = data_reg_do_id(ids_cli[0])
-                if d:
-                    data_pag_default = d
-                    registro_caption = d.strftime(DATA_FMT)
+                registro_caption = f"Registro do ID: {d.strftime(DATA_FMT)}"
 
     cold1, cold2 = st.columns(2)
     with cold1:
