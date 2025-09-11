@@ -2,7 +2,7 @@ name: keepalive
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # roda a cada 30 min (troque para */15 para 15 min)
+    - cron: "*/15 * * * *"   # roda a cada 30 min (troque para */15 para 15 min)
   workflow_dispatch:         # permite rodar manualmente
 
 jobs:
