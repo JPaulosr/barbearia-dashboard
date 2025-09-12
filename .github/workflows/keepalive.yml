@@ -2,22 +2,119 @@ name: keepalive
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # roda a cada 30 min (troque para */15 para 15 min)
-  workflow_dispatch:         # permite rodar manualmente
+    - cron: "*/15 * * * *"   # roda a cada 15 min
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
 
 jobs:
-  ping:
+  ping-with-browser:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       URL1: "https://ebenezer-variedades-eupku5qpyugdwxdtl5cyc5.streamlit.app/"
       URL2: "https://barbearia-dashboard-ieyuld6qeej74inyzs5cmf.streamlit.app/"
       URL3: "https://salaojp-feminino-djkchtdhag938vuprxksw9.streamlit.app/"
       URL4: "https://barbearia-vinicius-oruvkdm8glzhzql7o24qiq.streamlit.app/"
     steps:
-      - name: Ping apps (4 URLs)
+      - name: Checkout (placeholder – não precisa de repo)
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar Puppeteer
         run: |
-          set -e
-          for u in "$URL1" "$URL2" "$URL3" "$URL4"; do
-            echo "Pinging $u"
-            curl -sS --max-time 20 "$u" || true
-          done
+          npm init -y
+          npm i puppeteer@22
+
+      - name: Criar script keepalive.mjs
+        run: |
+          cat > keepalive.mjs <<'EOF'
+          import puppeteer from 'puppeteer';
+
+          // Junta todas as URLs definidas em variáveis de ambiente URL1..URLN
+          const urls = Object.entries(process.env)
+            .filter(([k, v]) => /^URL\d+$/.test(k) && v)
+            .map(([_, v]) => v);
+
+          if (urls.length === 0) {
+            console.log("Nenhuma URL definida (URL1, URL2, ...). Encerrando.");
+            process.exit(0);
+          }
+
+          const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
+          const PUP_ARGS = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+          ];
+
+          async function pingOnce(page, url) {
+            const start = Date.now();
+            console.log(`→ Abrindo: ${url}`);
+
+            // Navega e espera carregar (o Streamlit injeta .stApp)
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 120000 }).catch(() => {});
+            await page.waitForSelector('.stApp', { timeout: 90000 }).catch(() => {});
+
+            // Pequena “atividade humana”: scroll, espera, outro scroll
+            await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+            await page.waitForTimeout(3000 + Math.floor(Math.random()*2000));
+            await page.evaluate(() => window.scrollTo(0, 0));
+            await page.waitForTimeout(3000 + Math.floor(Math.random()*2000));
+
+            const ms = Date.now() - start;
+            console.log(`✓ OK: ${url} (${ms} ms)`);
+          }
+
+          async function run() {
+            const browser = await puppeteer.launch({
+              headless: true,
+              args: PUP_ARGS,
+            });
+
+            try {
+              const page = await browser.newPage();
+              await page.setUserAgent(UA);
+              await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
+              // Timeout padrão mais alto para conexões lentas ao “acordar” o app
+              page.setDefaultNavigationTimeout(120000);
+              page.setDefaultTimeout(120000);
+
+              for (const url of urls) {
+                // 2 tentativas por URL
+                let ok = false;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                  try {
+                    await pingOnce(page, url);
+                    ok = true;
+                    break;
+                  } catch (e) {
+                    console.log(`⚠️ Falha em ${url} (tentativa ${attempt}): ${e?.message || e}`);
+                    // Espera um pouco e tenta de novo (o app pode estar “acordando”)
+                    await page.waitForTimeout(5000);
+                  }
+                }
+                if (!ok) {
+                  console.log(`✗ Desisti: ${url}`);
+                }
+              }
+            } finally {
+              await browser.close();
+            }
+          }
+
+          run().catch(err => {
+            console.error("Erro geral:", err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: Rodar keepalive (Puppeteer)
+        run: node keepalive.mjs
