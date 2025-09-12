@@ -25,15 +25,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '20'   # sem cache
 
-      - name: Instalar Playwright
+      - name: Instalar Playwright (libs JS)
         run: |
           npm init -y
           npm i playwright@1.46
 
-      # Instala os navegadores necessários (Chromium/WebKit/Firefox)
       - name: Instalar browsers do Playwright
         uses: microsoft/playwright-github-action@v1
 
@@ -51,21 +49,14 @@ jobs:
           async function ping(page, url) {
             const start = Date.now();
             console.log(`→ Abrindo: ${url}`);
-
             await page.setUserAgent(UA);
             await page.setViewportSize({ width: 1366, height: 768 });
 
-            // navega e espera rede estabilizar
             await page.goto(url, { waitUntil: 'networkidle', timeout: 120000 });
 
-            // tenta achar o app do Streamlit
-            try {
-              await page.waitForSelector('.stApp', { timeout: 90000 });
-            } catch (_) {
-              console.log('⚠️ Não encontrou .stApp (pode estar acordando), seguindo…');
-            }
+            try { await page.waitForSelector('.stApp', { timeout: 90000 }); }
+            catch { console.log('⚠️ Não encontrou .stApp (pode estar acordando)…'); }
 
-            // simula uso humano
             await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
             await page.waitForTimeout(3000 + Math.floor(Math.random()*2000));
             await page.evaluate(() => window.scrollTo(0, 0));
@@ -83,23 +74,16 @@ jobs:
             for (const url of urls) {
               let ok = false;
               for (let attempt = 1; attempt <= 2; attempt++) {
-                try {
-                  await ping(page, url);
-                  ok = true;
-                  break;
-                } catch (e) {
+                try { await ping(page, url); ok = true; break; }
+                catch (e) {
                   console.log(`⚠️ Falha em ${url} (tentativa ${attempt}): ${e?.message || e}`);
                   await page.waitForTimeout(5000);
                 }
               }
               if (!ok) console.log(`✗ Desisti: ${url}`);
             }
-
             await browser.close();
-          })().catch(err => {
-            console.error("Erro geral:", err);
-            process.exit(1);
-          });
+          })().catch(err => { console.error("Erro geral:", err); process.exit(1); });
           EOF
 
       - name: Rodar keepalive (Playwright)
