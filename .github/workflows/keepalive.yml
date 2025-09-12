@@ -25,15 +25,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'   # sem cache
+          node-version: '20'
 
-      - name: Instalar Playwright (libs JS)
+      - name: Instalar Playwright
         run: |
           npm init -y
           npm i playwright@1.46
-
-      - name: Instalar browsers do Playwright
-        uses: microsoft/playwright-github-action@v1
+          npx playwright install --with-deps   # 🔑 instala os navegadores + libs
 
       - name: Criar script keepalive.js
         run: |
