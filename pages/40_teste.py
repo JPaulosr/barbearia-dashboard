@@ -29,13 +29,13 @@ UNIDADES = {"Gel": "un", "Pomada": "un", "Pomada em pó": "un"}
 # Colunas das movimentações de estoque
 COLS_ESTOQUE = ["Data", "Produto", "TipoMov", "Qtd", "Unidade", "Obs", "CriadoEm"]
 
-# Layout atual da sua aba Despesas (pela imagem)
-COLS_DESPESAS_ALVO = [
+# Layout base esperado na aba Despesas (respeitaremos o cabeçalho existente)
+COLS_DESPESAS_BASE = [
     "Data","Prestador","Descrição","Valor","Me Pag","RefID",
-    "Categoria","Conta","Fornecedor","NF/Ref","CriadoEm"
+    "Categoria","Fornecedor","NF/Ref","CriadoEm"
 ]
 CATEGORIA_ESTOQUE = "Compra de estoque"
-PRESTADORES = ["JPaulo","Vinicius"]  # altere/adicione se quiser
+PRESTADORES = ["JPaulo","Vinicius"]  # ajuste se quiser
 CONTAS_PADRAO = ["Carteira","Pix","Transferência","Nubank CNPJ","Nubank","Pagseguro","Mercado Pago","Outro"]
 
 # =============================================================================
@@ -127,60 +127,54 @@ def saldo_atual(df: pd.DataFrame) -> pd.DataFrame:
     return sld.sort_values("Produto")
 
 # =============================================================================
-# DESPESAS — salva no layout existente
+# DESPESAS — salva respeitando SOMENTE colunas existentes (usa apenas “Me Pag”)
 # =============================================================================
-def _fix_cols_like_sheet(df: pd.DataFrame, headers_ref: list[str]) -> pd.DataFrame:
-    """Garante todas as colunas do layout e na ordem da planilha."""
-    cols_lower = {c.lower(): c for c in df.columns}
-    out = {}
-    for h in headers_ref:
-        key = h.lower()
-        out[h] = df[cols_lower[key]] if key in cols_lower else ""
-    return pd.DataFrame(out, columns=headers_ref)
-
 def salvar_despesa(data_str: str, prestador: str, descricao: str, valor_total: float,
-                   conta: str, fornecedor: str, nf: str):
+                   mepag: str, fornecedor: str, nf: str):
+    """Lança a compra na aba 'Despesas' usando só 'Me Pag' (não cria/usa 'Conta')."""
     if not valor_total or float(valor_total) <= 0:
         return
     sh = _open_sheet()
-    # Usa a planilha existente (se não houver, cria com o layout padrão)
+    # usa a worksheet existente; se não houver, cria com layout base (sem 'Conta')
     try:
         ws = sh.worksheet(ABA_DESPESAS)
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=ABA_DESPESAS, rows=3000, cols=max(12, len(COLS_DESPESAS_ALVO)))
-        set_with_dataframe(ws, pd.DataFrame(columns=COLS_DESPESAS_ALVO), include_index=False, include_column_header=True)
+        ws = sh.add_worksheet(title=ABA_DESPESAS, rows=3000, cols=20)
+        set_with_dataframe(ws, pd.DataFrame(columns=COLS_DESPESAS_BASE),
+                           include_index=False, include_column_header=True)
 
-    headers_ref = _headers(ws) or COLS_DESPESAS_ALVO
+    headers_ref = _headers(ws) or COLS_DESPESAS_BASE
 
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
     if df.empty:
         df = pd.DataFrame(columns=headers_ref)
-    df = _fix_cols_like_sheet(df, headers_ref)
+
+    # helper: só preenche se a coluna existir (não criamos novas)
+    def set_if_present(d: dict, col: str, val):
+        if col in headers_ref:
+            d[col] = val
 
     nova = {h: "" for h in headers_ref}
-    nova.update({
-        "Data": data_str,
-        "Prestador": (prestador or "").strip(),
-        "Descrição": descricao,
-        "Valor": float(valor_total),
-        "Me Pag": (conta or "").strip(),     # coluna chave p/ suas outras páginas
-        "RefID": "",
-        "Categoria": CATEGORIA_ESTOQUE,
-        "Conta": (conta or "").strip(),
-        "Fornecedor": (fornecedor or "").strip(),
-        "NF/Ref": (nf or "").strip(),
-        "CriadoEm": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    })
+    set_if_present(nova, "Data", data_str)
+    set_if_present(nova, "Prestador", (prestador or "").strip())
+    set_if_present(nova, "Descrição", descricao)
+    set_if_present(nova, "Valor", float(valor_total))
+    set_if_present(nova, "Me Pag", (mepag or "").strip())     # <- só essa coluna de pagamento
+    set_if_present(nova, "RefID", "")
+    set_if_present(nova, "Categoria", CATEGORIA_ESTOQUE)
+    set_if_present(nova, "Fornecedor", (fornecedor or "").strip())
+    set_if_present(nova, "NF/Ref", (nf or "").strip())
+    set_if_present(nova, "CriadoEm", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     df = pd.concat([df, pd.DataFrame([nova])], ignore_index=True)
-    df = df[headers_ref]  # mantém exatamente a ordem de colunas da folha
+    df = df[headers_ref]  # mantém a ordem exata da planilha existente
     set_with_dataframe(ws, df, include_index=False, include_column_header=True)
 
 # =============================================================================
 # OPERAÇÃO
 # =============================================================================
 def registrar_mov(tipo: str, produto: str, qtd: float, obs: str,
-                  custo_unit: float | None = None, conta: str | None = None,
+                  custo_unit: float | None = None, mepag: str | None = None,
                   fornecedor: str | None = None, nf: str | None = None,
                   prestador: str | None = None, lancar_despesa: bool = True):
     if qtd <= 0:
@@ -207,7 +201,7 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str,
     }
     salvar_mov_estoque(linha)
 
-    # 2) se for ENTRADA, lança despesa no seu layout
+    # 2) se for ENTRADA, lança despesa usando só "Me Pag"
     if tipo == "Entrada" and lancar_despesa:
         try:
             custo_unit_f = float(custo_unit or 0.0)
@@ -220,7 +214,7 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str,
                 prestador=(prestador or "JPaulo"),
                 descricao=desc,
                 valor_total=total,
-                conta=(conta or ""),
+                mepag=(mepag or ""),
                 fornecedor=(fornecedor or ""),
                 nf=(nf or "")
             )
@@ -253,7 +247,7 @@ with tab_reg:
     # Campos de compra -> só quando ENTRADA
     lancar_desp = True
     custo_unit = None
-    conta = None
+    mepag = None
     fornecedor = None
     nf = None
     prestador = None
@@ -265,8 +259,7 @@ with tab_reg:
             custo_unit = st.number_input("Custo unitário", min_value=0.0, step=1.0, value=0.0, format="%.2f",
                                          help="Valor pago por unidade (ex.: por frasco)")
         with c5:
-            conta = st.selectbox("Meio de pagamento (**Me Pag/Conta**)", CONTAS_PADRAO, index=0,
-                                 help="Preenche a coluna 'Me Pag' (e 'Conta') da aba Despesas")
+            mepag = st.selectbox("Meio de pagamento (preenche **Me Pag**)", CONTAS_PADRAO, index=0)
         with c6:
             prestador = st.selectbox("Prestador (quem comprou)", PRESTADORES, index=0)
         colx1, colx2 = st.columns([1,1])
@@ -284,7 +277,7 @@ with tab_reg:
         st.info("💡 Ajuste aceita positivo (aumenta estoque) ou negativo (ex.: -2).")
 
     if st.button("Salvar movimento", type="primary"):
-        registrar_mov(tipo, produto, qtd, obs, custo_unit, conta, fornecedor, nf, prestador, lancar_desp)
+        registrar_mov(tipo, produto, qtd, obs, custo_unit, mepag, fornecedor, nf, prestador, lancar_desp)
 
 with tab_saldo:
     st.subheader("Saldo por produto")
@@ -326,7 +319,7 @@ with tab_diag:
         st.success(f"Conectado em: {sh.title}")
         st.write("Abas usadas:")
         st.write(f"• Estoque → {ABA_ESTOQUE}")
-        st.write(f"• Despesas → {ABA_DESPESAS} (layout da planilha será respeitado)")
+        st.write(f"• Despesas → {ABA_DESPESAS} (usa só a coluna 'Me Pag')")
     except Exception as e:
         st.error(f"Falha ao abrir planilha: {e}")
 
