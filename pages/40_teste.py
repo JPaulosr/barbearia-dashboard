@@ -9,15 +9,18 @@ import gspread
 from google.oauth2.service_account import Credentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
-st.set_page_config(page_title="Estoque — Gel & Pomada", page_icon="🧴", layout="wide")
+st.set_page_config(page_title="Estoque — Gel, Pomada & Pó", page_icon="🧴", layout="wide")
 st.title("🧴 Estoque — Gel, Pomada & Pomada em pó")
 
 # =============================================================================
 # CONFIG
 # =============================================================================
+# Usa a MESMA planilha do seu app
 SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
-ABA_ESTOQUE = "Estoque_Simples"   # será criada se não existir
-ABA_DESPESAS = "Despesas"         # onde lançaremos o gasto da Entrada (criada se não existir)
+
+# Abas/nomes
+ABA_ESTOQUE  = "Estoque_Simples"
+ABA_DESPESAS = "Despesas"  # já existe na sua planilha
 
 # Produtos controlados
 PRODUTOS = ["Gel", "Pomada", "Pomada em pó"]
@@ -26,14 +29,14 @@ UNIDADES = {"Gel": "un", "Pomada": "un", "Pomada em pó": "un"}
 # Colunas das movimentações de estoque
 COLS_ESTOQUE = ["Data", "Produto", "TipoMov", "Qtd", "Unidade", "Obs", "CriadoEm"]
 
-# Colunas para a aba Despesas
-COLS_DESPESAS = [
-    "Data", "Categoria", "Descrição", "Valor", "Conta", "Fornecedor", "NF/Ref", "CriadoEm"
+# Layout atual da sua aba Despesas (pela imagem)
+COLS_DESPESAS_ALVO = [
+    "Data","Prestador","Descrição","Valor","Me Pag","RefID",
+    "Categoria","Conta","Fornecedor","NF/Ref","CriadoEm"
 ]
-
-# Categorias/Contas padrão
 CATEGORIA_ESTOQUE = "Compra de estoque"
-CONTAS_PADRAO = ["Carteira", "Pix", "Transferência", "Nubank CNPJ", "Nubank", "Pagseguro", "Mercado Pago", "Outro"]
+PRESTADORES = ["JPaulo","Vinicius"]  # altere/adicione se quiser
+CONTAS_PADRAO = ["Carteira","Pix","Transferência","Nubank CNPJ","Nubank","Pagseguro","Mercado Pago","Outro"]
 
 # =============================================================================
 # AUTENTICAÇÃO / SHEETS
@@ -60,12 +63,24 @@ def _open_sheet():
 
 # ---------- helpers genéricos ----------
 def _ensure_worksheet(sh, title: str, cols: list[str]):
+    """Cria a worksheet se não existir (com cabeçalho fornecido)."""
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=title, rows=2000, cols=max(10, len(cols)))
+        ws = sh.add_worksheet(title=title, rows=3000, cols=max(12, len(cols)))
         set_with_dataframe(ws, pd.DataFrame(columns=cols), include_index=False, include_column_header=True)
     return ws
+
+def _headers(ws):
+    try:
+        return [h.strip() for h in ws.row_values(1)]
+    except Exception:
+        return []
+
+def _fmt_brl(v: float) -> str:
+    try: v = float(v)
+    except: v = 0.0
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # =============================================================================
 # ESTOQUE — carregar/salvar
@@ -96,49 +111,69 @@ def salvar_mov_estoque(linha: dict):
 def saldo_atual(df: pd.DataFrame) -> pd.DataFrame:
     df_calc = df.copy()
     def efeito(row):
-        if row["TipoMov"] == "Entrada":
-            return row["Qtd"]
-        if row["TipoMov"] == "Saída":
-            return -abs(row["Qtd"])
+        if row["TipoMov"] == "Entrada": return row["Qtd"]
+        if row["TipoMov"] == "Saída":   return -abs(row["Qtd"])
         return row["Qtd"]  # Ajuste pode ser +/-
     if not df_calc.empty:
         df_calc["Efeito"] = df_calc.apply(efeito, axis=1)
-        sld = df_calc.groupby(["Produto", "Unidade"], as_index=False)["Efeito"].sum()
-        sld = sld.rename(columns={"Efeito": "Saldo"})
+        sld = df_calc.groupby(["Produto","Unidade"], as_index=False)["Efeito"].sum()
+        sld = sld.rename(columns={"Efeito":"Saldo"})
     else:
-        sld = pd.DataFrame(columns=["Produto", "Unidade", "Saldo"])
-    # garantir todos os produtos
+        sld = pd.DataFrame(columns=["Produto","Unidade","Saldo"])
     for p in PRODUTOS:
         if sld.empty or not (sld["Produto"] == p).any():
-            sld = pd.concat([sld, pd.DataFrame([{"Produto": p, "Unidade": UNIDADES[p], "Saldo": 0}])], ignore_index=True)
+            sld = pd.concat([sld, pd.DataFrame([{"Produto":p,"Unidade":UNIDADES[p],"Saldo":0}])], ignore_index=True)
     sld["Saldo"] = sld["Saldo"].fillna(0).round(2)
     return sld.sort_values("Produto")
 
 # =============================================================================
-# DESPESAS — salvar linha de compra (Entrada)
+# DESPESAS — salva no layout existente
 # =============================================================================
-def salvar_despesa(data_str: str, descricao: str, valor_total: float, conta: str, fornecedor: str, nf: str):
-    if valor_total is None or float(valor_total) <= 0:
+def _fix_cols_like_sheet(df: pd.DataFrame, headers_ref: list[str]) -> pd.DataFrame:
+    """Garante todas as colunas do layout e na ordem da planilha."""
+    cols_lower = {c.lower(): c for c in df.columns}
+    out = {}
+    for h in headers_ref:
+        key = h.lower()
+        out[h] = df[cols_lower[key]] if key in cols_lower else ""
+    return pd.DataFrame(out, columns=headers_ref)
+
+def salvar_despesa(data_str: str, prestador: str, descricao: str, valor_total: float,
+                   conta: str, fornecedor: str, nf: str):
+    if not valor_total or float(valor_total) <= 0:
         return
     sh = _open_sheet()
-    ws = _ensure_worksheet(sh, ABA_DESPESAS, COLS_DESPESAS)
-    df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
+    # Usa a planilha existente (se não houver, cria com o layout padrão)
+    try:
+        ws = sh.worksheet(ABA_DESPESAS)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=ABA_DESPESAS, rows=3000, cols=max(12, len(COLS_DESPESAS_ALVO)))
+        set_with_dataframe(ws, pd.DataFrame(columns=COLS_DESPESAS_ALVO), include_index=False, include_column_header=True)
+
+    headers_ref = _headers(ws) or COLS_DESPESAS_ALVO
+
+    df = get_as_dataframe(ws, evaluate_formulas=True, header=0).dropna(how="all")
     if df.empty:
-        df = pd.DataFrame(columns=COLS_DESPESAS)
-    for c in COLS_DESPESAS:
-        if c not in df.columns:
-            df[c] = ""
-    nova = {
+        df = pd.DataFrame(columns=headers_ref)
+    df = _fix_cols_like_sheet(df, headers_ref)
+
+    nova = {h: "" for h in headers_ref}
+    nova.update({
         "Data": data_str,
-        "Categoria": CATEGORIA_ESTOQUE,
+        "Prestador": (prestador or "").strip(),
         "Descrição": descricao,
         "Valor": float(valor_total),
+        "Me Pag": (conta or "").strip(),     # coluna chave p/ suas outras páginas
+        "RefID": "",
+        "Categoria": CATEGORIA_ESTOQUE,
         "Conta": (conta or "").strip(),
         "Fornecedor": (fornecedor or "").strip(),
         "NF/Ref": (nf or "").strip(),
         "CriadoEm": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    })
+
     df = pd.concat([df, pd.DataFrame([nova])], ignore_index=True)
+    df = df[headers_ref]  # mantém exatamente a ordem de colunas da folha
     set_with_dataframe(ws, df, include_index=False, include_column_header=True)
 
 # =============================================================================
@@ -147,7 +182,7 @@ def salvar_despesa(data_str: str, descricao: str, valor_total: float, conta: str
 def registrar_mov(tipo: str, produto: str, qtd: float, obs: str,
                   custo_unit: float | None = None, conta: str | None = None,
                   fornecedor: str | None = None, nf: str | None = None,
-                  lancar_despesa: bool = True):
+                  prestador: str | None = None, lancar_despesa: bool = True):
     if qtd <= 0:
         st.error("Quantidade deve ser maior que zero.")
         return
@@ -167,21 +202,22 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str,
         "TipoMov": tipo,
         "Qtd": float(qtd),
         "Unidade": unid,
-        "Obs": obs.strip() if obs else "",
+        "Obs": (obs or "").strip(),
         "CriadoEm": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     salvar_mov_estoque(linha)
 
-    # 2) se for ENTRADA, grava também em Despesas
+    # 2) se for ENTRADA, lança despesa no seu layout
     if tipo == "Entrada" and lancar_despesa:
         try:
             custo_unit_f = float(custo_unit or 0.0)
             total = round(custo_unit_f * float(qtd), 2)
-            desc = f"Compra de {int(qtd) if qtd.is_integer() else qtd:g} {unid} de {produto}"
+            desc = f"Compra de {int(qtd) if float(qtd).is_integer() else float(qtd):g} {unid} de {produto}"
             if obs and obs.strip():
                 desc += f" — {obs.strip()}"
             salvar_despesa(
                 data_str=linha["Data"],
+                prestador=(prestador or "JPaulo"),
                 descricao=desc,
                 valor_total=total,
                 conta=(conta or ""),
@@ -191,7 +227,10 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str,
         except Exception as e:
             st.warning(f"Movimentação registrada, mas não consegui lançar a despesa ({e}).")
 
-    st.success(f"{tipo} registrada para **{produto}**: {qtd:g} {unid}" + (" + despesa lançada." if tipo == "Entrada" and lancar_despesa else ""))
+    msg = f"{tipo} registrada para **{produto}**: {qtd:g} {unid}"
+    if tipo == "Entrada" and lancar_despesa and float(custo_unit or 0) > 0:
+        msg += f" • Despesa {_fmt_brl((float(custo_unit or 0)*float(qtd)))} lançada."
+    st.success(msg)
 
 # =============================================================================
 # UI
@@ -206,51 +245,57 @@ with tab_reg:
     with c1:
         produto = st.selectbox("Produto", PRODUTOS, index=0)
     with c2:
-        tipo = st.selectbox("Tipo de movimento", ["Entrada", "Saída", "Ajuste"], index=0)
+        tipo = st.selectbox("Tipo de movimento", ["Entrada","Saída","Ajuste"], index=0)
     with c3:
         qtd = st.number_input("Quantidade", min_value=0.0, step=1.0, value=1.0, format="%.2f")
     obs = st.text_input("Observação (opcional)", placeholder="lote, motivo do ajuste, etc.")
 
-    # Campos extras quando é Entrada → custo + dados de despesa
+    # Campos de compra -> só quando ENTRADA
     lancar_desp = True
     custo_unit = None
     conta = None
     fornecedor = None
     nf = None
+    prestador = None
 
     if tipo == "Entrada":
         st.markdown("#### 💸 Dados da compra (será lançada em **Despesas**)")
-        c4, c5, c6 = st.columns([1, 1, 1])
+        c4, c5, c6 = st.columns([1,1,1])
         with c4:
             custo_unit = st.number_input("Custo unitário", min_value=0.0, step=1.0, value=0.0, format="%.2f",
                                          help="Valor pago por unidade (ex.: por frasco)")
         with c5:
-            conta = st.selectbox("Conta/Meio de pagamento", CONTAS_PADRAO, index=0)
+            conta = st.selectbox("Meio de pagamento (**Me Pag/Conta**)", CONTAS_PADRAO, index=0,
+                                 help="Preenche a coluna 'Me Pag' (e 'Conta') da aba Despesas")
         with c6:
+            prestador = st.selectbox("Prestador (quem comprou)", PRESTADORES, index=0)
+        colx1, colx2 = st.columns([1,1])
+        with colx1:
             fornecedor = st.text_input("Fornecedor (opcional)", placeholder="ex.: Atacado XYZ")
-        nf = st.text_input("NF/Ref (opcional)", placeholder="nº da nota, pedido, etc.")
+        with colx2:
+            nf = st.text_input("NF/Ref (opcional)", placeholder="nº da nota, pedido, etc.")
         lancar_desp = st.checkbox("Lançar esta Entrada como despesa?", value=True)
 
         if custo_unit and qtd:
             total_prev = float(custo_unit) * float(qtd)
-            st.caption(f"💡 Total previsto da despesa: **R$ {total_prev:,.2f}**".replace(",", "X").replace(".", ",").replace("X", "."))
+            st.caption(f"💡 Total previsto da despesa: **{_fmt_brl(total_prev)}**")
 
     if tipo == "Ajuste":
         st.info("💡 Ajuste aceita positivo (aumenta estoque) ou negativo (ex.: -2).")
+
     if st.button("Salvar movimento", type="primary"):
-        registrar_mov(tipo, produto, qtd, obs, custo_unit, conta, fornecedor, nf, lancar_desp)
+        registrar_mov(tipo, produto, qtd, obs, custo_unit, conta, fornecedor, nf, prestador, lancar_desp)
 
 with tab_saldo:
     st.subheader("Saldo por produto")
     df_e = carregar_df_estoque()
     sld = saldo_atual(df_e)
     st.dataframe(sld, hide_index=True, use_container_width=True)
-    c1, c2, c3 = st.columns(3)
+    cols = st.columns(3)
     for i, p in enumerate(PRODUTOS):
-        col = [c1, c2, c3][i % 3]
         saldo_p = float(sld.loc[sld["Produto"] == p, "Saldo"].iloc[0])
         unid = UNIDADES[p]
-        with col:
+        with cols[i % 3]:
             st.metric(p, f"{saldo_p:g} {unid}")
 
 with tab_hist:
@@ -262,13 +307,11 @@ with tab_hist:
     with colf2:
         tipo_f = st.multiselect("Filtrar tipo", ["Entrada","Saída","Ajuste"], default=["Entrada","Saída","Ajuste"])
     if not df_e.empty:
+        def _dtparse(s):
+            try: return datetime.strptime(str(s), "%d/%m/%Y")
+            except: return pd.NaT
         mask = df_e["Produto"].isin(prod_f) & df_e["TipoMov"].isin(tipo_f)
         dfv = df_e.loc[mask].copy()
-        def _dtparse(s):
-            try:
-                return datetime.strptime(str(s), "%d/%m/%Y")
-            except:
-                return pd.NaT
         dfv["__ord"] = dfv["Data"].apply(_dtparse)
         dfv = dfv.sort_values(["__ord","CriadoEm"], ascending=False).drop(columns=["__ord"])
         st.dataframe(dfv, hide_index=True, use_container_width=True)
@@ -283,8 +326,8 @@ with tab_diag:
         st.success(f"Conectado em: {sh.title}")
         st.write("Abas usadas:")
         st.write(f"• Estoque → {ABA_ESTOQUE}")
-        st.write(f"• Despesas → {ABA_DESPESAS}")
+        st.write(f"• Despesas → {ABA_DESPESAS} (layout da planilha será respeitado)")
     except Exception as e:
         st.error(f"Falha ao abrir planilha: {e}")
 
-st.caption("Use **Entrada** para compras/estoque inicial (gera despesa), **Saída** para venda/uso, e **Ajuste** para correções.")
+st.caption("Use **Entrada** para compras/estoque (gera despesa), **Saída** para venda/uso, e **Ajuste** para correções.")
