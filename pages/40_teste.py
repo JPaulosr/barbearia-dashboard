@@ -15,12 +15,11 @@ st.title("🧴 Estoque — Gel & Pomada (simples)")
 # =============================================================================
 # CONFIG
 # =============================================================================
-# 👉 Troque pelo ID da SUA planilha (o ID é o que fica entre /d/ e /edit)
-SHEET_ID = st.secrets.get("PLANILHA_SHEET_ID", "COLOQUE_O_ID_AQUI")
+SHEET_ID = "1qtOF1I7Ap4By2388ySThoVlZHbI3rAJv_haEcil0IUE"
 ABA_NOME = "Estoque_Simples"  # será criada se não existir
 
-PRODUTOS = ["Gel", "Pomada"]   # fixos para esta página
-UNIDADES = {"Gel": "un", "Pomada": "un"}  # deixe "un"; mude para "L" se quiser litros
+PRODUTOS = ["Gel", "Pomada"]   # fixos
+UNIDADES = {"Gel": "un", "Pomada": "un"}
 COLS = ["Data", "Produto", "TipoMov", "Qtd", "Unidade", "Obs", "CriadoEm"]
 
 # =============================================================================
@@ -30,7 +29,6 @@ def _normalize_private_key(key: str) -> str:
     if not isinstance(key, str):
         return key
     key = key.replace("\\n", "\n")
-    # remove controles invisíveis (mantém \n \r \t)
     key = "".join(ch for ch in key if _ud.category(ch)[0] != "C" or ch in ("\n","\r","\t"))
     return key
 
@@ -39,8 +37,10 @@ def _open_sheet():
     sa = {**sa, "private_key": _normalize_private_key(sa["private_key"])}
     creds = Credentials.from_service_account_info(
         sa,
-        scopes=["https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"]
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ],
     )
     gc = gspread.authorize(creds)
     return gc.open_by_key(SHEET_ID)
@@ -57,12 +57,10 @@ def carregar_df():
     df = get_as_dataframe(ws, evaluate_formulas=True, header=0)
     if df.empty:
         df = pd.DataFrame(columns=COLS)
-    # normalizações
     df = df.dropna(how="all")
     for c in COLS:
         if c not in df.columns:
             df[c] = None
-    # tipos
     if "Qtd" in df.columns:
         df["Qtd"] = pd.to_numeric(df["Qtd"], errors="coerce").fillna(0.0)
     return df[COLS].copy()
@@ -76,14 +74,12 @@ def salvar_linha(linha: dict):
     st.cache_data.clear()
 
 def saldo_atual(df: pd.DataFrame) -> pd.DataFrame:
-    # Entrada = +Qtd | Saída = -Qtd | Ajuste = Qtd (pode ser + ou -)
     df_calc = df.copy()
     def efeito(row):
         if row["TipoMov"] == "Entrada":
             return row["Qtd"]
         if row["TipoMov"] == "Saída":
             return -abs(row["Qtd"])
-        # Ajuste aplica como veio (ex.: -2 para corrigir pra baixo; +3 pra cima)
         return row["Qtd"]
     if not df_calc.empty:
         df_calc["Efeito"] = df_calc.apply(efeito, axis=1)
@@ -91,10 +87,12 @@ def saldo_atual(df: pd.DataFrame) -> pd.DataFrame:
         sld = sld.rename(columns={"Efeito": "Saldo"})
     else:
         sld = pd.DataFrame(columns=["Produto", "Unidade", "Saldo"])
-    # garantir todos os produtos presentes
     for p in PRODUTOS:
         if not (sld["Produto"] == p).any() if not sld.empty else True:
-            sld = pd.concat([sld, pd.DataFrame([{"Produto": p, "Unidade": UNIDADES[p], "Saldo": 0}])], ignore_index=True)
+            sld = pd.concat(
+                [sld, pd.DataFrame([{"Produto": p, "Unidade": UNIDADES[p], "Saldo": 0}])],
+                ignore_index=True,
+            )
     sld["Saldo"] = sld["Saldo"].fillna(0).round(2)
     return sld.sort_values("Produto")
 
@@ -102,7 +100,6 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str):
     if qtd <= 0:
         st.error("Quantidade deve ser maior que zero.")
         return
-    # prevenção de saldo negativo em SAÍDA
     df = carregar_df()
     sld = saldo_atual(df)
     unid = UNIDADES.get(produto, "un")
@@ -114,7 +111,7 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str):
     linha = {
         "Data": date.today().strftime("%d/%m/%Y"),
         "Produto": produto,
-        "TipoMov": tipo,       # Entrada | Saída | Ajuste
+        "TipoMov": tipo,
         "Qtd": float(qtd),
         "Unidade": unid,
         "Obs": obs.strip() if obs else "",
@@ -126,7 +123,9 @@ def registrar_mov(tipo: str, produto: str, qtd: float, obs: str):
 # =============================================================================
 # UI
 # =============================================================================
-tab_reg, tab_saldo, tab_hist = st.tabs(["➕ Registrar", "📊 Saldo atual", "📜 Histórico"])
+tab_reg, tab_saldo, tab_hist, tab_diag = st.tabs(
+    ["➕ Registrar", "📊 Saldo atual", "📜 Histórico", "🔎 Diagnóstico"]
+)
 
 with tab_reg:
     st.subheader("Registrar movimento")
@@ -139,21 +138,17 @@ with tab_reg:
         qtd = st.number_input("Quantidade", min_value=0.0, step=1.0, value=1.0, format="%.2f")
     obs = st.text_input("Observação (opcional)", placeholder="lote, motivo do ajuste, etc.")
 
-    # dica de ajuste
     if tipo == "Ajuste":
-        st.info("💡 Ajuste aceita positivo (aumenta estoque) ou negativo (ex.: -2 para corrigir).")
+        st.info("💡 Ajuste aceita positivo (aumenta estoque) ou negativo (ex.: -2).")
 
-    colb1, colb2 = st.columns([1,3])
-    with colb1:
-        if st.button("Salvar movimento", type="primary"):
-            registrar_mov(tipo, produto, qtd, obs)
+    if st.button("Salvar movimento", type="primary"):
+        registrar_mov(tipo, produto, qtd, obs)
 
 with tab_saldo:
     st.subheader("Saldo por produto")
     df = carregar_df()
     sld = saldo_atual(df)
     st.dataframe(sld, hide_index=True, use_container_width=True)
-    # Cards simples
     c1, c2 = st.columns(2)
     for i, p in enumerate(PRODUTOS):
         col = c1 if i % 2 == 0 else c2
@@ -165,17 +160,14 @@ with tab_saldo:
 with tab_hist:
     st.subheader("Histórico de movimentos")
     df = carregar_df()
-    # filtros rápidos
     colf1, colf2 = st.columns([1,1])
     with colf1:
         prod_f = st.multiselect("Filtrar produto", PRODUTOS, default=PRODUTOS)
     with colf2:
         tipo_f = st.multiselect("Filtrar tipo", ["Entrada","Saída","Ajuste"], default=["Entrada","Saída","Ajuste"])
-
     if not df.empty:
         mask = df["Produto"].isin(prod_f) & df["TipoMov"].isin(tipo_f)
         dfv = df.loc[mask].copy()
-        # ordena: mais recente em cima
         def _dtparse(s):
             try:
                 return datetime.strptime(str(s), "%d/%m/%Y")
@@ -187,5 +179,14 @@ with tab_hist:
     else:
         st.info("Sem registros ainda. Lance uma entrada para começar.")
 
-st.caption("Dica: use **Entrada** para compras/estoque inicial, **Saída** para venda/uso, e **Ajuste** para correções pontuais.")
+with tab_diag:
+    st.subheader("Diagnóstico de conexão")
+    st.write("SHEET_ID alvo:", SHEET_ID)
+    try:
+        sh = _open_sheet()
+        st.success(f"Conectado em: {sh.title}")
+        st.write("Vai utilizar/atualizar a aba:", ABA_NOME)
+    except Exception as e:
+        st.error(f"Falha ao abrir planilha: {e}")
 
+st.caption("Use **Entrada** para compras/estoque inicial, **Saída** para venda/uso, e **Ajuste** para correções.")
